@@ -1,0 +1,49 @@
+{
+  "name": "kobay",
+  "version": "0.1.0",
+  "description": "Local-first AI test engine that explores apps, generates and runs tests, and returns evidence-backed failures.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Gökhan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ademtfkc/kobay"
+  },
+  "homepage": "https://github.com/ademtfkc/kobay",
+  "bugs": {
+    "url": "https://github.com/ademtfkc/kobay/issues"
+  },
+  "keywords": ["ai", "testing", "playwright", "e2e", "cli", "mcp"],
+  "engines": { "node": ">=22.12" },
+  "bin": { "kobay": "dist/cli/index.js" },
+  "files": ["dist/**/*.js", "beceri", "schemas", "test/kobay-demo/sunucu.mjs"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:kati": "KOBAY_TEST_KATI=1 KOBAY_CHROMIUM_TESTI=1 vitest run",
+    "duman": "bash scripts/duman-testi.sh",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "prepublishOnly": "npm run build && npm test && npm run duman",
+    "kobay": "tsx src/cli/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@playwright/test": "^1.63.0",
+    "commander": "^15.0.0",
+    "valibot": "^1.5.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^10.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.70.0",
+    "vitest": "^5.0.0"
+  }
+}

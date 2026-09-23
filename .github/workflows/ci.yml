@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Install Chromium and Linux system dependencies
+        if: runner.os == 'Linux'
+        run: node dist/cli/index.js install-browser --with-deps
+      - name: Install Chromium
+        if: runner.os != 'Linux'
+        run: node dist/cli/index.js install-browser
+      - run: npm run test:kati
+      - run: npm run duman

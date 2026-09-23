@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ademtfkc/kobay/blob/main/schemas/plan.schema.json",
+  "title": "kobay plan file",
+  "description": "A hand-written plan file, the input of `kobay test create --plan <path>`. One file is one test; a top-level array is not accepted. kobay turns the file into a draft test record and stops there — nothing is generated or run until `kobay test run <id>`. The file carries no page address: a test created this way has no `url`, so failure analysis cannot compare the page against the exploration map and says so in its output. Extra properties anywhere in the file are tolerated and ignored, so an editor directive such as `$schema` is safe to keep. This file mirrors the validator in `src/depo/semalar.ts`; where the two disagree, the validator is what actually runs.",
+  "type": "object",
+  "required": ["projectId", "type", "name", "planSteps"],
+  "properties": {
+    "projectId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "A name for the project this test belongs to. Required and must contain a non-whitespace character, but kobay does not store it on the created test or match it against the current project — it is there so a plan file says out loud what it was written for.",
+      "examples": ["demo"]
+    },
+    "type": {
+      "const": "frontend",
+      "description": "Must be the string `frontend`. kobay drives a browser, so this is the only test type it creates; any other value is rejected by name."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "The test's name, kept as-is on the test record and shown by `test list` and `test get`. Must contain a non-whitespace character. Write it as the behavior you expect to hold, not as a noun fragment.",
+      "examples": ["Log in with valid credentials"]
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional free text explaining the test. Unlike `name`, any string passes, including an empty one. kobay does not copy it onto the test record; it is a note for whoever reads the plan file."
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["p0", "p1", "p2", "p3"],
+      "default": "p1",
+      "description": "Optional. How much this test matters: `p0` must pass, `p1` covers the paths you care about, `p2` edge cases, `p3` cosmetic. Left out, the test is created as `p1`."
+    },
+    "planSteps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "description": "Between 1 and 200 steps, in the order the test should walk them. Write intent in plain language — the step text is what the brain reads when it generates the Playwright code, so a step that names a CSS selector teaches it nothing. The text is taken literally — kobay fills in no placeholders and reads no variables — and it is kept verbatim on the test record.",
+      "items": {
+        "type": "object",
+        "required": ["type", "description"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["action", "assertion"],
+            "description": "`action` does something to the app (open a page, fill a field, click). `assertion` checks something is true. A test whose steps are all actions checks nothing."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "What this one step does or checks. Must contain a non-whitespace character. One step, one verb.",
+            "examples": [
+              "Open /giris and log in as demo / demo123",
+              "The 'Kontrol Paneli' heading is visible"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "projectId": "demo",
+      "type": "frontend",
+      "name": "Log in with valid credentials",
+      "priority": "p0",
+      "planSteps": [
+        { "type": "action", "description": "Open /giris and log in as demo / demo123" },
+        { "type": "assertion", "description": "The 'Kontrol Paneli' heading is visible" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.kobay/
+*.log
+.DS_Store
+test-results/
+
+# npm pack çıktısı
+*.tgz

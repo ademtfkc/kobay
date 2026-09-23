@@ -1,0 +1,17 @@
+#!/usr/bin/env node
+import { readFile, writeFile } from 'node:fs/promises';
+
+const girdi = await new Promise((coz) => {
+  let veri = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (parca) => { veri += parca; });
+  process.stdin.on('end', () => coz(veri));
+});
+if (process.env.KOBAY_SAHTE_KAYIT !== undefined) {
+  await writeFile(process.env.KOBAY_SAHTE_KAYIT, JSON.stringify({ argumanlar: process.argv.slice(2), girdi }));
+}
+const bekle = Number(process.env.KOBAY_SAHTE_BEKLE_MS ?? '0');
+if (bekle > 0) await new Promise((coz) => setTimeout(coz, bekle));
+const cikti = process.env.KOBAY_SAHTE_CIKTI;
+if (cikti === undefined) process.exitCode = 1;
+else process.stdout.write(await readFile(cikti, 'utf8'));
