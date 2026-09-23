@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { beyinOlustur } from '../../src/beyin/index.js';
-import { SemaHatasi, yazAtomik, type Harita, type Oneri } from '../../src/depo/index.js';
+import { SchemaError, yazAtomik, type Harita, type Oneri } from '../../src/depo/index.js';
 import {
   PLAN_SISTEM_ISTEMI,
   haritaYolKaliplari,
@@ -17,17 +17,17 @@ import {
 
 const harita: Harita = {
   baseUrl: 'http://uygulama.test',
-  girisYapildi: true,
-  kesifTarihi: '2026-09-17T00:00:00.000Z',
-  sayfalar: [
+  loggedIn: true,
+  exploredAt: '2026-09-17T00:00:00.000Z',
+  pages: [
     {
-      url: 'http://uygulama.test/giris/', baslik: 'Giriş', basliklar: ['Giriş yap'], linkler: [],
-      formlar: [{ alanlar: [{ ad: 'e-posta', tip: 'email', etiket: 'E-posta' }] }],
-      dugmeler: ['Giriş yap'], menu: [],
+      url: 'http://uygulama.test/giris/', title: 'Giriş', headings: ['Giriş yap'], links: [],
+      forms: [{ fields: [{ name: 'e-posta', type: 'email', label: 'E-posta' }] }],
+      buttons: ['Giriş yap'], menu: [],
     },
     {
-      url: 'http://uygulama.test/urunler', baslik: 'Ürünler', basliklar: ['Ürün listesi'], linkler: [],
-      formlar: [], dugmeler: ['Sepete ekle'], menu: ['Ürünler'],
+      url: 'http://uygulama.test/urunler', title: 'Ürünler', headings: ['Ürün listesi'], links: [],
+      forms: [], buttons: ['Sepete ekle'], menu: ['Ürünler'],
     },
   ],
 };
@@ -56,19 +56,19 @@ async function sahteBeyin(icerik: unknown) {
 
 describe('planUret', () => {
   it('sahte beynin 12 önerisine yerel proposalId atar', async () => {
-    const beyin = await sahteBeyin({ oneriler: Array.from({ length: 12 }, (_deger, sira) => taslak(sira + 1)) });
+    const beyin = await sahteBeyin({ proposals: Array.from({ length: 12 }, (_deger, sira) => taslak(sira + 1)) });
 
     const sonuc = await planUret(beyin, harita, undefined);
 
-    expect(sonuc.dusurulen).toEqual([]);
-    expect(sonuc.oneriler).toHaveLength(12);
-    expect(sonuc.oneriler.map((oneri) => oneri.proposalId)).toEqual(
+    expect(sonuc.dropped).toEqual([]);
+    expect(sonuc.proposals).toHaveLength(12);
+    expect(sonuc.proposals.map((oneri) => oneri.proposalId)).toEqual(
       expect.arrayContaining(Array.from({ length: 12 }, () => expect.stringMatching(/^p_[a-z0-9]{6}$/))),
     );
   });
 
   it('haritada olmayan URL içeren önerileri sebebiyle düşürür', async () => {
-    const beyin = await sahteBeyin({ oneriler: [
+    const beyin = await sahteBeyin({ proposals: [
       taslak(1),
       taslak(2, 'https://farkli-origin.test/yonetim'),
       taslak(3, 'https://farkli-origin.test/eksik/'),
@@ -76,15 +76,15 @@ describe('planUret', () => {
 
     const sonuc = await planUret(beyin, harita, undefined);
 
-    expect(sonuc.oneriler).toHaveLength(1);
-    expect(sonuc.dusurulen).toEqual([
+    expect(sonuc.proposals).toHaveLength(1);
+    expect(sonuc.dropped).toEqual([
       {
         title: 'Ürün akışı 2',
-        sebep: 'URL haritada yok ve yol kalıbı eşleşmedi: https://farkli-origin.test/yonetim (kalıp: /yonetim)',
+        reason: 'URL is not in the map and no path pattern matched: https://farkli-origin.test/yonetim (pattern: /yonetim)',
       },
       {
         title: 'Ürün akışı 3',
-        sebep: 'URL haritada yok ve yol kalıbı eşleşmedi: https://farkli-origin.test/eksik/ (kalıp: /eksik)',
+        reason: 'URL is not in the map and no path pattern matched: https://farkli-origin.test/eksik/ (pattern: /eksik)',
       },
     ]);
   });
@@ -95,14 +95,14 @@ describe('planUret', () => {
       ...taslak(3),
       steps: Array.from({ length: 201 }, () => ({ type: 'action', description: 'Bir adım uygula' })),
     };
-    const beyin = await sahteBeyin({ oneriler: [taslak(1), bosAdimli, cokAdimli] });
+    const beyin = await sahteBeyin({ proposals: [taslak(1), bosAdimli, cokAdimli] });
 
     const sonuc = await planUret(beyin, harita, undefined);
 
-    expect(sonuc.oneriler).toHaveLength(1);
-    expect(sonuc.dusurulen).toEqual([
-      { title: 'Ürün akışı 2', sebep: 'Adım sayısı 1–200 aralığında değil: 0' },
-      { title: 'Ürün akışı 3', sebep: 'Adım sayısı 1–200 aralığında değil: 201' },
+    expect(sonuc.proposals).toHaveLength(1);
+    expect(sonuc.dropped).toEqual([
+      { title: 'Ürün akışı 2', reason: 'Step count is outside the 1-200 range: 0' },
+      { title: 'Ürün akışı 3', reason: 'Step count is outside the 1-200 range: 201' },
     ]);
   });
 
@@ -125,12 +125,12 @@ describe('planUret', () => {
     delete turkceTaslak.feature;
     delete turkceTaslak.type;
     delete turkceTaslak.steps;
-    const beyin = await sahteBeyin({ oneriler: [turkceTaslak] });
+    const beyin = await sahteBeyin({ proposals: [turkceTaslak] });
 
     const sonuc = await planUret(beyin, harita, undefined);
 
-    expect(sonuc.oneriler).toHaveLength(1);
-    expect(sonuc.oneriler[0]).toMatchObject({
+    expect(sonuc.proposals).toHaveLength(1);
+    expect(sonuc.proposals[0]).toMatchObject({
       title: 'Ürün akışı 1', description: 'Kullanıcı ürünleri görür.', steps: expect.arrayContaining([
         { type: 'action', description: 'Ürünler sayfasını aç' },
       ]),
@@ -138,16 +138,16 @@ describe('planUret', () => {
   });
 });
 
-function bosSayfa(url: string, baslik: string) {
-  return { url, baslik, basliklar: [baslik], linkler: [], formlar: [], dugmeler: [], menu: [] };
+function bosSayfa(url: string, title: string) {
+  return { url, title, headings: [title], links: [], forms: [], buttons: [], menu: [] };
 }
 
 /** `/cariler/1`…`/cariler/36` kayıt sayfalarını içeren gerçekçi harita. */
 const kayitHaritasi: Harita = {
   baseUrl: 'http://uygulama.test',
-  girisYapildi: true,
-  kesifTarihi: '2026-09-18T00:00:00.000Z',
-  sayfalar: [
+  loggedIn: true,
+  exploredAt: '2026-09-18T00:00:00.000Z',
+  pages: [
     bosSayfa('http://uygulama.test/', 'Panel'),
     bosSayfa('http://uygulama.test/cariler', 'Cariler'),
     ...Array.from({ length: 36 }, (_deger, sira) =>
@@ -207,7 +207,7 @@ describe('yol kalıpları', () => {
 
 describe('planUret kalıp eşleşmesi', () => {
   it('kalıba uyan hata-durumu önerisini tutar, uymayanları kalıp bilgisiyle düşürür', async () => {
-    const beyin = await sahteBeyin({ oneriler: [
+    const beyin = await sahteBeyin({ proposals: [
       taslak(1, '/cariler/999999'),
       taslak(2, '/faturalar'),
       taslak(3, '/cariler/abc'),
@@ -216,20 +216,20 @@ describe('planUret kalıp eşleşmesi', () => {
 
     const sonuc = await planUret(beyin, kayitHaritasi, undefined);
 
-    expect(sonuc.oneriler).toHaveLength(1);
-    expect(sonuc.oneriler[0]).toMatchObject({ title: 'Ürün akışı 1', url: '/cariler/999999' });
-    expect(sonuc.dusurulen).toEqual([
+    expect(sonuc.proposals).toHaveLength(1);
+    expect(sonuc.proposals[0]).toMatchObject({ title: 'Ürün akışı 1', url: '/cariler/999999' });
+    expect(sonuc.dropped).toEqual([
       {
         title: 'Ürün akışı 2',
-        sebep: 'URL haritada yok ve yol kalıbı eşleşmedi: /faturalar (kalıp: /faturalar)',
+        reason: 'URL is not in the map and no path pattern matched: /faturalar (pattern: /faturalar)',
       },
       {
         title: 'Ürün akışı 3',
-        sebep: 'URL haritada yok ve yol kalıbı eşleşmedi: /cariler/abc (kalıp: /cariler/abc)',
+        reason: 'URL is not in the map and no path pattern matched: /cariler/abc (pattern: /cariler/abc)',
       },
       {
         title: 'Ürün akışı 4',
-        sebep: 'URL haritada yok ve yol kalıbı eşleşmedi: mailto:destek@uygulama.test (kalıp çıkarılamadı)',
+        reason: 'URL is not in the map and no path pattern matched: mailto:destek@uygulama.test (no pattern could be derived)',
       },
     ]);
   });
@@ -240,15 +240,21 @@ describe('istem', () => {
     const belge = 'a'.repeat(25_000);
     const istem = planKullaniciIstemiOlustur(harita, belge, 'Önce sepet akışına bak.');
 
-    expect(istem).toContain(`## Proje belgesi\n${'a'.repeat(20_000)}…[kesildi]`);
-    expect(istem).toContain('## Kullanıcı ipucu\nÖnce sepet akışına bak.');
+    expect(istem).toContain(`## Project document\n${'a'.repeat(20_000)}…[truncated]`);
+    expect(istem).toContain('## User hint\nÖnce sepet akışına bak.');
     expect(istem.length).toBeLessThanOrEqual(60_000);
   });
 
   it('değişmez İngilizce anahtarları JSON iskeleti ve örnekle açıklar', () => {
     expect(PLAN_SISTEM_ISTEMI).toContain('"title":"..."');
-    expect(PLAN_SISTEM_ISTEMI).toContain('anahtarları İngilizce ve değişmezdir');
-    expect(PLAN_SISTEM_ISTEMI).toContain('Tam örnek:');
+    expect(PLAN_SISTEM_ISTEMI).toContain('{"proposals":[{"title":"...","description":"...","priority":"p1"');
+    expect(PLAN_SISTEM_ISTEMI).toContain('are English and fixed; do not translate them');
+    expect(PLAN_SISTEM_ISTEMI).toContain('Full example:');
+    expect(PLAN_SISTEM_ISTEMI).toContain(
+      "Write names, descriptions and rationale in the language of the application's UI and docs;"
+      + ' if mixed or unclear, use English.',
+    );
+    expect(PLAN_SISTEM_ISTEMI).not.toMatch(/[çğıöşüÇĞİÖŞÜ]/);
   });
 });
 
@@ -280,7 +286,7 @@ describe('test kaydı dönüşümü', () => {
     expect(() => planDosyasindanTest({
       projectId: 'proje-1', type: 'frontend', name: 'Giriş yapılır', priority: 'p9',
       planSteps: [{ type: 'action', description: 'Giriş sayfasını aç' }],
-    })).toThrow(SemaHatasi);
+    })).toThrow(SchemaError);
     expect(() => planDosyasindanTest({
       projectId: 'proje-1', type: 'frontend', name: 'Giriş yapılır', priority: 'p9',
       planSteps: [{ type: 'action', description: 'Giriş sayfasını aç' }],

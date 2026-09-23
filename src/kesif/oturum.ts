@@ -13,18 +13,18 @@ export function loginUrlDogrula(baseUrl: string, loginUrl: string | undefined): 
     baseOrigin = new URL(baseUrl).origin;
     loginOrigin = new URL(loginUrl).origin;
   } catch {
-    throw new Error('baseUrl ve loginUrl geçerli URL olmalıdır');
+    throw new Error('baseUrl and loginUrl must be valid URLs');
   }
   if (baseOrigin !== loginOrigin) {
-    throw new Error('loginUrl, baseUrl ile aynı origin olmak zorundadır');
+    throw new Error('loginUrl must be on the same origin as baseUrl');
   }
 }
 
 /** Kayıtlı kimlik ile hedef origin uyuşmadığında fırlatılır; parola hiç yazılmamıştır. */
-export class KimlikOriginHatasi extends Error {
+export class CredentialOriginError extends Error {
   constructor(mesaj: string) {
     super(mesaj);
-    this.name = 'KimlikOriginHatasi';
+    this.name = 'CredentialOriginError';
   }
 }
 
@@ -35,13 +35,13 @@ export class KimlikOriginHatasi extends Error {
  */
 export function kimlikOriginDogrula(kimlik: Kimlik, hedefOrigin: string): void {
   if (kimlik.origin === undefined) {
-    throw new KimlikOriginHatasi(
-      'Kayıtlı giriş bilgisinin hangi adres için verildiği bilinmiyor (eski biçim); parola gönderilmedi.',
+    throw new CredentialOriginError(
+      'It is unknown which address the saved credentials were given for (legacy format); the password was not sent.',
     );
   }
   if (kimlik.origin !== hedefOrigin) {
-    throw new KimlikOriginHatasi(
-      `Kayıtlı giriş bilgisi ${kimlik.origin} için verildi, hedef ${hedefOrigin}; parola gönderilmedi.`,
+    throw new CredentialOriginError(
+      `The saved credentials were given for ${kimlik.origin}, the target is ${hedefOrigin}; the password was not sent.`,
     );
   }
 }
@@ -72,12 +72,12 @@ export async function girisiGonder(
   const hedefOrigin = new URL(formHedefi, sayfa.url()).origin;
   if (sayfaOrigin !== izinliOrigin || hedefOrigin !== izinliOrigin) {
     throw new Error(
-      `Giriş formu farklı origin'de (${sayfaOrigin === izinliOrigin ? hedefOrigin : sayfaOrigin}); `
-        + `kimlik bilgisi yalnız ${izinliOrigin} adresine gönderilir.`,
+      `The login form is on a different origin (${sayfaOrigin === izinliOrigin ? hedefOrigin : sayfaOrigin}); `
+        + `credentials are only sent to ${izinliOrigin}.`,
     );
   }
-  await form.kullaniciAlani.fill(kimlik.kullanici);
-  await form.parolaAlani.fill(kimlik.parola);
+  await form.kullaniciAlani.fill(kimlik.username);
+  await form.parolaAlani.fill(kimlik.password);
   const oncekiUrl = sayfa.url();
   const urlDegisimi = sayfa.waitForURL((url) => url.href !== oncekiUrl, { timeout: urlBeklemeMs })
     .then(() => true)

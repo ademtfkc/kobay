@@ -95,15 +95,15 @@ function bosluklariNormallestir(metin: string): string {
 }
 
 const YASAKLI_KOD_DESENLERI: Array<{ desen: RegExp; ad: string }> = [
-  { desen: /\bimport\s*(?:\/\*[\s\S]*?\*\/\s*)?\(/, ad: 'dinamik import()' },
+  { desen: /\bimport\s*(?:\/\*[\s\S]*?\*\/\s*)?\(/, ad: 'dynamic import()' },
   { desen: /\brequire\b/, ad: 'require' },
-  { desen: /\barguments\b/, ad: 'arguments (modül sarmalayıcısına erişim)' },
+  { desen: /\barguments\b/, ad: 'arguments (access to the module wrapper)' },
   { desen: /\bgetBuiltinModule\b/, ad: 'getBuiltinModule()' },
-  { desen: /\bprocess\b/, ad: 'process erişimi' },
-  { desen: /\b(?:globalThis|global)\b/, ad: 'global nesne erişimi' },
-  { desen: /\bReflect\s*(?:\.|\?\.|\[)/, ad: 'Reflect üzerinden dolaylı erişim' },
-  { desen: /\b(?:eval|Function)\b/, ad: 'eval/Function çalıştırması' },
-  { desen: /\bconstructor\b/, ad: 'constructor üzerinden kod çalıştırma' },
+  { desen: /\bprocess\b/, ad: 'process access' },
+  { desen: /\b(?:globalThis|global)\b/, ad: 'global object access' },
+  { desen: /\bReflect\s*(?:\.|\?\.|\[)/, ad: 'indirect access through Reflect' },
+  { desen: /\b(?:eval|Function)\b/, ad: 'eval/Function execution' },
+  { desen: /\bconstructor\b/, ad: 'running code through constructor' },
 ];
 
 /**
@@ -111,9 +111,9 @@ const YASAKLI_KOD_DESENLERI: Array<{ desen: RegExp; ad: string }> = [
  * (`{ fs: 1 }`) ve kodun kendi `const`/`let` bağlamasıyla gölgelenmiş kullanım serbesttir.
  */
 const SERBEST_YASAKLI_ADLAR = new Map<string, string>([
-  ...['module', 'exports', '__dirname', '__filename'].map((ad) => [ad, 'Node modül ortamı erişimi'] as const),
+  ...['module', 'exports', '__dirname', '__filename'].map((ad) => [ad, 'Node module environment access'] as const),
   ...['child_process', 'fs', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector']
-    .map((ad) => [ad, 'Node sistem modülü erişimi'] as const),
+    .map((ad) => [ad, 'Node system module access'] as const),
 ]);
 const MODUL_BILDIRIMLERI = new Set(['import', 'export']);
 const UNICODE_KACISI_DESENI = /\\u(?:[\da-fA-F]{4}|\{[\da-fA-F]{1,6}\})/;
@@ -376,31 +376,31 @@ function calistirilabilirKod(kod: string): CalistirilabilirKod {
 }
 
 function hizKesiciMesaji(sebep: string): string {
-  return `Kod hız kesici tarafından reddedildi (güvenlik sınırı değildir): ${sebep}`;
+  return `Code rejected by the speed bump (this is not a security boundary): ${sebep}`;
 }
 
 /** `atla`dan önceki kısım (izinli fixture importu) modül bildirimi denetiminden muaftır. */
 function yasakliKodHatasi(kod: string, atla: number): string | null {
   const { kod: calistirilabilir, belirsiz, tanimlayicilar, bildirimler } = calistirilabilirKod(kod);
   if (belirsiz) {
-    return hizKesiciMesaji('`/` işaretinin regex mi bölme mi olduğu kestirilemedi; regex\'i değişkene ata veya bölmeyi parantezle ayır.');
+    return hizKesiciMesaji('could not tell whether `/` starts a regex or is a division; assign the regex to a variable, or put the division in parentheses.');
   }
   if (UNICODE_KACISI_DESENI.test(calistirilabilir)) {
-    return hizKesiciMesaji('çalıştırılabilir kodda Unicode kaçışı kullanılamaz; yalnız Playwright page/test/expect API\'lerini kullan.');
+    return hizKesiciMesaji('Unicode escapes are not allowed in executable code; use only the Playwright page/test/expect APIs.');
   }
   const yasak = YASAKLI_KOD_DESENLERI.find(({ desen }) => desen.test(calistirilabilir));
   if (yasak !== undefined) {
-    return hizKesiciMesaji(`${yasak.ad} kullanılamaz; yalnız Playwright page/test/expect API'lerini kullan.`);
+    return hizKesiciMesaji(`${yasak.ad} is not allowed; use only the Playwright page/test/expect APIs.`);
   }
   for (const t of tanimlayicilar) {
     if (t.ozellik || t.anahtar) continue;
     if (MODUL_BILDIRIMLERI.has(t.ad) && t.konum >= atla) {
-      return hizKesiciMesaji(`fixture importu dışında ${t.ad} bildirimi kullanılamaz; yalnız ilk satırdaki izinli import olabilir.`);
+      return hizKesiciMesaji(`no ${t.ad} declaration is allowed apart from the fixture import; only the permitted import on the first line.`);
     }
     const ad = SERBEST_YASAKLI_ADLAR.get(t.ad);
     if (ad === undefined || t.bildirim) continue;
     const golgeli = t.kapsamlar.some((kapsam) => bildirimler.get(kapsam)?.has(t.ad) === true);
-    if (!golgeli) return hizKesiciMesaji(`${ad} kullanılamaz; yalnız Playwright page/test/expect API'lerini kullan.`);
+    if (!golgeli) return hizKesiciMesaji(`${ad} is not allowed; use only the Playwright page/test/expect APIs.`);
   }
   return null;
 }
@@ -428,10 +428,10 @@ const IZINLI_IMPORT = "import { test, expect } from './_fixture';";
 export function statikHata(kod: string, test: TestKaydi, harita: Harita): string | null {
   const importSatirlari = kod.match(/^\s*import\b.*$/gm) ?? [];
   if (importSatirlari.length !== 1 || importSatirlari[0] !== IZINLI_IMPORT) {
-    return `Kod yalnız \`${IZINLI_IMPORT}\` ile başlamalı; başka import olamaz.`;
+    return `The code must start with \`${IZINLI_IMPORT}\`; no other import is allowed.`;
   }
   if (!kod.startsWith(IZINLI_IMPORT)) {
-    return "Kod fixture importu ile başlamalı.";
+    return 'The code must start with the fixture import.';
   }
 
   const guvenlikHatasi = yasakliKodHatasi(kod, IZINLI_IMPORT.length);
@@ -442,42 +442,42 @@ export function statikHata(kod: string, test: TestKaydi, harita: Harita): string
     'm',
   );
   if (!testDeseni.test(kod)) {
-    return `Tek test, test(${JSON.stringify(test.name)}, async ({ page }) => { … }) biçiminde olmalı.`;
+    return `The single test must be written as test(${JSON.stringify(test.name)}, async ({ page }) => { … }).`;
   }
   // `/re/.test(x)` gibi özellik çağrıları test tanımı değildir; dize/yorum içerikleri de sayılmaz.
   const testCagrilari = calistirilabilirKod(kod).kod.match(/(?<!\.\s*)\btest\s*\(/g) ?? [];
-  if (testCagrilari.length !== 1) return 'Kod tam olarak bir test içermeli.';
+  if (testCagrilari.length !== 1) return 'The code must contain exactly one test.';
 
   const adimEslesmeleri = adimEslesmeleriniBul(kod);
   if (adimEslesmeleri.length !== test.planSteps.length) {
-    return `Kodda ${test.planSteps.length} adet await test.step bulunmalı.`;
+    return `The code must contain ${test.planSteps.length} await test.step calls.`;
   }
   for (const [sira, planAdimi] of test.planSteps.entries()) {
     const eslesme = adimEslesmeleri[sira];
     if (eslesme === undefined || eslesme.sira !== String(sira) || bosluklariNormallestir(eslesme.baslik) !== bosluklariNormallestir(planAdimi.description)) {
-      return `Adım ${sira}, tam olarak '${sira}: ${planAdimi.description}' başlığını taşımalı.`;
+      return `Step ${sira} must carry exactly the title '${sira}: ${planAdimi.description}'.`;
     }
   }
 
-  if (/\bpage\.waitForTimeout\s*\(/.test(kod)) return 'page.waitForTimeout kullanılamaz.';
+  if (/\bpage\.waitForTimeout\s*\(/.test(kod)) return 'page.waitForTimeout is not allowed.';
 
-  const haritaYollari = new Set(harita.sayfalar.map((sayfa) => new URL(sayfa.url).pathname));
+  const haritaYollari = new Set(harita.pages.map((sayfa) => new URL(sayfa.url).pathname));
   const gotoCagrilari = [...kod.matchAll(/\bpage\.goto\(\s*(['"])(.*?)\1/g)];
   const tumGotoCagrilari = kod.match(/\bpage\.goto\s*\(/g) ?? [];
   if (gotoCagrilari.length !== tumGotoCagrilari.length) {
-    return 'page.goto yalnız sabit bir harita URL dizgesiyle çağrılabilir.';
+    return 'page.goto may only be called with a literal URL string from the map.';
   }
   for (const eslesme of gotoCagrilari) {
     const hedef = eslesme[2];
-    if (hedef === undefined) return 'page.goto hedefi okunamadı.';
+    if (hedef === undefined) return 'The page.goto target could not be read.';
     let url: URL;
     try {
       url = new URL(hedef, harita.baseUrl);
     } catch {
-      return `page.goto geçerli bir URL almalı: ${hedef}`;
+      return `page.goto must receive a valid URL: ${hedef}`;
     }
     if (url.origin !== new URL(harita.baseUrl).origin || !haritaYollari.has(url.pathname)) {
-      return `page.goto haritada olmayan bir yola gidiyor: ${hedef}`;
+      return `page.goto navigates to a path that is not in the map: ${hedef}`;
     }
   }
   return null;
@@ -509,8 +509,8 @@ async function geciciConfigSagla(configYolu: string): Promise<void> {
   }
   if (mevcut.includes(ESKI_REPORTER_SATIRI.trim())) {
     process.stderr.write(
-      `[kobay] Uyarı: ${configYolu} elle düzenlenmiş ve hâlâ okunmayan \`son-liste.json\` reporter'ını`
-      + " taşıyor; dosyaya dokunulmadı, reporter satırını elle kaldırın.\n",
+      `[kobay] Warning: ${configYolu} was edited by hand and still carries the unused \`son-liste.json\``
+      + ' reporter; the file was left untouched, remove the reporter line by hand.\n',
     );
   }
 }
@@ -551,7 +551,7 @@ export async function kodDogrula(specYolu: string, kobayKoku: string): Promise<K
 
   const sonuc = await playwrightListele(specYolu, configYolu, kobayKoku);
   if (sonuc.ok) return { ok: true };
-  return { ok: false, hata: sonuc.stderr.slice(0, 2000) || 'Playwright ayrıştırması başarısız.' };
+  return { ok: false, hata: sonuc.stderr.slice(0, 2000) || 'Playwright parsing failed.' };
 }
 
 /** Beyinden Playwright kodu ister, sözleşme ve Playwright ayrıştırmasıyla doğrular. */
@@ -562,19 +562,19 @@ export async function kodUret(
   s: UretimAyari,
 ): Promise<{ kod: string; denemeler: number }> {
   const maxTur = s.maxTur ?? 2;
-  if (!Number.isInteger(maxTur) || maxTur < 1) throw new Error('maxTur en az 1 olmalı.');
+  if (!Number.isInteger(maxTur) || maxTur < 1) throw new Error('maxTur must be at least 1.');
 
   const specYolu = join(s.kobayKoku, 'tests', `${test.id}.spec.ts`);
   let oncekiHata: string | undefined;
   for (let deneme = 1; deneme <= maxTur; deneme += 1) {
-    const yanit = await beyin.sor<{ kod: string; aciklama?: string }>({
+    const yanit = await beyin.sor<{ code: string; explanation?: string }>({
       gorev: `uret-${test.id}`,
       sistem: sistemIstemi(),
       kullanici: kullaniciIstemi(test, harita, oncekiHata),
       sema: KodYanitiSemasi,
       ...(s.logDizini === undefined ? {} : { logDizini: s.logDizini }),
     });
-    const kod = yanit.json.kod;
+    const kod = yanit.json.code;
     const sozlesmeHatasi = statikHata(kod, test, harita);
     if (sozlesmeHatasi !== null) {
       oncekiHata = sozlesmeHatasi;
@@ -584,7 +584,7 @@ export async function kodUret(
     await yazAtomik(specYolu, kod);
     const dogrulama = await kodDogrula(specYolu, s.kobayKoku);
     if (dogrulama.ok) return { kod, denemeler: deneme };
-    oncekiHata = dogrulama.hata ?? 'Playwright kodu ayrıştıramadı.';
+    oncekiHata = dogrulama.hata ?? 'Playwright could not parse the code.';
   }
-  throw new Error(`Kod üretilemedi: ${oncekiHata ?? 'Bilinmeyen doğrulama hatası.'}`);
+  throw new Error(`Code generation failed: ${oncekiHata ?? 'Unknown validation error.'}`);
 }

@@ -1,38 +1,45 @@
 import type { Harita, TestKaydi } from '../depo/index.js';
 
+/** Beynin serbest metin alanlarını hangi dilde yazacağını söyleyen ortak cümle. */
+export const DIL_KURALI = 'Write names, descriptions and rationale in the language of the '
+  + "application's UI and docs; if mixed or unclear, use English.";
+
 export function sistemIstemi(): string {
   return [
-    'Sen deneyimli bir Playwright test yazarısın.',
-    "Yalnız şu tam JSON iskeletine uyan bir nesne döndür: {\"kod\": \"...\", \"aciklama\": \"...\"}.",
-    "Tam örnek: {\"kod\": \"import { test, expect } from './_fixture';\\n\\ntest('Ürünler görünür', async ({ page }) => {\\n  await test.step('0: Ürünler sayfasını aç', async () => { await page.goto('/urunler'); });\\n});\", \"aciklama\": \"Ürün sayfasını açan tek test.\"}",
-    'kod ve aciklama anahtarları şemanın değişmez anahtarlarıdır; bunları çevirme. Türkçe yalnız metin değerlerinde kalabilir.',
-    "Kodun ilk satırı tam olarak import { test, expect } from './_fixture'; olmalı; başka import kullanma.",
-    "Tam olarak tek test yaz: test('<test adı>', async ({ page }) => { ... }).",
-    "Her plan adımı için sırası 0'dan başlayan, birebir açıklamalı await test.step('N: açıklama', async () => { ... }) yaz.",
-    'Adım açıklamasında tırnak varsa çift tırnak veya backtick kullan; tırnakları kaçışlayarak da yazabilirsin.',
-    'Sayfa zaten giriş yapılmış gelir; giriş formu doldurma, kullanıcı adı ya da parola yazma.',
-    'Seçicide getByRole önceliklidir; sonra getByLabel, getByPlaceholder, getByText, en son CSS kullan.',
-    "getByRole name'inde tam eşleşme için { exact: true } kullan; bir metin başka öğenin alt dizesi olabilir (ör. 'Müşteriler' ile 'Sessizleşen müşteriler'), gevşek eşleşme strict mode ihlali verir. Öğenin erişilebilir adı iç içe öğeleri de kapsar (ör. <h2>Fatura listesi<span>4 kayıt</span></h2>): böyle başlıklarda name'e regex ver (name: /^Fatura listesi/) ve içeriği toContainText ile doğrula. getByText'te exact yerine sınırlı regex tercih et; DOM'da tam metni bilmiyorsan exact: true yazma.",
-    'page.waitForTimeout kullanma. page.goto yalnız verilen harita URL yollarından birine gidebilir.',
-    'Kod red listesi yalnız hız kesicidir, güvenlik sınırı değildir; Node süreç/dosya/ağ API’lerine erişmeye çalışma.',
+    'You are an experienced Playwright test author.',
+    "Return only an object matching this exact JSON skeleton: {\"code\": \"...\", \"explanation\": \"...\"}.",
+    "Full example: {\"code\": \"import { test, expect } from './_fixture';\\n\\ntest('Products are visible', async ({ page }) => {\\n  await test.step('0: Open the products page', async () => { await page.goto('/products'); });\\n});\", \"explanation\": \"A single test that opens the products page.\"}",
+    'The keys code and explanation are the schema\'s fixed keys; do not translate them. Only the text values may be in another language.',
+    DIL_KURALI,
+    "The first line of the code must be exactly import { test, expect } from './_fixture'; do not use any other import.",
+    "Write exactly one test: test('<test name>', async ({ page }) => { ... }).",
+    "For every plan step write an await test.step('N: description', async () => { ... }) whose index starts at 0 and whose description is copied verbatim.",
+    'If a step description contains an apostrophe, use double quotes or a backtick; you may also escape the quotes.',
+    'The page arrives already logged in; do not fill a login form and do not type a user name or a password.',
+    'Prefer getByRole in selectors; then getByLabel, getByPlaceholder, getByText, and CSS last.',
+    "Use { exact: true } in a getByRole name for an exact match; one text may be a substring of another element (for example 'Customers' inside 'Dormant customers'), and a loose match raises a strict mode violation. An element's accessible name also covers nested elements (for example <h2>Invoice list<span>4 records</span></h2>): for such headings give name a regular expression (name: /^Invoice list/) and verify the content with toContainText. In getByText prefer a narrow regular expression over exact; do not write exact: true when you do not know the exact text in the DOM.",
+    'Do not use page.waitForTimeout. page.goto may only visit one of the URL paths given in the map.',
+    'The code deny list is only a speed bump, not a security boundary; do not try to reach Node process, file system or network APIs.',
   ].join('\n');
 }
 
 export function kullaniciIstemi(test: TestKaydi, harita: Harita, oncekiHata?: string): string {
-  const sayfalar = harita.sayfalar.map((sayfa) => ({
+  const sayfalar = harita.pages.map((sayfa) => ({
     url: sayfa.url,
-    baslik: sayfa.baslik,
-    basliklar: sayfa.basliklar,
-    formlar: sayfa.formlar,
-    dugmeler: sayfa.dugmeler,
-    linkler: sayfa.linkler,
+    title: sayfa.title,
+    headings: sayfa.headings,
+    forms: sayfa.forms,
+    buttons: sayfa.buttons,
+    links: sayfa.links,
   }));
-  const geriBildirim = oncekiHata === undefined ? '' : `\n\nÖnceki deneme reddedildi: ${oncekiHata}\nBu hatayı düzelterek yeni kod üret.`;
+  const geriBildirim = oncekiHata === undefined
+    ? ''
+    : `\n\nThe previous attempt was rejected: ${oncekiHata}\nFix this error and produce new code.`;
   return [
-    `Test adı: ${test.name}`,
-    `Plan adımları: ${JSON.stringify(test.planSteps)}`,
-    `Harita base URL: ${harita.baseUrl}`,
-    `Haritadaki sayfalar: ${JSON.stringify(sayfalar)}`,
+    `Test name: ${test.name}`,
+    `Plan steps: ${JSON.stringify(test.planSteps)}`,
+    `Map base URL: ${harita.baseUrl}`,
+    `Pages in the map: ${JSON.stringify(sayfalar)}`,
     geriBildirim,
   ].join('\n');
 }

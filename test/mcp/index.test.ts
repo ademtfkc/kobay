@@ -83,7 +83,7 @@ describe('MCP sunucusu', () => {
     try {
       const sonuc = await baglanti.istemci.callTool({ name: 'test_list', arguments: {} });
       expect(sonuc.isError).toBe(true);
-      expect(sonuc.content).toEqual([{ type: 'text', text: expect.stringContaining('Kobay projesinde değil') }]);
+      expect(sonuc.content).toEqual([{ type: 'text', text: expect.stringContaining('not inside a Kobay project') }]);
       expect(() => JSON.parse((sonuc.content[0] as { text: string }).text)).not.toThrow();
     } finally {
       await baglanti.kapat();
@@ -149,7 +149,7 @@ describe('MCP sunucusu', () => {
       });
       const guncelle = await baglanti.istemci.callTool({
         name: 'project_update',
-        arguments: { loginUrl: 'http://localhost:3000/giris', beyin: 'claude' },
+        arguments: { loginUrl: 'http://localhost:3000/giris', brain: 'claude' },
       });
       expect(guncelle.isError).not.toBe(true);
       expect(JSON.parse((guncelle.content[0] as { text: string }).text)).toMatchObject({
@@ -157,7 +157,7 @@ describe('MCP sunucusu', () => {
           baseUrl: 'http://localhost:3000',
           docsPath: 'docs/rehber.md',
           loginUrl: 'http://localhost:3000/giris',
-          beyin: { adaptor: 'claude' },
+          brain: { adaptor: 'claude' },
         },
       });
       const disOrigin = await baglanti.istemci.callTool({
@@ -165,11 +165,11 @@ describe('MCP sunucusu', () => {
         arguments: { loginUrl: 'http://kimlik.test/giris' },
       });
       expect(disOrigin.isError).toBe(true);
-      expect((disOrigin.content[0] as { text: string }).text).toContain('aynı origin');
+      expect((disOrigin.content[0] as { text: string }).text).toContain('same origin as baseUrl');
       const liste = await baglanti.istemci.listTools();
       const guncelleme = liste.tools.find((arac) => arac.name === 'project_update')?.inputSchema;
-      const beyinSemasi = (guncelleme?.properties as Record<string, { enum?: string[] }> | undefined)?.beyin;
-      expect(beyinSemasi?.enum).not.toContain('sahte');
+      const beyinSemasi = (guncelleme?.properties as Record<string, { enum?: string[] }> | undefined)?.brain;
+      expect(beyinSemasi?.enum).toEqual(['claude', 'codex', 'openrouter']);
     } finally {
       await baglanti.kapat();
     }
@@ -195,7 +195,7 @@ describe('MCP sunucusu', () => {
         name: 'project_get', arguments: { projectDir: normalDizin },
       });
       expect(reddedilen.isError).toBe(true);
-      expect((reddedilen.content[0] as { text: string }).text).toContain('Kobay projesinde değil');
+      expect((reddedilen.content[0] as { text: string }).text).toContain('not inside a Kobay project');
     } finally {
       await baglanti.kapat();
     }
@@ -210,7 +210,7 @@ describe('MCP sunucusu', () => {
     try {
       const sonuc = await sinirli.istemci.callTool({ name: 'project_get', arguments: { projectDir: disKok } });
       expect(sonuc.isError).toBe(true);
-      expect((sonuc.content[0] as { text: string }).text).toContain('izin verilen MCP kökleri dışında');
+      expect((sonuc.content[0] as { text: string }).text).toContain('is outside the allowed MCP roots');
     } finally {
       await sinirli.kapat();
     }
@@ -264,7 +264,7 @@ describe('MCP sunucusu', () => {
       ]);
       for (const sonuc of sonuclar) {
         expect(sonuc.isError).toBe(true);
-        expect((sonuc.content[0] as { text: string }).text).toContain('proje kökü dışında');
+        expect((sonuc.content[0] as { text: string }).text).toContain('cannot be outside the project root');
       }
       await expect(access(join(yeniProje, '.kobay'))).rejects.toThrow();
     } finally {
@@ -288,8 +288,8 @@ describe('MCP sunucusu', () => {
       expect(olustur.isError).not.toBe(true);
       const dizin = await KobayDizini.bul(projeKoku);
       await dizin?.haritaYaz({
-        baseUrl: 'http://proje.test', girisYapildi: false,
-        kesifTarihi: '2026-09-21T00:00:00.000Z', sayfalar: [],
+        baseUrl: 'http://proje.test', loggedIn: false,
+        exploredAt: '2026-09-21T00:00:00.000Z', pages: [],
       });
 
       await rename(join(projeKoku, 'belge-link'), join(projeKoku, 'eski-belge-link'));
@@ -298,7 +298,7 @@ describe('MCP sunucusu', () => {
         name: 'plan_generate', arguments: { projectDir: projeKoku },
       });
       expect(sonuc.isError).toBe(true);
-      expect((sonuc.content[0] as { text: string }).text).toContain('docsPath proje kökü dışında');
+      expect((sonuc.content[0] as { text: string }).text).toContain('docsPath cannot be outside the project root');
     } finally {
       await baglanti.kapat();
     }
@@ -309,11 +309,11 @@ describe('MCP sunucusu', () => {
     const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
     const harita: Harita = {
       baseUrl: 'http://uygulama.test',
-      girisYapildi: true,
-      kesifTarihi: '2026-09-17T00:00:00.000Z',
-      sayfalar: [{
-        url: 'http://uygulama.test/cariler', baslik: 'Cariler', basliklar: ['Cariler'],
-        linkler: [], formlar: [], dugmeler: [], menu: [],
+      loggedIn: true,
+      exploredAt: '2026-09-17T00:00:00.000Z',
+      pages: [{
+        url: 'http://uygulama.test/cariler', title: 'Cariler', headings: ['Cariler'],
+        links: [], forms: [], buttons: [], menu: [],
       }],
     };
     await dizin.haritaYaz(harita);
@@ -342,7 +342,7 @@ describe('MCP sunucusu', () => {
         name: 'test_refresh', arguments: { id: 't_bcd12345', run: false },
       });
       expect(haritadaYok.isError).toBe(true);
-      expect((haritadaYok.content as [{ text: string }])[0].text).toContain('haritasında yok');
+      expect((haritadaYok.content as [{ text: string }])[0].text).toContain('not in the exploration map');
       await expect(dizin.haritaOku()).resolves.toEqual(harita);
     } finally {
       await baglanti.kapat();
@@ -393,7 +393,7 @@ describe('MCP sunucusu', () => {
 
       const guncelle = await baglanti.istemci.callTool({ name: 'project_update', arguments: { baseUrl: kotu.url } });
       expect(guncelle.isError).not.toBe(true);
-      expect(metin(guncelle)).toContain('gecersizKilinan');
+      expect(metin(guncelle)).toContain('invalidated');
       await expect(access(join(cwd, '.kobay', 'credentials.json'))).rejects.toThrow();
 
       await baglanti.istemci.callTool({ name: 'explore', arguments: {} });
@@ -417,7 +417,7 @@ describe('MCP sunucusu', () => {
         const sonuc = await baglanti.istemci.callTool({ name: 'test_create', arguments: { planPath } });
         expect(sonuc.isError, planPath).toBe(true);
         expect(JSON.stringify(sonuc), planPath).not.toContain('GIZLI-PAROLA-123');
-        expect(JSON.stringify(sonuc), planPath).toContain('nokta ile başlayan');
+        expect(JSON.stringify(sonuc), planPath).toContain('name starts with a dot');
       }
       for (const docsPath of ['.kobay/credentials.json', '.env']) {
         const sonuc = await baglanti.istemci.callTool({ name: 'project_update', arguments: { docsPath } });
@@ -491,7 +491,7 @@ describe('MCP sunucusu', () => {
         name: 'project_create', arguments: { url: kotu.url, loginUser: 'ali' },
       });
       expect(sonuc.isError).toBe(true);
-      expect(metin(sonuc)).toContain('KOBAY_LOGIN_ORIGIN tanımlı değil');
+      expect(metin(sonuc)).toContain('KOBAY_LOGIN_ORIGIN is not set');
     } finally {
       await tanimsiz.kapat();
       await Promise.all([mesru.kapat(), kotu.kapat()]);
@@ -516,12 +516,12 @@ describe('MCP sunucusu', () => {
       for (const out of reddedilecek) {
         const sonuc = await baglanti.istemci.callTool({ name: 'failure_get', arguments: { id: 't_abc12345', out } });
         expect(sonuc.isError, out).toBe(true);
-        expect((sonuc.content[0] as { text: string }).text, out).toContain('nokta ile başlayan');
+        expect((sonuc.content[0] as { text: string }).text, out).toContain('name starts with a dot');
       }
       // Tek istisna: paket oturum çerezi taşır, .kobay/failure-out/ zaten git'e girmez.
       for (const out of ['paket', '.kobay/failure-out/x', '.kobay/failure-out/t_abc12345-1/alt']) {
         const sonuc = await baglanti.istemci.callTool({ name: 'failure_get', arguments: { id: 't_abc12345', out } });
-        expect((sonuc.content[0] as { text: string }).text, out).not.toContain('nokta ile başlayan');
+        expect((sonuc.content[0] as { text: string }).text, out).not.toContain('name starts with a dot');
       }
     } finally {
       await baglanti.kapat();
@@ -540,7 +540,7 @@ describe('MCP sunucusu', () => {
         expect(sonuc.isError, tur).toBeUndefined();
         expect(JSON.parse((sonuc.content[0] as { text: string }).text) as { hedef: string }).toEqual({
           id: 't_abc12345',
-          hedef: join(cikisKoku, 't_abc12345'),
+          destination: join(cikisKoku, 't_abc12345'),
         });
         await access(join(cikisKoku, 't_abc12345', 'failure.json'));
       }

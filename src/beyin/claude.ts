@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BeyinAyari } from '../depo/index.js';
-import { BeyinCalismaHatasi, BeyinHatasi, type Beyin, type BeyinIstegi, type BeyinYaniti } from './index.js';
+import { BrainRuntimeError, BrainError, type Beyin, type BeyinIstegi, type BeyinYaniti } from './index.js';
 import {
   beyinGunluguYaz,
   type BeyinButcesi,
@@ -67,7 +67,7 @@ export class ClaudeBeyni implements Beyin {
       const sonuc = await semaylaSor<T>(istek, async (istem) => {
         sonIstem = istem;
         if (!anthropicApiAnahtariUyarildi && this.env.ANTHROPIC_API_KEY !== undefined && this.env.ANTHROPIC_API_KEY !== '') {
-          process.stderr.write('[kobay] Uyarı: ANTHROPIC_API_KEY tanımlı; claude -p çağrıları API hesabınıza faturalanabilir.\n');
+          process.stderr.write('[kobay] Warning: ANTHROPIC_API_KEY is set; `claude -p` calls may be billed to your API account.\n');
           anthropicApiAnahtariUyarildi = true;
         }
         const rezervasyon = this.butce.claudeCagrisiBaslat();
@@ -118,27 +118,27 @@ export class ClaudeBeyni implements Beyin {
           ? disYanit?.is_error === true && BUTCE_METNI_DESENI.test(sonHam)
           : altTur === BUTCE_ASIMI_ALT_TURU;
         if (butceAsimi) {
-          throw new BeyinCalismaHatasi(
-            'maliyet_tavani',
-            `Claude çağrı başı maliyet tavanına (${rezervasyon.azamiMaliyetUsd} USD) ulaşıldı. `
-              + insanOnayiNotu('KOBAY_MAX_BUDGET_USD veya beyin.maxBudgetUsd'),
+          throw new BrainRuntimeError(
+            'cost_cap',
+            `Claude per-call cost limit reached (${rezervasyon.azamiMaliyetUsd} USD). `
+              + insanOnayiNotu('KOBAY_MAX_BUDGET_USD or brain.maxBudgetUsd'),
           );
         }
-        if (calisma.zamanAsimi) throw new BeyinHatasi('zaman_asimi');
+        if (calisma.zamanAsimi) throw new BrainError('timeout');
         if (calisma.kod !== 0) throw cliCikisHatasi(calisma.kod, calisma.stderr);
         if (disYanit === undefined) {
-          throw new BeyinCalismaHatasi('cli_hatasi', 'Claude çıktısı JSON olarak ayrıştırılamadı.');
+          throw new BrainRuntimeError('cli_error', 'The Claude output could not be parsed as JSON.');
         }
-        throw new BeyinCalismaHatasi(
-          'cli_hatasi',
-          `Claude hata yanıtı verdi${altTur === undefined ? '' : ` (${altTur})`}: `
+        throw new BrainRuntimeError(
+          'cli_error',
+          `Claude returned an error${altTur === undefined ? '' : ` (${altTur})`}: `
             + gizliDegerleriMaskele(sonHam).slice(0, 500),
         );
       });
       await beyinGunluguYaz(istek.logDizini, istek.gorev, sonIstem, sonuc.ham, sonuc);
       return { ...sonuc, sureMs: Date.now() - baslangic, adaptor: this.ad };
     } catch (hata) {
-      const gunlukHam = hata instanceof BeyinCalismaHatasi && hata.detay !== undefined ? hata.detay : sonHam;
+      const gunlukHam = hata instanceof BrainRuntimeError && hata.detay !== undefined ? hata.detay : sonHam;
       await beyinGunluguYaz(istek.logDizini, istek.gorev, sonIstem, gunlukHam, sonKullanim);
       throw hata;
     } finally {

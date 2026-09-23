@@ -25,10 +25,10 @@ describe('beceri kurulumu', () => {
     const proje = await geciciDizin();
 
     await expect(beceriKur('claude', { projeKoku: proje })).resolves.toMatchObject({
-      islem: 'olusturuldu',
+      action: 'created',
     });
     await expect(beceriKur('claude', { projeKoku: proje })).resolves.toMatchObject({
-      islem: 'degismedi',
+      action: 'unchanged',
     });
     await expect(readFile(join(proje, '.claude', 'skills', 'kobay', 'SKILL.md'), 'utf8')).resolves.toBe(
       beceriMetni(),
@@ -42,13 +42,13 @@ describe('beceri kurulumu', () => {
 
     await yazAtomik(agents, disarisi);
     const ilk = await beceriKur('codex', { projeKoku: proje });
-    expect(ilk.islem).toBe('guncellendi');
+    expect(ilk.action).toBe('updated');
     const ilkIcerik = await readFile(agents, 'utf8');
     expect(ilkIcerik).toContain(disarisi.trim());
     expect(ilkIcerik.match(/<!-- kobay:BEGIN -->/g)).toHaveLength(1);
     expect(ilkIcerik.match(/<!-- kobay:END -->/g)).toHaveLength(1);
 
-    await expect(beceriKur('codex', { projeKoku: proje })).resolves.toMatchObject({ islem: 'degismedi' });
+    await expect(beceriKur('codex', { projeKoku: proje })).resolves.toMatchObject({ action: 'unchanged' });
     await expect(readFile(agents, 'utf8')).resolves.toBe(ilkIcerik);
   });
 
@@ -58,7 +58,7 @@ describe('beceri kurulumu', () => {
     const eski = '# Dış kural\n\n<!-- kobay:BEGIN -->\neski içerik\n<!-- kobay:END -->\n';
 
     await yazAtomik(agents, eski);
-    await expect(beceriKur('codex', { projeKoku: proje })).resolves.toMatchObject({ islem: 'guncellendi' });
+    await expect(beceriKur('codex', { projeKoku: proje })).resolves.toMatchObject({ action: 'updated' });
     const yeni = await readFile(agents, 'utf8');
     expect(yeni).toContain('# Dış kural');
     expect(yeni).not.toContain('eski içerik');
@@ -68,7 +68,7 @@ describe('beceri kurulumu', () => {
   it('Cursor kuralını frontmatter ile oluşturur', async () => {
     const proje = await geciciDizin();
     const sonuc = await beceriKur('cursor', { projeKoku: proje });
-    const icerik = await readFile(sonuc.yol, 'utf8');
+    const icerik = await readFile(sonuc.path, 'utf8');
 
     expect(icerik).toMatch(/^---\ndescription: .+\nalwaysApply: false\n---\n/);
     expect(icerik).toContain('Verify web app features with kobay');
@@ -87,15 +87,15 @@ describe('beceri kurulumu', () => {
     expect(ilk.metin).toContain(join(proje, '.mcp.json'));
     // Talimat basma dönemi bitti: kullanıcının elle çalıştıracağı komut kalmadı.
     expect(ilk.metin).not.toContain('claude mcp add');
-    expect(ilk.metin).not.toContain('olusturuldu');
+    expect(ilk.metin).toContain('Skill created:');
     expect(ilk.json).toMatchObject({
-      mcp: { yol: join(proje, '.mcp.json'), islem: 'olusturuldu', komut: ['npx', '-y', 'kobay', 'mcp'] },
+      mcp: { path: join(proje, '.mcp.json'), action: 'created', command: ['npx', '-y', 'kobay', 'mcp'] },
     });
 
     const ikinci = await agentInstall({ cwd: proje, target: 'claude', home, ortam: KOBAYSIZ_PATH });
     expect(ikinci.metin).toContain('unchanged');
     expect(ikinci.metin).toContain('MCP already registered in .mcp.json');
-    expect(ikinci.json).toMatchObject({ islem: 'degismedi', mcp: { islem: 'degismedi' } });
+    expect(ikinci.json).toMatchObject({ action: 'unchanged', mcp: { action: 'unchanged' } });
   });
 
   it('.mcp.json yoksa oluşturur, kobay PATH\'teyse kısa komutu yazar', async () => {
@@ -105,7 +105,7 @@ describe('beceri kurulumu', () => {
     await writeFile(join(sahtePath, 'kobay'), '#!/bin/sh\n', { mode: 0o755 });
 
     const sonuc = await beceriKur('claude', { projeKoku: proje, ortam: { PATH: sahtePath } });
-    expect(sonuc.mcp).toMatchObject({ yol: join(proje, '.mcp.json'), islem: 'olusturuldu', komut: ['kobay', 'mcp'] });
+    expect(sonuc.mcp).toMatchObject({ path: join(proje, '.mcp.json'), action: 'created', command: ['kobay', 'mcp'] });
     expect(await mcpOku(proje)).toEqual({
       mcpServers: { kobay: { command: 'kobay', args: ['mcp'] } },
     });
@@ -147,7 +147,7 @@ describe('beceri kurulumu', () => {
     }
   });
 
-  it('mevcut .mcp.json ile birleşir: başka sunucular ve kök alanlar korunur', async () => {
+  it('mevcut .mcp.json ile birleşir: başka sunucular ve kök fields korunur', async () => {
     const proje = await geciciDizin();
     await yazAtomik(join(proje, '.mcp.json'), `${JSON.stringify({
       mcpServers: { baska: { command: 'node', args: ['sunucu.js'] }, kobay: { command: 'eski', args: [] } },
@@ -155,7 +155,7 @@ describe('beceri kurulumu', () => {
     }, null, 2)}\n`);
 
     const sonuc = await beceriKur('claude', { projeKoku: proje, ortam: KOBAYSIZ_PATH });
-    expect(sonuc.mcp?.islem).toBe('guncellendi');
+    expect(sonuc.mcp?.action).toBe('updated');
     expect(await mcpOku(proje)).toEqual({
       mcpServers: {
         baska: { command: 'node', args: ['sunucu.js'] },
@@ -174,7 +174,7 @@ describe('beceri kurulumu', () => {
     const sonuc = await agentInstall({ cwd: proje, target: 'claude', ortam: KOBAYSIZ_PATH });
     // Kullanıcı hatası (çıkış 2), motor arızası değil.
     expect(sonuc.exitCode).toBe(2);
-    expect(sonuc.json).toMatchObject({ hata: { kod: 'McpKaydiOkunamadi' } });
+    expect(sonuc.json).toMatchObject({ error: { code: 'McpRegistryUnreadable' } });
     await expect(readFile(yol, 'utf8')).resolves.toBe(bozuk);
   });
 
@@ -207,11 +207,11 @@ describe('beceri kurulumu', () => {
 
   it('kurulum mesajı İngilizce, JSON işlem anahtarı değişmez', () => {
     const yol = '/p/.claude/skills/kobay/SKILL.md';
-    const mcp = { yol: '/p/.mcp.json', islem: 'olusturuldu' as const, komut: ['kobay', 'mcp'] };
-    expect(kurulumMesaji('claude', { yol, islem: 'olusturuldu', mcp })).toBe(
+    const mcp = { path: '/p/.mcp.json', action: 'created' as const, command: ['kobay', 'mcp'] };
+    expect(kurulumMesaji('claude', { path: yol, action: 'created', mcp })).toBe(
       `Skill created: ${yol}\nMCP registered in .mcp.json (kobay → \`kobay mcp\`): /p/.mcp.json`,
     );
-    expect(kurulumMesaji('codex', { yol, islem: 'guncellendi' })).toBe(`Skill updated: ${yol}\n${mcpKayitTalimati('codex')}`);
-    expect(kurulumMesaji('cursor', { yol, islem: 'degismedi' })).toContain('unchanged');
+    expect(kurulumMesaji('codex', { path: yol, action: 'updated' })).toBe(`Skill updated: ${yol}\n${mcpKayitTalimati('codex')}`);
+    expect(kurulumMesaji('cursor', { path: yol, action: 'unchanged' })).toContain('unchanged');
   });
 });

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BeyinAyari } from '../depo/index.js';
-import { BeyinCalismaHatasi, type Beyin, type BeyinIstegi, type BeyinYaniti } from './index.js';
+import { BrainRuntimeError, type Beyin, type BeyinIstegi, type BeyinYaniti } from './index.js';
 import {
   beyinGunluguYaz,
   type BeyinButcesi,
@@ -59,7 +59,7 @@ export class CodexBeyni implements Beyin {
       await beyinGunluguYaz(istek.logDizini, istek.gorev, sonIstem, sonuc.ham);
       return { ...sonuc, sureMs: Date.now() - baslangic, adaptor: this.ad };
     } catch (hata) {
-      const gunlukHam = hata instanceof BeyinCalismaHatasi && hata.detay !== undefined ? hata.detay : sonHam;
+      const gunlukHam = hata instanceof BrainRuntimeError && hata.detay !== undefined ? hata.detay : sonHam;
       await beyinGunluguYaz(istek.logDizini, istek.gorev, sonIstem, gunlukHam);
       throw hata;
     } finally {

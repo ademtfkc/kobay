@@ -8,7 +8,7 @@ const sahteler = vi.hoisted(() => ({
   verdict: 'failed' as 'passed' | 'failed' | 'blocked' | 'inconclusive',
   kosturHatasi: undefined as Error | undefined,
   errorMessage: undefined as string | undefined,
-  girisYapildi: false,
+  loggedIn: false,
   hedefAyakta: true,
 }));
 
@@ -42,11 +42,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 vi.mock('../../src/kesif/index.js', () => ({
   kesfet: vi.fn(async ({ baseUrl }: { baseUrl: string }) => ({
     baseUrl,
-    girisYapildi: sahteler.girisYapildi,
-    kesifTarihi: '2026-09-17T00:00:00.000Z',
-    sayfalar: [{
-      url: `${baseUrl}/`, baslik: 'Ana sayfa', basliklar: ['Ana sayfa'], linkler: [],
-      formlar: [], dugmeler: [], menu: [],
+    loggedIn: sahteler.loggedIn,
+    exploredAt: '2026-09-17T00:00:00.000Z',
+    pages: [{
+      url: `${baseUrl}/`, title: 'Ana sayfa', headings: ['Ana sayfa'], links: [],
+      forms: [], buttons: [], menu: [],
     }],
   })),
 }));
@@ -76,7 +76,7 @@ vi.mock('../../src/kos/index.js', () => ({
   }),
 }));
 
-import { BeyinHatasi } from '../../src/beyin/index.js';
+import { BrainError } from '../../src/beyin/index.js';
 import { ciktiYaz } from '../../src/cli/cikti.js';
 import { KobayDizini, SAKLANAN_KOSU, yazAtomik, type KosuSonucu, type TestKaydi } from '../../src/depo/index.js';
 import {
@@ -122,7 +122,7 @@ async function sahteYanitlariYaz(): Promise<string> {
     '',
   ].join('\n');
   await Promise.all([
-    yazAtomik(join(yanitlar, 'plan.json'), JSON.stringify({ oneriler: [{
+    yazAtomik(join(yanitlar, 'plan.json'), JSON.stringify({ proposals: [{
       title: 'Giriş akışı', description: 'Ana sayfa açılır', priority: 'p0', category: 'duman',
       feature: 'ana-sayfa', type: 'frontend', url: '/',
       steps: [
@@ -184,7 +184,7 @@ afterEach(() => {
   sahteler.verdict = 'failed';
   sahteler.kosturHatasi = undefined;
   sahteler.errorMessage = undefined;
-  sahteler.girisYapildi = false;
+  sahteler.loggedIn = false;
   sahteler.hedefAyakta = true;
   dosyaDurumu.rmKosulu = undefined;
   dosyaDurumu.renameKosulu = undefined;
@@ -199,7 +199,7 @@ describe('CLI komut fonksiyonları', () => {
     expect((await projectCreate({ cwd, url: 'http://uygulama.test', beyin: { adaptor: 'sahte' } })).exitCode).toBe(0);
     const plan = await planGenerate({ cwd, hint: 'Duman akışını üret' });
     expect(plan.exitCode).toBe(0);
-    expect((plan.json as { oneriler: unknown[] }).oneriler).toHaveLength(1);
+    expect((plan.json as { proposals: unknown[] }).proposals).toHaveLength(1);
 
     const kabul = await planAccept({ cwd, all: true });
     expect(kabul.exitCode).toBe(0);
@@ -260,7 +260,7 @@ describe('CLI komut fonksiyonları', () => {
     expect((await testRun({ cwd, all: true })).exitCode).toBe(exitCode);
   });
 
-  it('BeyinHatasi için exit 4 döndürür ve diğer testlere devam edebilir', async () => {
+  it('BrainError için exit 4 döndürür ve diğer testlere devam edebilir', async () => {
     const cwd = await geciciDizin();
     const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
     const test: TestKaydi = {
@@ -270,7 +270,7 @@ describe('CLI komut fonksiyonları', () => {
     };
     await dizin.testYaz(test);
     await dizin.kodYaz(test.id, '// hazır');
-    sahteler.kosturHatasi = new BeyinHatasi('ag');
+    sahteler.kosturHatasi = new BrainError('network');
 
     const sonuc = await testRun({ cwd, all: true });
     expect(sonuc.exitCode).toBe(4);
@@ -405,14 +405,14 @@ describe('CLI komut fonksiyonları', () => {
     await projectCreate({
       cwd,
       url: 'http://uygulama.test',
-      login: { kullanici: 'yanlis', parola: 'yanlis' },
+      login: { username: 'yanlis', password: 'yanlis' },
       beyin: { adaptor: 'sahte' },
     });
 
     const sonuc = await explore({ cwd });
     expect(sonuc.exitCode).toBe(5);
     expect(sonuc.json).toEqual({
-      hata: expect.objectContaining({ kod: 'YetkiHatasi' }),
+      error: expect.objectContaining({ code: 'PermissionError' }),
     });
   });
 
@@ -423,7 +423,7 @@ describe('CLI komut fonksiyonları', () => {
 
     const sonuc = await failureGet({ cwd, id: 't_abc12345', out: join(cwd, 'paket') });
     expect(sonuc.exitCode).toBe(4);
-    expect(sonuc.json).toEqual({ hata: expect.objectContaining({ kod: 'PaketYarim' }) });
+    expect(sonuc.json).toEqual({ error: expect.objectContaining({ code: 'BundleIncomplete' }) });
   });
 
   it('OpenRouter anahtarı yoksa exit 5 verir ve anahtar değeri üretmez', async () => {
@@ -439,7 +439,7 @@ describe('CLI komut fonksiyonları', () => {
     });
     expect(sonuc.exitCode).toBe(0);
     const metin = await readFile(join(home, '.kobay', 'config.json'), 'utf8');
-    expect(JSON.parse(metin)).toEqual({ beyin: { adaptor: 'openrouter', model: 'ornek-model' } });
+    expect(JSON.parse(metin)).toEqual({ brain: { adaptor: 'openrouter', model: 'ornek-model' } });
     expect(`${JSON.stringify(sonuc)}${metin}`).not.toContain('sk-cok-gizli');
   });
   it('project update yalnız verilen alanları değiştirir, gerisini korur', async () => {
@@ -454,11 +454,11 @@ describe('CLI komut fonksiyonları', () => {
       baseUrl: 'http://uygulama.test',
       docsPath: 'docs/eski.md',
       loginUrl: 'http://uygulama.test/giris',
-      beyin: { adaptor: 'sahte', model: 'eski-model' },
+      brain: { adaptor: 'sahte', model: 'eski-model' },
     });
 
     expect((await projectUpdate({ cwd, beyin: { adaptor: 'codex' } })).exitCode).toBe(0);
-    await expect(dizin?.configOku()).resolves.toMatchObject({ beyin: { adaptor: 'codex', model: 'eski-model' } });
+    await expect(dizin?.configOku()).resolves.toMatchObject({ brain: { adaptor: 'codex', model: 'eski-model' } });
 
     expect((await projectUpdate({
       cwd, url: 'http://yeni.test', loginUrl: 'http://yeni.test/giris', docs: 'docs/yeni.md',
@@ -467,7 +467,7 @@ describe('CLI komut fonksiyonları', () => {
       baseUrl: 'http://yeni.test',
       docsPath: 'docs/yeni.md',
       loginUrl: 'http://yeni.test/giris',
-      beyin: { adaptor: 'codex', model: 'eski-model' },
+      brain: { adaptor: 'codex', model: 'eski-model' },
     });
   });
 
@@ -490,7 +490,7 @@ describe('CLI komut fonksiyonları', () => {
     });
     const guncelle = await projectUpdate({ cwd, loginUrl: 'http://kimlik.test/giris' });
     expect(guncelle.exitCode).toBe(2);
-    expect(JSON.stringify(guncelle.json)).toContain('aynı origin');
+    expect(JSON.stringify(guncelle.json)).toContain('same origin as baseUrl');
     await expect((await KobayDizini.bul(cwd))?.configOku()).resolves.toMatchObject({
       baseUrl: 'http://uygulama.test', loginUrl: 'http://uygulama.test/giris',
     });
@@ -500,7 +500,7 @@ describe('CLI komut fonksiyonları', () => {
     const cwd = await geciciDizin();
     const projesiz = await projectUpdate({ cwd, url: 'http://uygulama.test' });
     expect(projesiz.exitCode).toBe(2);
-    expect(projesiz.json).toEqual({ hata: expect.objectContaining({ kod: 'KullanimHatasi' }) });
+    expect(projesiz.json).toEqual({ error: expect.objectContaining({ code: 'UsageError' }) });
 
     await projectCreate({ cwd, url: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
     expect((await projectUpdate({ cwd })).exitCode).toBe(2);
@@ -522,17 +522,17 @@ describe('CLI komut fonksiyonları', () => {
     await dizin?.testYaz(test);
     await dizin?.kodYaz(test.id, '// korunacak kod');
     await dizin?.haritaYaz({
-      baseUrl: 'http://uygulama.test', girisYapildi: false, kesifTarihi: '2026-09-17T00:00:00.000Z', sayfalar: [],
+      baseUrl: 'http://uygulama.test', loggedIn: false, exploredAt: '2026-09-17T00:00:00.000Z', pages: [],
     });
 
     const zorlamasiz = await projectCreate({ cwd, url: 'http://yeni.test', beyin: { adaptor: 'sahte' } });
     expect(zorlamasiz.exitCode).toBe(2);
-    expect(zorlamasiz.json).toEqual({ hata: expect.objectContaining({ kod: 'KullanimHatasi' }) });
+    expect(zorlamasiz.json).toEqual({ error: expect.objectContaining({ code: 'UsageError' }) });
 
     const zorlamali = await projectCreate({ cwd, url: 'http://yeni.test', beyin: { adaptor: 'sahte' }, force: true });
     expect(zorlamali.exitCode).toBe(0);
     await expect(dizin?.configOku()).resolves.toEqual({
-      baseUrl: 'http://yeni.test', beyin: { adaptor: 'sahte' },
+      baseUrl: 'http://yeni.test', brain: { adaptor: 'sahte' },
     });
     await expect(dizin?.testOku(test.id)).resolves.toMatchObject({ name: 'Korunacak test' });
     await expect(dizin?.kodOku(test.id)).resolves.toBe('// korunacak kod');
@@ -604,16 +604,16 @@ describe('CLI komut fonksiyonları', () => {
     sahteler.hedefAyakta = true;
 
     const sonuc = await doctor({ cwd });
-    const kontroller = sonuc.json as Array<{ ad: string; ok: boolean; oneri?: string }>;
+    const kontroller = sonuc.json as Array<{ name: string; ok: boolean; hint?: string }>;
 
-    const hedef = kontroller.find((kontrol) => kontrol.ad === 'hedef');
+    const hedef = kontroller.find((kontrol) => kontrol.name === 'target');
     expect(hedef?.ok).toBe(true);
-    expect(hedef).not.toHaveProperty('oneri');
-    expect(kontroller.filter((kontrol) => kontrol.ok && kontrol.oneri !== undefined)).toEqual([]);
-    expect(JSON.stringify(sonuc.json)).not.toContain('ayakta değil');
+    expect(hedef).not.toHaveProperty('hint');
+    expect(kontroller.filter((kontrol) => kontrol.ok && kontrol.hint !== undefined)).toEqual([]);
+    expect(JSON.stringify(sonuc.json)).not.toContain('is not reachable');
     // Düşen kontrolde öneri yerinde kalır.
     const dusen = kontroller.filter((kontrol) => !kontrol.ok);
-    for (const kontrol of dusen) expect(kontrol.oneri, kontrol.ad).toBeTruthy();
+    for (const kontrol of dusen) expect(kontrol.hint, kontrol.name).toBeTruthy();
   });
 
   it('agent install insan modunda ham JSON basmaz', async () => {
@@ -643,7 +643,7 @@ describe('CLI komut fonksiyonları', () => {
     expect(JSON.parse(jsonMetni.oku())).toMatchObject({
       ok: true,
       exitCode: 0,
-      data: { islem: 'olusturuldu', mcp: { yol: join(cwd, '.mcp.json'), islem: 'olusturuldu' } },
+      data: { action: 'created', mcp: { path: join(cwd, '.mcp.json'), action: 'created' } },
     });
   });
 
@@ -677,14 +677,14 @@ describe('CLI komut fonksiyonları', () => {
     const hata = metinTopla(stderr);
     ciktiYaz(sonuc, false, stdout, stderr);
     expect(hata.oku()).toBe('');
-    expect(cikti.oku()).toBe(`Hata paketi kopyalandı: ${hedef}\n`);
-    expect(cikti.oku()).not.toContain('"hedef"');
+    expect(cikti.oku()).toBe(`Failure bundle copied: ${hedef}\n`);
+    expect(cikti.oku()).not.toContain('"destination"');
 
     const jsonCikti = new PassThrough();
     const jsonMetni = metinTopla(jsonCikti);
     ciktiYaz(sonuc, true, jsonCikti, new PassThrough());
     expect(JSON.parse(jsonMetni.oku())).toEqual({
-      ok: true, exitCode: 0, data: { id: 't_abc12345', hedef },
+      ok: true, exitCode: 0, data: { id: 't_abc12345', destination: hedef },
     });
   });
 
@@ -730,7 +730,7 @@ describe('CLI komut fonksiyonları', () => {
       const satirlar = cikti.oku().trim().split('\n');
       expect(satirlar.some((satir) => /^[{["]/.test(satir.trimStart())), ad).toBe(false);
       expect(cikti.oku(), ad).not.toContain('": ');
-      expect(satirlar.at(-1), ad).toMatch(/^Sonraki: kobay /);
+      expect(satirlar.at(-1), ad).toMatch(/^Next: kobay /);
 
       // JSON modu gövdeyi aynen verir; özet yalnız insan moduna aittir.
       const jsonCikti = new PassThrough();
@@ -748,11 +748,11 @@ describe('CLI komut fonksiyonları', () => {
     expect(olustur.metin).toContain('http://uygulama.test');
     expect(olustur.metin).toContain('sahte (model: ornek-model)');
     expect(guncelle.metin).toContain('http://uygulama.test/giris');
-    expect(kesif.metin).toMatch(/^1 sayfa keşfedildi/);
-    expect(kesif.metin).toContain(join(cwd, '.kobay', 'harita.json'));
+    expect(kesif.metin).toMatch(/^1 page explored/);
+    expect(kesif.metin).toContain(join(cwd, '.kobay', 'map.json'));
     const testKaydi = testOlustur.json as TestKaydi;
     expect(testOlustur.metin).toContain(testKaydi.id);
-    expect(testOlustur.metin).toContain('Adım sayısı: 2, öncelik: p0, durum: draft');
+    expect(testOlustur.metin).toContain('Steps: 2, priority: p0, status: draft');
     expect(ayar.metin).toContain(join(cwd, 'home', '.kobay', 'config.json'));
     expect(`${ayar.metin}${JSON.stringify(ayar.json)}`).not.toContain('sk-cok-gizli');
   });
@@ -777,13 +777,13 @@ describe('CLI komut fonksiyonları', () => {
     expect(sonuc.exitCode).toBe(1);
     expect(sonuc.json).toEqual([{
       id: 't_abc12345',
-      ad: 'Hazır test',
+      name: 'Hazır test',
       verdict: 'failed',
       runId: 'r_20260917010101_abcd',
       failureKind: 'product_bug',
     }]);
     expect(sonuc.mesaj).toBe(
-      'failed t_abc12345 — product_bug\n  hata paketi: kobay test failure get t_abc12345',
+      'failed t_abc12345 — product_bug\n  failure bundle: kobay test failure get t_abc12345',
     );
   });
 
@@ -858,7 +858,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
       await testResult({ cwd, id: 't_yok12345' }),
     ]) {
       expect(sonuc.exitCode).toBe(2);
-      expect(sonuc.mesaj).toContain('Test bulunamadı: t_yok12345');
+      expect(sonuc.mesaj).toContain('Test not found: t_yok12345');
       expect(sonuc.mesaj).toContain('kobay test list');
       expect(sonuc.mesaj).not.toContain('.kobay/tests');
     }
@@ -891,7 +891,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
 
     const sonuc = await testResult({ cwd, id: 't_abc12345' });
     expect(sonuc.exitCode).toBe(2);
-    expect(sonuc.mesaj).toContain('Koşu sonucu yok: t_abc12345');
+    expect(sonuc.mesaj).toContain('No run result: t_abc12345');
     expect(sonuc.mesaj).toContain('kobay test run t_abc12345');
   });
 
@@ -915,8 +915,8 @@ describe('hata mesajları eyleme yönlendirir', () => {
 
     const sonuc = await explore({ cwd });
     expect(sonuc.exitCode).toBe(3);
-    expect(sonuc.mesaj).toContain('Hedef uygulamaya ulaşılamadı: http://uygulama.test');
-    expect(sonuc.json).toEqual({ hata: expect.objectContaining({ kod: 'HedefYokHatasi' }) });
+    expect(sonuc.mesaj).toContain('Target app is not reachable: http://uygulama.test');
+    expect(sonuc.json).toEqual({ error: expect.objectContaining({ code: 'TargetUnreachableError' }) });
   });
 
   it('hata paketi yokken hangi komutun paket ürettiğini söyler', async () => {
@@ -924,7 +924,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
 
     const sonuc = await failureGet({ cwd, id: 't_abc12345', out: join(cwd, 'paket') });
     expect(sonuc.exitCode).toBe(2);
-    expect(sonuc.mesaj).toContain('Hata paketi yok: t_abc12345');
+    expect(sonuc.mesaj).toContain('No failure bundle: t_abc12345');
     expect(sonuc.mesaj).toContain('kobay test run t_abc12345');
   });
 
@@ -944,13 +944,13 @@ describe('hata mesajları eyleme yönlendirir', () => {
     for (const out of reddedilecek) {
       const sonuc = await failureGet({ cwd, id: 't_abc12345', out });
       expect(sonuc.exitCode, out).toBe(2);
-      expect(sonuc.mesaj, out).toContain('nokta ile başlayan');
+      expect(sonuc.mesaj, out).toContain('name starts with a dot');
     }
     // Paket yok: kabul edilen yollar gizli yol hatası değil, "hata paketi yok" hatası verir.
     for (const out of ['paket', '.kobay/failure-out/t_abc12345-1', '.kobay/failure-out/t_abc12345-1/alt']) {
       const sonuc = await failureGet({ cwd, id: 't_abc12345', out });
-      expect(sonuc.mesaj, out).not.toContain('nokta ile başlayan');
-      expect(sonuc.mesaj, out).toContain('Hata paketi yok');
+      expect(sonuc.mesaj, out).not.toContain('name starts with a dot');
+      expect(sonuc.mesaj, out).toContain('No failure bundle');
     }
   });
 
@@ -984,7 +984,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
     for (const tur of ['ilk', 'ikinci']) {
       const sonuc = await failureGet({ cwd, id: 't_abc12345' });
       expect(sonuc.exitCode, tur).toBe(0);
-      expect(sonuc.json, tur).toEqual({ id: 't_abc12345', hedef: join(cikisKoku, 't_abc12345') });
+      expect(sonuc.json, tur).toEqual({ id: 't_abc12345', destination: join(cikisKoku, 't_abc12345') });
       await access(join(cikisKoku, 't_abc12345', 'failure.json'));
     }
     // Aynı test tek klasör kullanır: ikinci çağrı çöp bırakmaz.
@@ -994,12 +994,12 @@ describe('hata mesajları eyleme yönlendirir', () => {
   it('beyin hata kodlarını Türkçe eyleme çevirir', async () => {
     const { basarisiz } = await import('../../src/cli/komut.js');
 
-    const cliYok = basarisiz(new BeyinHatasi('cli_yok'));
+    const cliYok = basarisiz(new BrainError('cli_missing'));
     expect(cliYok.exitCode).toBe(4);
     expect(cliYok.mesaj).toContain('kobay doctor');
-    expect(cliYok.mesaj).not.toContain('cli_yok');
-    expect(basarisiz(new BeyinHatasi('sema')).mesaj).toContain('.kobay/logs/');
-    expect(basarisiz(new BeyinHatasi('anahtar_yok')).mesaj).toContain('OPENROUTER_API_KEY');
+    expect(cliYok.mesaj).not.toContain('cli_missing');
+    expect(basarisiz(new BrainError('schema')).mesaj).toContain('.kobay/logs/');
+    expect(basarisiz(new BrainError('key_missing')).mesaj).toContain('OPENROUTER_API_KEY');
   });
 
   it('doctor eksik bileşen için yapılacak işi yazar', async () => {
@@ -1012,10 +1012,10 @@ describe('hata mesajları eyleme yönlendirir', () => {
     expect(JSON.stringify(sonuc.json)).toContain('kobay project create');
     expect(JSON.stringify(sonuc.json)).not.toContain('npx playwright');
     // Chromium bu makinede kurulu olabilir; öneri yalnız düşen satırda durur.
-    const chromium = (sonuc.json as Array<{ ad: string; ok: boolean; oneri?: string }>)
-      .find((kontrol) => kontrol.ad === 'Chromium');
-    if (chromium?.ok === false) expect(chromium.oneri).toContain('kobay install-browser');
-    else expect(chromium).not.toHaveProperty('oneri');
+    const chromium = (sonuc.json as Array<{ name: string; ok: boolean; hint?: string }>)
+      .find((kontrol) => kontrol.name === 'Chromium');
+    if (chromium?.ok === false) expect(chromium.hint).toContain('kobay install-browser');
+    else expect(chromium).not.toHaveProperty('hint');
     expect(CHROMIUM_ONERISI).toContain('kobay install-browser');
     expect(CHROMIUM_ONERISI).not.toContain('npx playwright');
   });
@@ -1027,11 +1027,11 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
   it('baseUrl başka origin\'e değişince kayıtlı giriş bilgisi ve oturum silinir; aynı origin korunur', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
 
     // Aynı origin içinde yol değişikliği giriş bilgisini korur.
     expect((await projectUpdate({ cwd, url: 'http://mesru.test/uygulama' })).exitCode).toBe(0);
@@ -1039,7 +1039,7 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
 
     const guncelle = await projectUpdate({ cwd, url: 'http://kotu.test' });
     expect(guncelle.exitCode).toBe(0);
-    expect(guncelle.metin).toContain('giriş bilgisi ve oturum silindi');
+    expect(guncelle.metin).toContain('the saved credentials and session were deleted');
     await expect(dizin.kimlikOku()).resolves.toBeNull();
     expect(await varMi(dizin.storageStateYolu())).toBe(false);
   });
@@ -1047,7 +1047,7 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
   it('create --force yeni origin\'de eski parolayı taşımaz, aynı origin\'de korur', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     expect((await projectCreate({ cwd, url: 'http://mesru.test', force: true })).exitCode).toBe(0);
@@ -1055,14 +1055,14 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     expect((await projectCreate({ cwd, url: 'http://kotu.test', force: true })).exitCode).toBe(0);
     await expect(dizin.kimlikOku()).resolves.toBeNull();
     // Yeni origin için kullanıcı yeniden verirse yeni origin'e bağlanır.
-    await projectCreate({ cwd, url: 'http://kotu.test', force: true, login: { kullanici: 'veli', parola: 'gizli-2' } });
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'veli', parola: 'gizli-2', origin: 'http://kotu.test' });
+    await projectCreate({ cwd, url: 'http://kotu.test', force: true, login: { username: 'veli', password: 'gizli-2' } });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'veli', password: 'gizli-2', origin: 'http://kotu.test' });
   });
 
   it('config yazımı düşerse giriş bilgisi, oturum ve eski config aynen kalır', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1076,16 +1076,16 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     expect(guncelle.exitCode).not.toBe(0);
     expect(guncelle.mesaj).toContain('disk dolu');
     // Veri kaybı olmamalı: parola, oturum ve eski hedef yerinde.
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
     await expect(readFile(dizin.yol('config.json'), 'utf8')).resolves.toBe(oncekiConfig);
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
   });
 
   it('create --force --login yeni kimlik yazımı düşerse eski kimlik ve config geri gelir', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1093,28 +1093,28 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     const casus = vi.spyOn(KobayDizini.prototype, 'kimlikYaz')
       .mockRejectedValueOnce(Object.assign(new Error('izin yok'), { code: 'EACCES' }));
     const olustur = await projectCreate({
-      cwd, url: 'http://kotu.test', force: true, login: { kullanici: 'veli', parola: 'gizli-2' },
+      cwd, url: 'http://kotu.test', force: true, login: { username: 'veli', password: 'gizli-2' },
     });
     casus.mockRestore();
 
     expect(olustur.exitCode).not.toBe(0);
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
     await expect(dizin.configOku()).resolves.toMatchObject({ baseUrl: 'http://mesru.test' });
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
   });
 
   /** İşlem işaretinin ham içeriği. */
   async function isaretiOku(dizin: KobayDizini): Promise<Record<string, unknown>> {
-    return JSON.parse(await readFile(dizin.yol('.kimlik-islemi'), 'utf8')) as Record<string, unknown>;
+    return JSON.parse(await readFile(dizin.yol('.credentials-txn'), 'utf8')) as Record<string, unknown>;
   }
 
   /** Komutu çalıştıran sürecin bittiğini taklit eder: işaret tazelik penceresinden eskir. */
   async function isaretiBayatlat(dizin: KobayDizini): Promise<void> {
     const ham = await isaretiOku(dizin);
     await writeFile(
-      dizin.yol('.kimlik-islemi'),
-      JSON.stringify({ ...ham, baslatildi: new Date(Date.now() - 60 * 60 * 1000).toISOString() }),
+      dizin.yol('.credentials-txn'),
+      JSON.stringify({ ...ham, startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() }),
     );
   }
 
@@ -1128,8 +1128,8 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     return vi.spyOn(KobayDizini.prototype, hedefMetot).mockImplementationOnce(
       async function (this: KobayDizini, deger: never): Promise<void> {
         await (asil as (this: KobayDizini, d: never) => Promise<void>).call(this, deger);
-        for (const ad of (await readdir(this.kok)).filter((girdi) => girdi.startsWith('.eski-'))) {
-          await rename(join(this.kok, ad), join(this.kok, ad.slice('.eski-'.length + 36 + 1)));
+        for (const ad of (await readdir(this.kok)).filter((girdi) => girdi.startsWith('.stale-'))) {
+          await rename(join(this.kok, ad), join(this.kok, ad.slice('.stale-'.length + 36 + 1)));
         }
       },
     );
@@ -1138,7 +1138,7 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
   it('update: kesinleştirme düşerse yeni config kalıcı olmaz, eskisi geri gelir', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1148,19 +1148,19 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     casus.mockRestore();
 
     expect(guncelle.exitCode).not.toBe(0);
-    expect(guncelle.mesaj).toContain('Kimlik işlemi bozuldu');
+    expect(guncelle.mesaj).toContain('Credentials transaction broke');
     // Asıl bulgu: hedef eski değerinde kaldı, yarım işlem kalıcı iz bırakmadı.
     await expect(dizin.configOku()).resolves.toMatchObject({ baseUrl: 'http://mesru.test' });
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
-    await expect(access(dizin.yol('.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
+    await expect(access(dizin.yol('.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('create --force --login: kesinleştirme düşerse config ve kimlik eski değerine döner', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1168,22 +1168,22 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     const casus = kalintiyiGeriKoyanCasus('kimlikYaz');
 
     const olustur = await projectCreate({
-      cwd, url: 'http://kotu.test', force: true, login: { kullanici: 'veli', parola: 'gizli-2' },
+      cwd, url: 'http://kotu.test', force: true, login: { username: 'veli', password: 'gizli-2' },
     });
     casus.mockRestore();
 
     expect(olustur.exitCode).not.toBe(0);
-    expect(olustur.mesaj).toContain('Kimlik işlemi bozuldu');
+    expect(olustur.mesaj).toContain('Credentials transaction broke');
     await expect(dizin.configOku()).resolves.toMatchObject({ baseUrl: 'http://mesru.test' });
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
-    await expect(access(dizin.yol('.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
+    await expect(access(dizin.yol('.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('kesinleşmeden sonra yedek silinemezse komut başarılı olur; kalıntıyı sonraki komut toparlar', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1194,19 +1194,19 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     dosyaDurumu.rmKosulu = (yol) => yol.includes('-credentials.json');
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     const olustur = await projectCreate({
-      cwd, url: 'http://kotu.test', force: true, login: { kullanici: 'veli', parola: 'gizli-2' },
+      cwd, url: 'http://kotu.test', force: true, login: { username: 'veli', password: 'gizli-2' },
     });
     const basilan = uyari.mock.calls.map(([metin]) => String(metin)).join('');
     uyari.mockRestore();
     dosyaDurumu.rmKosulu = undefined;
 
     expect(olustur.exitCode).toBe(0);
-    expect(basilan).toContain('credentials.json kopyası silinemedi');
+    expect(basilan).toContain('the set-aside copy of credentials.json could not be deleted');
     // Yeni durum yerinde: hedef, yeni kimlik ve silinebilen oturum kopyası.
     await expect(dizin.configOku()).resolves.toMatchObject({ baseUrl: 'http://kotu.test' });
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'veli', parola: 'gizli-2', origin: 'http://kotu.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'veli', password: 'gizli-2', origin: 'http://kotu.test' });
     await expect(access(dizin.storageStateYolu())).rejects.toMatchObject({ code: 'ENOENT' });
-    const kalintilar = (await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'));
+    const kalintilar = (await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'));
     expect(kalintilar).toHaveLength(1);
     expect(kalintilar[0]).toMatch(/-credentials\.json$/);
     // Kalıntı kaldığı için işaret kesinleşme damgasıyla yerinde bırakıldı.
@@ -1217,9 +1217,9 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     await isaretiBayatlat(dizin);
     await KobayDizini.bul(dizin.projeKoku);
 
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
-    await expect(access(dizin.yol('.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'veli', parola: 'gizli-2', origin: 'http://kotu.test' });
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
+    await expect(access(dizin.yol('.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'veli', password: 'gizli-2', origin: 'http://kotu.test' });
   });
 
   it('kesinleşmiş oturum yedeği sonraki komutta geri KONMAZ: origin değişince eski çerez dirilmez', async () => {
@@ -1237,7 +1237,7 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     dosyaDurumu.rmKosulu = undefined;
 
     expect(guncelle.exitCode).toBe(0);
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toHaveLength(1);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toHaveLength(1);
 
     // Süreç bitti (işaret bayat), sonraki komut kurtarmayı çalıştırıyor.
     await isaretiBayatlat(dizin);
@@ -1245,14 +1245,14 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     uyari.mockRestore();
 
     await expect(access(dizin.storageStateYolu())).rejects.toMatchObject({ code: 'ENOENT' });
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
-    await expect(access(dizin.yol('.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
+    await expect(access(dizin.yol('.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('geri almada config geri yazımı düşerse komut geri alma hatasıyla durur; sonraki komut toparlar', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1267,16 +1267,16 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
 
     // Motor hatası (4): kullanıcının komutunda değil, dosya sisteminde sorun var.
     expect(guncelle.exitCode).toBe(4);
-    expect(guncelle.mesaj).toContain('Kimlik işlemi geri alınamadı');
-    expect(guncelle.mesaj).toContain('yeniden çalıştırın');
+    expect(guncelle.mesaj).toContain('Credentials transaction could not be rolled back');
+    expect(guncelle.mesaj).toContain('run the command again');
     expect(guncelle.mesaj).toContain('disk dolu');
     // Yedekler geri KONMADI ve düzeltmeyi taşıyan işaret silinmedi: eski
     // davranışta ikisi de olur, kalıcı tutarsızlığı düzeltecek iz kalmazdı.
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toHaveLength(2);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toHaveLength(2);
     await expect(dizin.kimlikOku()).resolves.toBeNull();
     const isaret = await isaretiOku(dizin);
     expect(isaret.committed ?? false).toBe(false);
-    expect(isaret.eskiConfig).toEqual(eskiConfig);
+    expect(isaret.previousConfig).toEqual(eskiConfig);
 
     // Sonraki komut (salt okunur `project get` bile) kurtarmayı çalıştırır.
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
@@ -1285,16 +1285,16 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
 
     expect(bak.exitCode).toBe(0);
     await expect(dizin.configOku()).resolves.toEqual(eskiConfig);
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
-    await expect(access(dizin.yol('.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
+    await expect(access(dizin.yol('.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('bayat işlemin kurtarması düşerse komut durur; project update bayat işareti devralmaz', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1305,19 +1305,19 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     await dizin.configYaz({ ...eskiConfig, baseUrl: 'http://kotu.test' });
     await isaretiBayatlat(dizin);
     // Kurtarma yedeği asıl adına koyamıyor.
-    dosyaDurumu.renameKosulu = (eski) => (eski.includes('/.eski-') ? 'EACCES' : undefined);
+    dosyaDurumu.renameKosulu = (eski) => (eski.includes('/.stale-') ? 'EACCES' : undefined);
 
     const guncelle = await projectUpdate({ cwd, url: 'http://baska.test' });
 
     expect(guncelle.exitCode).toBe(4);
-    expect(guncelle.mesaj).toContain('Kimlik işlemi geri alınamadı');
+    expect(guncelle.mesaj).toContain('Credentials transaction could not be rolled back');
     expect(guncelle.mesaj).toContain('EACCES');
-    expect(guncelle.mesaj).toContain('yeniden çalıştırın');
+    expect(guncelle.mesaj).toContain('run the command again');
     // Komut hiç başlamadı: bayat işaret devralınmadı, ikinci bir kenara alma yok.
-    const kalintilar = (await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'));
+    const kalintilar = (await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'));
     expect(kalintilar).toHaveLength(2);
     const isaret = await isaretiOku(dizin);
-    expect(isaret.eskiConfig).toEqual(eskiConfig);
+    expect(isaret.previousConfig).toEqual(eskiConfig);
     expect(isaret.committed ?? false).toBe(false);
 
     // Sorun giderilince sonraki komut geri almayı tamamlar, hedef eskiye döner.
@@ -1328,27 +1328,27 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
 
     expect(bak.exitCode).toBe(0);
     await expect(dizin.configOku()).resolves.toEqual(eskiConfig);
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
   });
 
   it('kimliği değiştiren ikinci komut, birincisi sürerken reddedilir (çıkış 2)', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
     // Birinci komut kenara aldı, henüz kesinleştirmedi: kilit onda.
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: await dizin.configOku() });
-    const oncekiKalintilar = (await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'));
+    const oncekiKalintilar = (await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'));
 
     const ikinci = await projectUpdate({ cwd, url: 'http://kotu.test' });
 
     expect(ikinci.exitCode).toBe(2);
-    expect(ikinci.mesaj).toContain('kimliğini değiştiriyor');
+    expect(ikinci.mesaj).toContain("is changing this project's credentials");
     // Birinci işlemin dosyalarına ve hedefine dokunulmadı.
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual(oncekiKalintilar);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual(oncekiKalintilar);
     await expect(dizin.configOku()).resolves.toMatchObject({ baseUrl: 'http://mesru.test' });
 
     await islem.kesinlestir();
@@ -1357,7 +1357,7 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
   it('gerçek dosya sistemi hatasında da (config.json yazılamıyor) giriş bilgisi kaybolmaz', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1368,15 +1368,15 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     const olustur = await projectCreate({ cwd, url: 'http://kotu.test', force: true, beyin: { adaptor: 'sahte' } });
 
     expect(olustur.exitCode).not.toBe(0);
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
   });
 
   it('yarıda kalan geri almadan sonraki komut, geri konmuş giriş bilgisini silmez', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
@@ -1385,11 +1385,11 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     // ve yeni parolayı yaz, sonra kesinleşmede düş.
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig, yeniKimlikYazilacak: true });
     await dizin.configYaz({ ...eskiConfig, baseUrl: 'http://kotu.test' });
-    await dizin.kimlikYaz({ kullanici: 'veli', parola: 'gizli-2', origin: 'http://kotu.test' });
+    await dizin.kimlikYaz({ username: 'veli', password: 'gizli-2', origin: 'http://kotu.test' });
     // Geri almanın ilk denemesi: giriş bilgisi geri kondu, oturum kopyası düştü.
     dosyaDurumu.renameKosulu = (eski) => (eski.includes('-storageState.json') ? 'EACCES' : undefined);
     await expect(islem.geriAl({ configYazildi: true, yeniKimlikYazildi: true }))
-      .rejects.toThrow('Kimlik işlemi geri alınamadı');
+      .rejects.toThrow('Credentials transaction could not be rolled back');
     dosyaDurumu.renameKosulu = undefined;
     await isaretiBayatlat(dizin);
 
@@ -1400,27 +1400,27 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     // Asıl bulgu: kurtarma, geri konmuş ORİJİNAL credentials.json'ı `--login`
     // artığı sanıp silmiyor.
     expect(bak.exitCode).toBe(0);
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
     await expect(dizin.configOku()).resolves.toEqual(eskiConfig);
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
-    await expect(access(dizin.yol('.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
+    await expect(access(dizin.yol('.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('yarım kalmış işlemin kalıntısı sonraki komutta toparlanır', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     // Süreç kenara aldıktan sonra öldürüldü: ne silindi ne geri kondu, işaret bayatladı.
     await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: await dizin.configOku() });
-    const isaret = JSON.parse(await readFile(dizin.yol('.kimlik-islemi'), 'utf8')) as Record<string, unknown>;
-    await writeFile(dizin.yol('.kimlik-islemi'), JSON.stringify({
+    const isaret = JSON.parse(await readFile(dizin.yol('.credentials-txn'), 'utf8')) as Record<string, unknown>;
+    await writeFile(dizin.yol('.credentials-txn'), JSON.stringify({
       ...isaret,
-      baslatildi: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     }));
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toHaveLength(1);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toHaveLength(1);
 
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     const guncelle = await projectUpdate({ cwd, docs: 'README.md' });
@@ -1428,14 +1428,14 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
 
     expect(guncelle.exitCode).toBe(0);
     // Kalıntı sessizce beklemez: asıl dosya yok olduğu için parola geri konur.
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
   });
 
   it('config yazıldıktan sonra ölen komut sonraki komutta tümüyle geri alınır (hedef dahil)', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     await dizin.storageStateYaz('{"cookies":[{"name":"oturum"}],"origins":[]}');
@@ -1454,17 +1454,17 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     expect(bak.exitCode).toBe(0);
     // Hedef eski değerine döndü; geri konan oturum aynı hostun başka portunda kullanılamaz.
     await expect(dizin.configOku()).resolves.toEqual(eskiConfig);
-    await expect(dizin.kimlikOku()).resolves.toEqual({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' });
+    await expect(dizin.kimlikOku()).resolves.toEqual({ username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' });
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[{"name":"oturum"}],"origins":[]}');
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
-    await expect(access(dizin.yol('.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(basilan).toContain('yarım kalmış bir hedef değişikliği geri alındı');
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'))).toEqual([]);
+    await expect(access(dizin.yol('.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(basilan).toContain('an unfinished target change was rolled back');
   });
 
   it('kullanım anında kimlik origin\'i uyuşmazsa ya da eski biçimse keşif hiç başlamaz (exit 5)', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     const dizin = (await KobayDizini.bul(cwd))!;
     // Ajan config.json'u doğrudan düzenleyip hedefi değiştirdi.
@@ -1472,16 +1472,16 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     vi.mocked(kesfet).mockClear();
     const sonuc = await explore({ cwd });
     expect(sonuc.exitCode).toBe(5);
-    expect(sonuc.mesaj).toContain('parola gönderilmedi');
+    expect(sonuc.mesaj).toContain('the password was not sent');
     expect(sonuc.mesaj).toContain('--login --force');
     expect(kesfet).not.toHaveBeenCalled();
 
     // Eski biçim (origin'siz) kimlik de kullanılmaz.
     await dizin.configYaz({ ...(await dizin.configOku()), baseUrl: 'http://mesru.test' });
-    await dizin.kimlikYaz({ kullanici: 'ali', parola: 'gizli-1' });
+    await dizin.kimlikYaz({ username: 'ali', password: 'gizli-1' });
     const eski = await explore({ cwd });
     expect(eski.exitCode).toBe(5);
-    expect(eski.mesaj).toContain('eski biçim');
+    expect(eski.mesaj).toContain('legacy format');
     expect(kesfet).not.toHaveBeenCalled();
   });
 
@@ -1490,26 +1490,26 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     await projectCreate({ cwd, url: 'http://mesru.test', beyin: { adaptor: 'sahte' } });
     const dizin = (await KobayDizini.bul(cwd))!;
     const tavanlar = { maxTotalCostUsd: 0.5, maxCalls: 10, maxBudgetUsd: 0.2, maxTokens: 4000 };
-    await dizin.configYaz({ ...(await dizin.configOku()), beyin: { adaptor: 'sahte', model: 'm1', ...tavanlar } });
+    await dizin.configYaz({ ...(await dizin.configOku()), brain: { adaptor: 'sahte', model: 'm1', ...tavanlar } });
 
     expect((await projectUpdate({ cwd, docs: 'README.md' })).exitCode).toBe(0);
-    await expect(dizin.configOku()).resolves.toMatchObject({ beyin: { adaptor: 'sahte', model: 'm1', ...tavanlar } });
+    await expect(dizin.configOku()).resolves.toMatchObject({ brain: { adaptor: 'sahte', model: 'm1', ...tavanlar } });
     expect((await projectUpdate({ cwd, beyin: { adaptor: 'codex', effort: 'high' } })).exitCode).toBe(0);
     await expect(dizin.configOku()).resolves.toMatchObject({
-      beyin: { adaptor: 'codex', model: 'm1', effort: 'high', ...tavanlar },
+      brain: { adaptor: 'codex', model: 'm1', effort: 'high', ...tavanlar },
     });
     expect((await projectCreate({ cwd, url: 'http://mesru.test', force: true, beyin: { model: 'm2' } })).exitCode).toBe(0);
     await expect(dizin.configOku()).resolves.toMatchObject({
-      beyin: { adaptor: 'codex', model: 'm2', effort: 'high', ...tavanlar },
+      brain: { adaptor: 'codex', model: 'm2', effort: 'high', ...tavanlar },
     });
     expect((await projectCreate({ cwd, url: 'http://mesru.test', force: true })).exitCode).toBe(0);
-    await expect(dizin.configOku()).resolves.toMatchObject({ beyin: { adaptor: 'codex', model: 'm2', ...tavanlar } });
+    await expect(dizin.configOku()).resolves.toMatchObject({ brain: { adaptor: 'codex', model: 'm2', ...tavanlar } });
   });
 
   it('docs/docsPath/planPath .kobay altını ve nokta ile başlayan bileşenleri reddeder', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
-      cwd, url: 'http://mesru.test', login: { kullanici: 'ali', parola: 'gizli-1' }, beyin: { adaptor: 'sahte' },
+      cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },
     });
     await writeFile(join(cwd, '.env'), 'SIR=1\n');
     await mkdir(join(cwd, 'belge'), { recursive: true });
@@ -1518,7 +1518,7 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     for (const docs of ['.kobay/credentials.json', '.env', 'alt/.git/config', 'belge/masum.md']) {
       const guncelle = await projectUpdate({ cwd, docs });
       expect(guncelle.exitCode, docs).toBe(2);
-      expect(guncelle.mesaj, docs).toContain('nokta ile başlayan');
+      expect(guncelle.mesaj, docs).toContain('name starts with a dot');
       const olustur = await projectCreate({ cwd, url: 'http://mesru.test', force: true, docs });
       expect(olustur.exitCode, docs).toBe(2);
     }
@@ -1532,7 +1532,7 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     await dizin.configYaz({ ...(await dizin.configOku()), docsPath: '.kobay/credentials.json' });
     const plan = await planGenerate({ cwd });
     expect(plan.exitCode).toBe(2);
-    expect(plan.mesaj).toContain('nokta ile başlayan');
+    expect(plan.mesaj).toContain('name starts with a dot');
     // Normal belge hâlâ kabul edilir.
     await writeFile(join(cwd, 'belge', 'urun.md'), '# Ürün\n');
     expect((await projectUpdate({ cwd, docs: 'belge/urun.md' })).exitCode).toBe(0);

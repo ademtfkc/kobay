@@ -31,40 +31,40 @@ export interface Beyin {
 }
 
 export type BeyinHataSebebi =
-  | 'zaman_asimi'
-  | 'cli_yok'
-  | 'sema'
-  | 'bos_yanit'
-  | 'ag'
-  | 'anahtar_yok';
+  | 'timeout'
+  | 'cli_missing'
+  | 'schema'
+  | 'empty_response'
+  | 'network'
+  | 'key_missing';
 
 export type BeyinCalismaHataSebebi =
-  | 'cli_hatasi'
-  | 'cagri_tavani'
-  | 'maliyet_tavani'
-  | 'maliyet_bilinmiyor'
-  | 'ayar_hatasi';
+  | 'cli_error'
+  | 'call_cap'
+  | 'cost_cap'
+  | 'cost_unknown'
+  | 'config_error';
 
-/** CLI ve harcama korumaları; eski BeyinHatasi switch sözleşmesini genişletmez. */
-export class BeyinCalismaHatasi extends Error {
+/** CLI ve harcama korumaları; eski BrainError switch sözleşmesini genişletmez. */
+export class BrainRuntimeError extends Error {
   readonly sebep: BeyinCalismaHataSebebi;
   readonly detay?: string;
 
   constructor(sebep: BeyinCalismaHataSebebi, detay?: string) {
-    super(`Beyin hatası: ${sebep}${detay === undefined || detay === '' ? '' : ` — ${detay}`}`);
-    this.name = 'BeyinCalismaHatasi';
+    super(`Brain error: ${sebep}${detay === undefined || detay === '' ? '' : ` — ${detay}`}`);
+    this.name = 'BrainRuntimeError';
     this.sebep = sebep;
     if (detay !== undefined) this.detay = detay;
   }
 }
 
-export class BeyinHatasi extends Error {
+export class BrainError extends Error {
   readonly sebep: BeyinHataSebebi;
   readonly ham?: string;
 
   constructor(sebep: BeyinHataSebebi, ham?: string) {
-    super(`Beyin hatası: ${sebep}`);
-    this.name = 'BeyinHatasi';
+    super(`Brain error: ${sebep}`);
+    this.name = 'BrainError';
     this.sebep = sebep;
     if (ham !== undefined) this.ham = ham;
   }

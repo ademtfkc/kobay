@@ -2,6 +2,7 @@ import { access, readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { Beyin } from '../beyin/index.js';
+import { gizliDegerleriMaskele } from '../beyin/ortak.js';
 import type {
   AdimSonucu,
   HaritaFarki,
@@ -19,22 +20,6 @@ import { BeyindenGelenHataAnaliziSemasi, type BeyindenGelenHataAnalizi } from '.
 type KonsolKaydi = { tip: 'error' | 'warning'; metin: string; stepIndex?: number };
 type AgKaydi = { url: string; method: string; status?: number; hata?: string; stepIndex?: number };
 
-const GIZLI_AD_DESENI = String.raw`(?:parola|password|token|secret|authorization|api[_ -]?key)`;
-const TIRNAKLI_JSON_DESENI = new RegExp(String.raw`("${GIZLI_AD_DESENI}"\s*:\s*")[^"]*(")`, 'gi');
-const ANAHTAR_DEGER_DESENI = new RegExp(String.raw`((?:${GIZLI_AD_DESENI})\s*[:=]\s*["']?)([^\s,;"']+)(["']?)`, 'gi');
-const BEARER_DESENI = /\b(Bearer\s+)[A-Za-z0-9._-]+/gi;
-const BASIC_DESENI = /\b(Basic\s+)[A-Za-z0-9+/=]+/gi;
-const URL_GIZLI_PARAMETRE_DESENI = /([?&](?:token|api[_-]?key|password|parola|secret)=)[^&#\s]+/gi;
-
-function gizliDegerleriMaskele(metin: string): string {
-  return metin
-    .replace(TIRNAKLI_JSON_DESENI, '$1[maskelendi]$2')
-    .replace(BEARER_DESENI, '$1[maskelendi]')
-    .replace(BASIC_DESENI, '$1[maskelendi]')
-    .replace(URL_GIZLI_PARAMETRE_DESENI, '$1[maskelendi]')
-    .replace(ANAHTAR_DEGER_DESENI, '$1[maskelendi]$3');
-}
-
 const KOBAY_IC_YOL_DESENI = /(?:^|[/\\])(?:node_modules[/\\])?kobay[/\\](?:src|dist)[/\\]/i;
 const KOBAY_FIXTURE_YOL_DESENI = /(?:^|[/\\])(?:src|dist)[/\\]kos[/\\](?:fixture|fixture-sablonu)\.[cm]?[jt]s/i;
 
@@ -46,23 +31,42 @@ export function hataMesajiniTemizle(metin: string): string {
     return !KOBAY_IC_YOL_DESENI.test(satir) && !KOBAY_FIXTURE_YOL_DESENI.test(satir);
   });
   const temiz = kalan.join('\n').trim();
-  return temiz === '' ? 'Kobay test yürütücüsünde hata oluştu.' : temiz;
+  return temiz === '' ? 'An error occurred inside the Kobay test runner.' : temiz;
 }
 
+/**
+ * Beynin metnine sızan iç JSON alan adlarını insan diline çevirir. 0.2'nin
+ * İngilizce adları listenin başında; 0.1'in Türkçe adları (önbellekli istemle
+ * gelebilir) arkada duruyor. `changed` tek başına sıradan bir İngilizce kelime
+ * olduğu için yalnız `changed: true/false` biçiminde eşleşir — düz metindeki
+ * "the button changed" cümlesi bozulmasın.
+ */
 const IC_ALAN_KARSILIKLARI: Array<[RegExp, string]> = [
-  [/sayfaKimligiUyusuyor\s*[:=]\s*false/gi, 'güncel DOM keşifteki sayfa kimliğiyle uyuşmuyor'],
-  [/sayfaKimligiUyusuyor\s*[:=]\s*true/gi, 'güncel DOM keşifteki sayfa kimliğiyle uyuşuyor'],
-  [/degisti\s*[:=]\s*false/gi, 'keşif haritasında görünür öğe farkı yok'],
-  [/degisti\s*[:=]\s*true/gi, 'keşif haritasında görünür öğe farkı var'],
-  [/\bharitaFarki\b/g, 'keşif haritası kıyası'],
-  [/\bsayfaKimligiUyusuyor\b/g, 'sayfa kimliği doğrulaması'],
-  [/\bdegisti\b/g, 'sayfa haritası değişikliği'],
-  [/\beklenenBasliklar\b/g, 'yeni görünen başlıklar'],
-  [/\bsilinenBasliklar\b/g, 'artık görünmeyen başlıklar'],
-  [/\beklenenDugmeler\b/g, 'yeni görünen düğmeler'],
-  [/\bsilinenDugmeler\b/g, 'artık görünmeyen düğmeler'],
-  [/\beklenenFormAlanlari\b/g, 'yeni görünen form alanları'],
-  [/\bsilinenFormAlanlari\b/g, 'artık görünmeyen form alanları'],
+  [/pageIdentityMatches\s*[:=]\s*false/gi, 'the current DOM does not match the page identity from explore'],
+  [/pageIdentityMatches\s*[:=]\s*true/gi, 'the current DOM matches the page identity from explore'],
+  [/changed\s*[:=]\s*false/gi, 'no visible element differences against the explore map'],
+  [/changed\s*[:=]\s*true/gi, 'visible element differences against the explore map'],
+  [/\bmapDiff\b/g, 'explore map comparison'],
+  [/\bpageIdentityMatches\b/g, 'page identity check'],
+  [/\baddedHeadings\b/g, 'newly visible headings'],
+  [/\bremovedHeadings\b/g, 'headings that are no longer visible'],
+  [/\baddedButtons\b/g, 'newly visible buttons'],
+  [/\bremovedButtons\b/g, 'buttons that are no longer visible'],
+  [/\baddedFormFields\b/g, 'newly visible form fields'],
+  [/\bremovedFormFields\b/g, 'form fields that are no longer visible'],
+  [/sayfaKimligiUyusuyor\s*[:=]\s*false/gi, 'the current DOM does not match the page identity from explore'],
+  [/sayfaKimligiUyusuyor\s*[:=]\s*true/gi, 'the current DOM matches the page identity from explore'],
+  [/degisti\s*[:=]\s*false/gi, 'no visible element differences against the explore map'],
+  [/degisti\s*[:=]\s*true/gi, 'visible element differences against the explore map'],
+  [/\bharitaFarki\b/g, 'explore map comparison'],
+  [/\bsayfaKimligiUyusuyor\b/g, 'page identity check'],
+  [/\bdegisti\b/g, 'page map change'],
+  [/\beklenenBasliklar\b/g, 'newly visible headings'],
+  [/\bsilinenBasliklar\b/g, 'headings that are no longer visible'],
+  [/\beklenenDugmeler\b/g, 'newly visible buttons'],
+  [/\bsilinenDugmeler\b/g, 'buttons that are no longer visible'],
+  [/\beklenenFormAlanlari\b/g, 'newly visible form fields'],
+  [/\bsilinenFormAlanlari\b/g, 'form fields that are no longer visible'],
 ];
 
 function icAlanAdlariniTemizle(metin: string): string {
@@ -87,16 +91,16 @@ function kodDuzeltmeIpucuEkle(analiz: HataAnalizi, hataMetni: string): HataAnali
     })),
   };
   if (temiz.failureKind !== 'product_bug' || temiz.recommendedFixTarget.kind !== 'code') return temiz;
-  if (/ürün (?:kaynak )?kodunda.*\bara(?:yın|mak)/i.test(temiz.recommendedFixTarget.rationale)) return temiz;
+  if (/search the product (?:source )?code/i.test(temiz.recommendedFixTarget.rationale)) return temiz;
   const received = /Received(?: string)?:\s*(?:\n\s*)?([^\n]+)/i.exec(hataMetni)?.[1]?.trim();
   const aranacak = received === undefined || received === ''
-    ? 'hata mesajındaki "Received" değerini veya metnini'
-    : `hata mesajının "Received" bölümündeki ${received.slice(0, 160)} metnini`;
+    ? 'the "Received" value or text from the error message'
+    : `the text ${received.slice(0, 160)} from the "Received" section of the error message`;
   return {
     ...temiz,
     recommendedFixTarget: {
       ...temiz.recommendedFixTarget,
-      rationale: `${temiz.recommendedFixTarget.rationale} Kaynak dosyayı bulmak için ürün kodunda ${aranacak} arayın.`,
+      rationale: `${temiz.recommendedFixTarget.rationale} To find the source file, search the product code for ${aranacak}.`,
     },
   };
 }
@@ -125,7 +129,7 @@ function jsonDizisiOku<T>(metin: string | null): T[] {
 }
 
 function analizUyarisiYaz(mesaj: string): void {
-  process.stderr.write(`[kobay analiz] ${mesaj}\n`);
+  process.stderr.write(`[kobay analysis] ${mesaj}\n`);
 }
 
 function urlYolu(adres: string, baseUrl: string): string | null {
@@ -148,28 +152,28 @@ async function haritaFarkiHazirla(
   try {
     const harita = await dizin.haritaOku();
     if (harita === null) {
-      analizUyarisiYaz('Keşif haritası yok; harita kıyası atlandı.');
+      analizUyarisiYaz('No explore map; map comparison skipped.');
       return undefined;
     }
     if (test.url === undefined) {
-      analizUyarisiYaz(`Test URL'si yok (${test.id}); harita kıyası atlandı.`);
+      analizUyarisiYaz(`Test has no URL (${test.id}); map comparison skipped.`);
       return undefined;
     }
     const testYolu = urlYolu(test.url, harita.baseUrl);
     const haritaSayfasi = testYolu === null
       ? undefined
-      : harita.sayfalar.find((sayfa) => urlYolu(sayfa.url, harita.baseUrl) === testYolu);
+      : harita.pages.find((sayfa) => urlYolu(sayfa.url, harita.baseUrl) === testYolu);
     if (haritaSayfasi === undefined) {
-      analizUyarisiYaz(`Test sayfası keşif haritasında yok (${test.url}); harita kıyası atlandı.`);
+      analizUyarisiYaz(`Test page is not in the explore map (${test.url}); map comparison skipped.`);
       return undefined;
     }
     if (dom === null) {
-      analizUyarisiYaz(`Düşen adımın DOM dosyası yok (${test.id}); harita kıyası atlandı.`);
+      analizUyarisiYaz(`The failing step has no DOM file (${test.id}); map comparison skipped.`);
       return undefined;
     }
     return await domHaritaFarkiOlustur(dom, haritaSayfasi, new URL(harita.baseUrl).origin);
   } catch (hata) {
-    analizUyarisiYaz(`Harita kıyası yapılamadı; eski analiz akışı sürdürüldü: ${String(hata).split('\n')[0] ?? 'bilinmeyen hata'}`);
+    analizUyarisiYaz(`Map comparison failed; continued with the plain analysis flow: ${String(hata).split('\n')[0] ?? 'unknown error'}`);
     return undefined;
   }
 }
@@ -207,8 +211,8 @@ function urunDegisikligiEslesmesi(
   const aranacak = [hataMetni, dusenAdimKodunuBul(kod, stepIndex)]
     .map((metin) => metin.replace(/\s+/g, ' ').trim());
   const gruplar = [
-    { silinenler: fark.silinenBasliklar, eklenenler: fark.eklenenBasliklar },
-    { silinenler: fark.silinenDugmeler, eklenenler: fark.eklenenDugmeler },
+    { silinenler: fark.removedHeadings, eklenenler: fark.addedHeadings },
+    { silinenler: fark.removedButtons, eklenenler: fark.addedButtons },
   ];
   for (const grup of gruplar) {
     if (grup.silinenler.length !== 1 || grup.eklenenler.length !== 1) continue;
@@ -233,17 +237,17 @@ function yerelHaritaEmniyeti(
   kod: string,
 ): HataAnalizi {
   if (analiz.failureKind !== 'test_bug' && analiz.failureKind !== 'product_bug') return analiz;
-  if (fark !== undefined && !fark.sayfaKimligiUyusuyor) return analiz;
+  if (fark !== undefined && !fark.pageIdentityMatches) return analiz;
   const eslesme = urunDegisikligiEslesmesi(fark, stepIndex, hataMetni, kod);
   if (eslesme === null || fark === undefined) return analiz;
   return {
     ...analiz,
-    rootCauseHypothesis: `Yerel harita kıyası: "${eslesme.eski}" keşifte vardı, şimdi yok. ${analiz.rootCauseHypothesis}`,
+    rootCauseHypothesis: `Local map comparison: "${eslesme.eski}" was present during explore and is gone now. ${analiz.rootCauseHypothesis}`,
     failureKind: 'product_changed',
     recommendedFixTarget: {
       kind: 'code',
       reference: `${fark.url}: "${eslesme.eski}" → "${eslesme.yeni}"`,
-      rationale: 'Keşif haritası bayatlamış; keşif yenilenip test yeniden üretilmeli.',
+      rationale: 'The explore map is stale; re-run explore and regenerate the test.',
     },
   };
 }
@@ -252,14 +256,14 @@ function dusenAdimiBul(sonuc: KosuSonucu, adimlar: AdimSonucu[]): AdimSonucu {
   if (sonuc.failedStepIndex !== undefined) {
     return adimlar.find((adim) => adim.stepIndex === sonuc.failedStepIndex) ?? {
       stepIndex: sonuc.failedStepIndex,
-      description: 'Kaydedilmemiş düşen adım',
+      description: 'Unrecorded failing step',
       status: 'failed',
       durationMs: 0,
     };
   }
   return adimlar.filter((adim) => adim.status === 'failed').at(-1) ?? {
     stepIndex: -1,
-    description: 'test kurulumu',
+    description: 'test setup',
     status: 'failed',
     durationMs: 0,
   };
@@ -285,8 +289,8 @@ type KanitAdayi = { kanit: Kanit; kaynak: string };
 /** Pakete giren kanıt sayısı sınırı; beyin şeması da 6 madde istiyor. */
 const KANIT_SINIRI = 6;
 const YEREL_KANIT_TANIMLARI = [
-  { kind: 'screenshot', uzanti: 'png', summary: 'düşen adımın ekran görüntüsü' },
-  { kind: 'snapshot', uzanti: 'html', summary: 'düşen adımın DOM kopyası' },
+  { kind: 'screenshot', uzanti: 'png', summary: 'screenshot of the failing step' },
+  { kind: 'snapshot', uzanti: 'html', summary: 'DOM snapshot of the failing step' },
 ] as const;
 
 /** Düşen adımın png/html kanıtlarını toplar; beyin anmasa bile pakete girmeleri gerekir. */
@@ -356,7 +360,7 @@ export function domTemizle(html: string, maxKarakter = 30_000): string {
     .replace(/\s+/g, ' ')
     .trim();
 
-  return temiz.length > maxKarakter ? `${temiz.slice(0, maxKarakter)}…[kesildi]` : temiz;
+  return temiz.length > maxKarakter ? `${temiz.slice(0, maxKarakter)}…[truncated]` : temiz;
 }
 
 /** Başarısız koşunun kanıtlarını beyinle yorumlayıp atomik hata paketi olarak yazar. */
@@ -369,7 +373,7 @@ export async function hataAnalizEt(
   s?: { logDizini?: string },
 ): Promise<HataPaketi> {
   if (sonuc.status !== 'failed' && sonuc.verdict !== 'failed') {
-    throw new Error('Hata analizi yalnız düşen koşu için yapılır');
+    throw new Error('Failure analysis only runs for a failed run');
   }
 
   const kosuDizini = await dizin.kosuDizini(sonuc.runId);
@@ -407,7 +411,7 @@ export async function hataAnalizEt(
     }),
   };
   const maskeliHataMetni = gizliDegerleriMaskele(hataMesajiniTemizle(
-    dusenAdim.errorMessage ?? sonuc.errorMessage ?? 'Hata metni yok',
+    dusenAdim.errorMessage ?? sonuc.errorMessage ?? 'No error message',
   ));
   const maskeliDom = dom === null ? null : gizliDegerleriMaskele(dom);
   const haritaFarki = await haritaFarkiHazirla(dizin, test, maskeliDom);
@@ -424,7 +428,7 @@ export async function hataAnalizEt(
       agHatalari,
       kod: gizliDegerleriMaskele(kod ?? ''),
       test,
-      ...(haritaFarki === undefined ? {} : { haritaFarki }),
+      ...(haritaFarki === undefined ? {} : { mapDiff: haritaFarki }),
     }),
     sema: BeyindenGelenHataAnaliziSemasi,
     logDizini: s?.logDizini ?? kosuDizini,
@@ -474,7 +478,7 @@ export async function hataAnalizEt(
     steps: adimlariTemizle,
     code: kod ?? '',
     failure,
-    ...(haritaFarki === undefined ? {} : { haritaFarki }),
+    ...(haritaFarki === undefined ? {} : { mapDiff: haritaFarki }),
   };
   await dizin.hataPaketiYaz(paket, ekDosyalar);
   return paket;

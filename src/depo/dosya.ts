@@ -3,19 +3,19 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import * as v from 'valibot';
 
-export class DosyaYok extends Error {
+export class FileNotFound extends Error {
   constructor(yol: string) {
-    super(`Dosya bulunamadı: ${yol}`);
-    this.name = 'DosyaYok';
+    super(`File not found: ${yol}`);
+    this.name = 'FileNotFound';
   }
 }
 
-export class SemaHatasi extends Error {
+export class SchemaError extends Error {
   readonly sorunlar: string[];
 
   constructor(sorunlar: string[]) {
-    super(`Şema doğrulaması başarısız: ${sorunlar.join('; ')}`);
-    this.name = 'SemaHatasi';
+    super(`Schema validation failed: ${sorunlar.join('; ')}`);
+    this.name = 'SchemaError';
     this.sorunlar = sorunlar;
   }
 }
@@ -50,7 +50,7 @@ export async function jsonOku<T>(yol: string, sema: v.GenericSchema<unknown, T>)
     metin = await readFile(yol, 'utf8');
   } catch (hata: unknown) {
     if (typeof hata === 'object' && hata !== null && 'code' in hata && hata.code === 'ENOENT') {
-      throw new DosyaYok(yol);
+      throw new FileNotFound(yol);
     }
     throw hata;
   }
@@ -59,12 +59,12 @@ export async function jsonOku<T>(yol: string, sema: v.GenericSchema<unknown, T>)
   try {
     veri = JSON.parse(metin) as unknown;
   } catch {
-    throw new SemaHatasi(['$: geçerli JSON değil']);
+    throw new SchemaError(['$: not valid JSON']);
   }
 
   const sonuc = v.safeParse(sema, veri);
   if (!sonuc.success) {
-    throw new SemaHatasi(sorunlariMetneCevir(sonuc.issues));
+    throw new SchemaError(sorunlariMetneCevir(sonuc.issues));
   }
   return sonuc.output;
 }

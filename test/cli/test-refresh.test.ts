@@ -52,23 +52,23 @@ function metinTopla(akis: PassThrough): { oku: () => string } {
 
 const TEST_ID = 't_abc12345';
 
-function sayfa(yol: string, baslik: string, dugmeler: string[]): Sayfa {
+function sayfa(yol: string, title: string, buttons: string[]): Sayfa {
   return {
     url: `http://uygulama.test${yol}`,
-    baslik,
-    basliklar: [baslik],
-    linkler: [],
-    formlar: [],
-    dugmeler,
-    menu: [baslik],
+    title,
+    headings: [title],
+    links: [],
+    forms: [],
+    buttons,
+    menu: [title],
   };
 }
 
 const harita: Harita = {
   baseUrl: 'http://uygulama.test',
-  girisYapildi: true,
-  kesifTarihi: '2026-09-17T00:00:00.000Z',
-  sayfalar: [sayfa('/', 'Ana sayfa', []), sayfa('/cariler', 'Cariler', ['Cari Ekle'])],
+  loggedIn: true,
+  exploredAt: '2026-09-17T00:00:00.000Z',
+  pages: [sayfa('/', 'Ana sayfa', []), sayfa('/cariler', 'Cariler', ['Cari Ekle'])],
 };
 
 const testKaydi: TestKaydi = {
@@ -135,10 +135,10 @@ describe('test refresh', () => {
     expect(sahteler.yenilenenUrl).toBe('/cariler');
     expect(sonuc.json).toMatchObject({
       id: TEST_ID,
-      ad: 'Müşteriler listesini görüntüle',
-      eskiAd: 'Cariler listesini görüntüle',
-      adimSayisi: 2,
-      durum: 'draft',
+      name: 'Müşteriler listesini görüntüle',
+      previousName: 'Cariler listesini görüntüle',
+      stepCount: 2,
+      status: 'draft',
       // refresh kod üretmez: codeVersion yalnız `test run` kod üretince artar.
       codeVersion: 2,
     });
@@ -148,7 +148,7 @@ describe('test refresh', () => {
     const satirlar = (sonuc.metin ?? '').split('\n');
     expect(satirlar.some((satir) => /^[{["]/.test(satir.trimStart()))).toBe(false);
     expect(sonuc.metin).not.toContain('"planSteps"');
-    expect(satirlar[0]).toBe('Sayfa yenilendi: http://uygulama.test/cariler');
+    expect(satirlar[0]).toBe('Page refreshed: http://uygulama.test/cariler');
     expect(satirlar[1]).toContain(TEST_ID);
     expect(sonuc.metin).toContain('0. [action] Müşteriler sayfasını aç');
     expect(sonuc.metin).toContain('kobay test run');
@@ -163,9 +163,9 @@ describe('test refresh', () => {
     expect(guncelTest.codeVersion).toBe(testKaydi.codeVersion);
 
     const guncelHarita = await dizin.haritaOku();
-    expect(guncelHarita?.sayfalar).toHaveLength(2);
-    expect(guncelHarita?.sayfalar[0]).toEqual(harita.sayfalar[0]);
-    expect(guncelHarita?.sayfalar[1]?.baslik).toBe('Müşteriler');
+    expect(guncelHarita?.pages).toHaveLength(2);
+    expect(guncelHarita?.pages[0]).toEqual(harita.pages[0]);
+    expect(guncelHarita?.pages[1]?.title).toBe('Müşteriler');
 
     // --no-run kod üretmez; eski kod dosyası olduğu gibi kalır.
     await expect(dizin.kodOku(TEST_ID)).resolves.toBe('// eski kod: Cariler');
@@ -180,8 +180,8 @@ describe('test refresh', () => {
     expect(sonuc.exitCode).toBe(0);
     expect(sonuc.json).toMatchObject({
       id: TEST_ID,
-      ad: 'Müşteriler listesini görüntüle',
-      kosu: { id: TEST_ID, verdict: 'passed', runId: 'r_20260918010101_abcd' },
+      name: 'Müşteriler listesini görüntüle',
+      run: { id: TEST_ID, verdict: 'passed', runId: 'r_20260918010101_abcd' },
     });
     // Koşu yolunda da özet basılır; koşu satırları `test run` biçiminde sona eklenir.
     expect(sonuc.mesaj).toBeUndefined();
@@ -195,7 +195,7 @@ describe('test refresh', () => {
     expect(guncelTest.name).toBe('Müşteriler listesini görüntüle');
     // Tek kod üretimi = tek artış; refresh ayrıca artırmaz.
     expect(guncelTest.codeVersion).toBe(testKaydi.codeVersion + 1);
-    expect(sonuc.json).toMatchObject({ codeVersion: testKaydi.codeVersion + 1, durum: 'ready' });
+    expect(sonuc.json).toMatchObject({ codeVersion: testKaydi.codeVersion + 1, status: 'ready' });
   });
 
   it('koşu düşerse exit 1 ve failureKind döner', async () => {
@@ -211,7 +211,7 @@ describe('test refresh', () => {
     const sonuc = await testRefresh({ cwd, id: TEST_ID });
 
     expect(sonuc.exitCode).toBe(1);
-    expect(sonuc.json).toMatchObject({ kosu: { verdict: 'failed', failureKind: 'test_bug' } });
+    expect(sonuc.json).toMatchObject({ run: { verdict: 'failed', failureKind: 'test_bug' } });
 
     // Düşen koşuda özet stderr'e gider; stdout boş kalır, JSON gövdesi basılmaz.
     const stdout = new PassThrough();
@@ -231,7 +231,7 @@ describe('test refresh', () => {
 
     const urlsuz = await testRefresh({ cwd, id: 't_bcd12345', run: false });
     expect(urlsuz.exitCode).toBe(2);
-    expect(urlsuz.json).toEqual({ hata: expect.objectContaining({ kod: 'KullanimHatasi' }) });
+    expect(urlsuz.json).toEqual({ error: expect.objectContaining({ code: 'UsageError' }) });
 
     const haritadaYok = await testRefresh({ cwd, id: 't_cde12345', run: false });
     expect(haritadaYok.exitCode).toBe(2);
@@ -246,6 +246,6 @@ describe('test refresh', () => {
     const sonuc = await testRefresh({ cwd, id: TEST_ID, run: false });
 
     expect(sonuc.exitCode).toBe(2);
-    expect(sonuc.mesaj).toMatch(/Keşif haritası yok/);
+    expect(sonuc.mesaj).toMatch(/No exploration map/);
   });
 });

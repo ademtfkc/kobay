@@ -5,24 +5,29 @@ const ISTEM_SINIRI = 60_000;
 const HARITA_SINIRI = 35_000;
 const SAYFA_SINIRI = 2_000;
 
-export const PLAN_SISTEM_ISTEMI = `Sen bir QA planlayıcısın. Deneyimli bir QA test planlayıcısı gibi davran.
+/** Beynin serbest metin alanlarını hangi dilde yazacağını söyleyen ortak cümle. */
+export const DIL_KURALI = 'Write names, descriptions and rationale in the language of the '
+  + "application's UI and docs; if mixed or unclear, use English.";
 
-8–25 öneri üret. Her öneri gerçek bir kullanıcı akışı olsun: haritadaki gerçek bir sayfaya url ile bağlan; steps 2–15 adım, action/assertion karışık ve en az bir assertion içersin. priority dağılımında p0 kritik akışlar (giriş, ana işlem), p1 önemli, p2 ikincil, p3 kozmetik için kullan. category giris, form, gezinti, veri, yetki veya hata-durumu gibi bir kategori; feature ise kısa bir ad olsun.
+export const PLAN_SISTEM_ISTEMI = `You are a QA planner. Act like an experienced QA test planner.
 
-Haritadaki bir yol kalıbına uyan ama var olmayan kayıt URL'leri (ör. harita /cariler/36 içeriyorsa /cariler/999999) hata-durumu testi olarak önerilebilir; bunlar kabul edilir.
+Produce 8-25 proposals. Every proposal must be a real user flow: bind it through url to a real page in the map; steps must have 2-15 steps, mix action and assertion, and contain at least one assertion. In the priority spread use p0 for critical flows (login, the main transaction), p1 for important, p2 for secondary and p3 for cosmetic ones. category is a category such as login, form, navigation, data, permission or error-case; feature is a short name.
 
-Silme ve çıkış gibi yıkıcı işlemleri yalnız açıkça geri alınabiliyorsa öner. E-posta gönderimi veya dış servis gibi test edilemeyecek şeyleri önerme.
+Record URLs that match a path pattern in the map but do not exist (for example /customers/999999 when the map contains /customers/36) may be proposed as error-case tests; those are accepted.
 
-Yalnız aşağıdaki JSON iskeletine uyan bir nesne döndür. proposalId gönderme; bunu sistem yerelde atar:
-{"oneriler":[{"title":"...","description":"...","priority":"p1","category":"...","feature":"...","type":"frontend","url":"/ornek","steps":[{"type":"action","description":"..."},{"type":"assertion","description":"..."}]}]}
+Propose destructive operations such as delete and logout only when they are explicitly reversible. Do not propose things that cannot be tested, such as sending e-mail or calling an external service.
 
-Tam örnek:
-{"oneriler":[{"title":"Ürün listesini görüntüle","description":"Kullanıcının ürün sayfasını açıp listeyi gördüğünü doğrular.","priority":"p1","category":"gezinti","feature":"ürünler","type":"frontend","url":"/urunler","steps":[{"type":"action","description":"Ürünler sayfasını aç"},{"type":"assertion","description":"Ürün listesinin görünür olduğunu doğrula"}]}]}
+Return only an object matching the JSON skeleton below. Do not send proposalId; the system assigns it locally:
+{"proposals":[{"title":"...","description":"...","priority":"p1","category":"...","feature":"...","type":"frontend","url":"/example","steps":[{"type":"action","description":"..."},{"type":"assertion","description":"..."}]}]}
 
-title, description, priority, category, feature, type, url ve steps içindeki type ile description anahtarları İngilizce ve değişmezdir; bunları Türkçeye veya başka bir dile çevirme. Türkçe yalnız metin değerlerinde kalabilir.`;
+Full example:
+{"proposals":[{"title":"View the product list","description":"Verifies that the user opens the products page and sees the list.","priority":"p1","category":"navigation","feature":"products","type":"frontend","url":"/products","steps":[{"type":"action","description":"Open the products page"},{"type":"assertion","description":"Verify that the product list is visible"}]}]}
+
+The keys title, description, priority, category, feature, type, url and the type and description keys inside steps are English and fixed; do not translate them into any other language. Only the text values may be in another language.
+${DIL_KURALI}`;
 
 function metniKes(metin: string, sinir: number): string {
-  return metin.length <= sinir ? metin : `${metin.slice(0, sinir)}…[kesildi]`;
+  return metin.length <= sinir ? metin : `${metin.slice(0, sinir)}…[truncated]`;
 }
 
 function listeOzeti(degerler: string[], ogeSiniri = 12, ogeKarakterSiniri = 140): string {
@@ -32,24 +37,24 @@ function listeOzeti(degerler: string[], ogeSiniri = 12, ogeKarakterSiniri = 140)
 }
 
 function alanOzeti(alan: FormAlani): string {
-  const etiket = alan.etiket === undefined ? '' : `, etiket: ${metniKes(alan.etiket, 100)}`;
+  const etiket = alan.label === undefined ? '' : `, label: ${metniKes(alan.label, 100)}`;
   const placeholder = alan.placeholder === undefined ? '' : `, placeholder: ${metniKes(alan.placeholder, 100)}`;
-  return `${metniKes(alan.ad, 100)} (${metniKes(alan.tip, 60)}${etiket}${placeholder})`;
+  return `${metniKes(alan.name, 100)} (${metniKes(alan.type, 60)}${etiket}${placeholder})`;
 }
 
 function formOzeti(form: Form): string {
   const action = form.action === undefined ? '' : ` action=${metniKes(form.action, 160)}`;
-  return `[${form.alanlar.slice(0, 16).map(alanOzeti).join('; ')}]${action}`;
+  return `[${form.fields.slice(0, 16).map(alanOzeti).join('; ')}]${action}`;
 }
 
 function sayfaOzeti(sayfa: Sayfa): string {
   const metin = [
     `url: ${metniKes(sayfa.url, 500)}`,
-    `başlık: ${metniKes(sayfa.baslik, 300)}`,
-    `h1-h3: ${listeOzeti(sayfa.basliklar)}`,
-    `form alanları: ${sayfa.formlar.slice(0, 8).map(formOzeti).join(' | ')}`,
-    `düğmeler: ${listeOzeti(sayfa.dugmeler)}`,
-    `menü: ${listeOzeti(sayfa.menu)}`,
+    `title: ${metniKes(sayfa.title, 300)}`,
+    `h1-h3: ${listeOzeti(sayfa.headings)}`,
+    `form fields: ${sayfa.forms.slice(0, 8).map(formOzeti).join(' | ')}`,
+    `buttons: ${listeOzeti(sayfa.buttons)}`,
+    `menu: ${listeOzeti(sayfa.menu)}`,
   ].join('\n');
   return metniKes(metin, SAYFA_SINIRI);
 }
@@ -57,48 +62,49 @@ function sayfaOzeti(sayfa: Sayfa): string {
 function haritaOzeti(harita: Harita): string {
   let kalan = HARITA_SINIRI;
   const sayfalar: string[] = [];
-  for (const [sira, sayfa] of harita.sayfalar.slice(0, 40).entries()) {
-    const ozet = `Sayfa ${sira + 1}\n${sayfaOzeti(sayfa)}`;
+  for (const [sira, sayfa] of harita.pages.slice(0, 40).entries()) {
+    const ozet = `Page ${sira + 1}\n${sayfaOzeti(sayfa)}`;
     if (ozet.length > kalan) {
       if (kalan > 0) sayfalar.push(metniKes(ozet, kalan));
-      sayfalar.push('…[harita kesildi]');
+      sayfalar.push('…[map truncated]');
       break;
     }
     sayfalar.push(ozet);
     kalan -= ozet.length;
   }
-  return `Temel URL: ${harita.baseUrl}\nGiriş yapıldı: ${harita.girisYapildi ? 'evet' : 'hayır'}\n\n${sayfalar.join('\n\n')}`;
+  return `Base URL: ${harita.baseUrl}\nLogged in: ${harita.loggedIn ? 'yes' : 'no'}\n\n${sayfalar.join('\n\n')}`;
 }
 
 /** Plan beyni için kullanıcı istemini kurar; birim testlerinde doğrudan kullanılabilir. */
 export function planKullaniciIstemiOlustur(harita: Harita, belge: string | undefined, ipucu?: string): string {
   const belgeMetni = belge === undefined
-    ? 'Belge sağlanmadı.'
+    ? 'No document provided.'
     : metniKes(belge, BELGE_SINIRI);
   const ipucuBolumu = ipucu === undefined || ipucu === ''
     ? ''
-    : `\n\n## Kullanıcı ipucu\n${metniKes(ipucu, 2_000)}`;
-  const istem = `## Uygulama haritası\n${haritaOzeti(harita)}\n\n## Proje belgesi\n${belgeMetni}${ipucuBolumu}`;
+    : `\n\n## User hint\n${metniKes(ipucu, 2_000)}`;
+  const istem = `## Application map\n${haritaOzeti(harita)}\n\n## Project document\n${belgeMetni}${ipucuBolumu}`;
   return metniKes(istem, ISTEM_SINIRI);
 }
 
-export const PLAN_YENILEME_SISTEM_ISTEMI = `Sen bir QA planlayıcısın. Bir test planı, hedef sayfa yeniden adlandırıldığı için bayatladı. Görevin testi yeniden yazmak değil, var olan adımları yeni arayüze uyarlamak.
+export const PLAN_YENILEME_SISTEM_ISTEMI = `You are a QA planner. A test plan went stale because the target page was renamed. Your job is not to rewrite the test but to adapt the existing steps to the new interface.
 
-Kurallar:
-- Adım sayısını DEĞİŞTİRME. Kaç adım verildiyse tam o kadar adım döndür.
-- Adımların sırasını ve niyetini koru: her adım eskisinin aynı işi yapan karşılığı olsun. action olan action, assertion olan assertion kalsın.
-- Yalnız yeniden adlandırılmış öğeleri güncelle: eski sayfada olup yeni sayfada başka adla geçen başlık, düğme, menü veya form etiketlerini yeni adlarıyla yaz.
-- Yeni adım, yeni doğrulama veya yeni akış EKLEME; eski bir adımı da atma.
-- Yeni sayfada karşılığı olmayan bir öğe varsa adımı olabildiğince yakın bırak, uydurma öğe yazma.
-- name alanı testin adıdır: içinde yeniden adlandırılmış bir öğe geçiyorsa güncelle, geçmiyorsa aynen döndür.
+Rules:
+- DO NOT change the number of steps. Return exactly as many steps as you were given.
+- Preserve the order and the intent of the steps: every step must be the counterpart that does the same job as the old one. An action stays an action, an assertion stays an assertion.
+- Update only the renamed elements: headings, buttons, menu entries or form labels that existed on the old page and now appear under a different name must be written with their new names.
+- Do NOT add new steps, new assertions or new flows; do not drop an old step either.
+- If an element has no counterpart on the new page, leave the step as close as possible; do not invent elements.
+- The name field is the test's name: update it if it mentions a renamed element, otherwise return it unchanged.
 
-Yalnız aşağıdaki JSON iskeletine uyan bir nesne döndür:
+Return only an object matching the JSON skeleton below:
 {"name":"...","steps":[{"type":"action","description":"..."},{"type":"assertion","description":"..."}]}
 
-Tam örnek (eski adımlarda "Cariler" geçiyordu, yeni sayfada "Müşteriler" yazıyor):
-{"name":"Müşteriler listesini görüntüle","steps":[{"type":"action","description":"Müşteriler sayfasını aç"},{"type":"assertion","description":"Müşteriler başlığının görünür olduğunu doğrula"}]}
+Full example (the old steps mentioned "Accounts", the new page says "Customers"):
+{"name":"View the customer list","steps":[{"type":"action","description":"Open the customers page"},{"type":"assertion","description":"Verify that the Customers heading is visible"}]}
 
-name, steps ve steps içindeki type ile description anahtarları İngilizce ve değişmezdir; bunları Türkçeye veya başka bir dile çevirme. Türkçe yalnız metin değerlerinde kalabilir.`;
+The keys name, steps and the type and description keys inside steps are English and fixed; do not translate them into any other language. Only the text values may be in another language.
+${DIL_KURALI}`;
 
 function adimListesi(adimlar: readonly PlanAdimi[]): string {
   return adimlar
@@ -109,12 +115,12 @@ function adimListesi(adimlar: readonly PlanAdimi[]): string {
 function haritaFarkiOzeti(fark: HaritaFarki): string {
   return [
     `url: ${metniKes(fark.url, 500)}`,
-    `silinen başlıklar: ${listeOzeti(fark.silinenBasliklar)}`,
-    `eklenen başlıklar: ${listeOzeti(fark.eklenenBasliklar)}`,
-    `silinen düğmeler: ${listeOzeti(fark.silinenDugmeler)}`,
-    `eklenen düğmeler: ${listeOzeti(fark.eklenenDugmeler)}`,
-    `silinen form alanları: ${listeOzeti(fark.silinenFormAlanlari)}`,
-    `eklenen form alanları: ${listeOzeti(fark.eklenenFormAlanlari)}`,
+    `removed headings: ${listeOzeti(fark.removedHeadings)}`,
+    `added headings: ${listeOzeti(fark.addedHeadings)}`,
+    `removed buttons: ${listeOzeti(fark.removedButtons)}`,
+    `added buttons: ${listeOzeti(fark.addedButtons)}`,
+    `removed form fields: ${listeOzeti(fark.removedFormFields)}`,
+    `added form fields: ${listeOzeti(fark.addedFormFields)}`,
   ].join('\n');
 }
 
@@ -122,17 +128,17 @@ export interface PlanYenilemeIstemBaglami {
   test: Pick<TestKaydi, 'name' | 'planSteps'>;
   eskiSayfa?: Sayfa;
   yeniSayfa: Sayfa;
-  haritaFarki?: HaritaFarki;
+  mapDiff?: HaritaFarki;
 }
 
 /** Plan yenileme beyni için kullanıcı istemini kurar; birim testlerinde doğrudan kullanılabilir. */
 export function planYenilemeKullaniciIstemiOlustur(baglam: PlanYenilemeIstemBaglami): string {
   const bolumler = [
-    `## Testin adı\n${metniKes(baglam.test.name, 300)}`,
-    `## Eski plan adımları (${baglam.test.planSteps.length} adım — bu sayı korunacak)\n${adimListesi(baglam.test.planSteps)}`,
-    `## Sayfanın eski hâli (keşif haritasından)\n${baglam.eskiSayfa === undefined ? 'Eski özet yok.' : sayfaOzeti(baglam.eskiSayfa)}`,
-    `## Sayfanın yeni hâli (şimdi keşfedildi)\n${sayfaOzeti(baglam.yeniSayfa)}`,
-    `## Son hata paketindeki harita farkı\n${baglam.haritaFarki === undefined ? 'Fark bilgisi yok.' : haritaFarkiOzeti(baglam.haritaFarki)}`,
+    `## Test name\n${metniKes(baglam.test.name, 300)}`,
+    `## Previous plan steps (${baglam.test.planSteps.length} steps — this count must be preserved)\n${adimListesi(baglam.test.planSteps)}`,
+    `## The page as it was (from the exploration map)\n${baglam.eskiSayfa === undefined ? 'No previous summary.' : sayfaOzeti(baglam.eskiSayfa)}`,
+    `## The page as it is now (just explored)\n${sayfaOzeti(baglam.yeniSayfa)}`,
+    `## Map diff from the latest failure bundle\n${baglam.mapDiff === undefined ? 'No diff information.' : haritaFarkiOzeti(baglam.mapDiff)}`,
   ];
   return metniKes(bolumler.join('\n\n'), ISTEM_SINIRI);
 }

@@ -5,13 +5,13 @@ import { KobayDizini } from '../../depo/index.js';
 
 /** Doctor satırı: `oneri` yalnız `ok: false` iken bulunur. */
 export interface Kontrol {
-  ad: string;
+  name: string;
   ok: boolean;
-  oneri?: string;
+  hint?: string;
 }
 
 /** Chromium eksikse verilen öneri; kurulu makinede de sınanabilsin diye dışa açık. */
-export const CHROMIUM_ONERISI = '`kobay install-browser` çalıştırın (Linux: `kobay install-browser --with-deps`)';
+export const CHROMIUM_ONERISI = 'run `kobay install-browser` (Linux: `kobay install-browser --with-deps`)';
 
 export function nodeSurumuYeterliMi(surum: string): boolean {
   const [ana = 0, alt = 0] = surum.split('.').map(Number);
@@ -40,26 +40,30 @@ export async function doctor(a: { cwd: string }): Promise<KomutSonucu> {
     {
       ad: `Node ${process.versions.node}`,
       ok: nodeSurumuYeterliMi(process.versions.node),
-      oneri: 'Node 22.12 veya üstünü kurun',
+      oneri: 'install Node 22.12 or newer',
     },
     {
       ad: 'claude CLI',
       ok: claude,
-      oneri: beyinVar ? 'yok; beyin olarak codex kullanılabilir' : 'kurun veya `kobay setup --beyin openrouter` ile anahtarlı beyne geçin',
+      oneri: beyinVar
+        ? 'missing; codex can be used as the brain'
+        : 'install it, or switch to a key-based brain with `kobay setup --brain openrouter`',
     },
     {
       ad: 'codex CLI',
       ok: codex,
-      oneri: beyinVar ? 'yok; beyin olarak claude kullanılabilir' : 'kurun veya `kobay setup --beyin openrouter` ile anahtarlı beyne geçin',
+      oneri: beyinVar
+        ? 'missing; claude can be used as the brain'
+        : 'install it, or switch to a key-based brain with `kobay setup --brain openrouter`',
     },
     { ad: 'Chromium', ok: chromium, oneri: CHROMIUM_ONERISI },
-    { ad: '.kobay', ok: dizin !== null, oneri: '`kobay project create --url <URL>` ile proje açın' },
+    { ad: '.kobay', ok: dizin !== null, oneri: 'create a project with `kobay project create --url <URL>`' },
     {
-      ad: 'hedef',
+      ad: 'target',
       ok: hedef,
       oneri: dizin === null
-        ? 'proje yok; önce `kobay project create --url <URL>` çalıştırın'
-        : `${baseUrl ?? 'hedef'} ayakta değil; uygulamayı başlatın veya \`kobay project update --base-url <URL>\` ile adresi düzeltin`,
+        ? 'no project; run `kobay project create --url <URL>` first'
+        : `${baseUrl ?? 'target'} is not reachable; start the app or fix the address with \`kobay project update --base-url <URL>\``,
     },
   ];
   const metin = ham
@@ -67,6 +71,6 @@ export async function doctor(a: { cwd: string }): Promise<KomutSonucu> {
     .join('\n');
   // `oneri` yalnız düşen kontrolde yazılır: ok:true satırda öneri bırakmak
   // ajanı yanıltıyordu (hedef ayaktayken "ayakta değil" önerisi gibi).
-  const kontroller: Kontrol[] = ham.map(({ ad, ok, oneri }) => ({ ad, ok, ...(ok ? {} : { oneri }) }));
+  const kontroller: Kontrol[] = ham.map(({ ad, ok, oneri }) => ({ name: ad, ok, ...(ok ? {} : { hint: oneri }) }));
   return basariliMetin(kontroller, metin);
 }

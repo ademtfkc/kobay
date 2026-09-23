@@ -43,15 +43,15 @@ Rules for reading results:
 
 - CLI: always pass `--output json`. The output is one envelope:
   `{"ok": bool, "exitCode": n, "data": ...}` or, on errors,
-  `{"ok": false, "exitCode": n, "hata": {"kod": ..., "mesaj": ...}}`.
+  `{"ok": false, "exitCode": n, "error": {"code": ..., "message": ...}}`.
   Decide from `ok` and `exitCode` in the JSON. Do not pipe kobay into another
   command and read `$?`; that is the last command's exit code, not kobay's.
 - MCP: the tool result text is the `data` part as JSON; `isError: true` means a
   non-zero exit (a failed test counts).
 - Exit codes: `0` passed, `1` a test failed, `2` usage error, `3` target app
   unreachable, `4` brain or engine error, `5` login or permission problem.
-- `test run` returns one row per test: `id`, `ad` (name), `verdict`, `runId`,
-  and `failureKind` when it failed or `hata` (error) when it could not run.
+- `test run` returns one row per test: `id`, `name`, `verdict`, `runId`, and
+  `failureKind` when it failed or `error` when it could not run.
 - MCP tools accept `projectDir`. It must be inside the directory the server was
   started in (or a root listed in `KOBAY_MCP_ROOTS`). Omit it when the server runs
   in the project.
@@ -74,8 +74,8 @@ Rules for reading results:
    terminal; do not work around it.
 
 2. **Make sure the app is up.** Run `doctor` and check the row with
-   `"ad": "hedef"` (target): it must have `"ok": true`. `doctor` itself exits `0`
-   even when a check fails, so read the rows. `oneri` only appears on rows with
+   `"name": "target"`: it must have `"ok": true`. `doctor` itself exits `0`
+   even when a check fails, so read the rows. `hint` only appears on rows with
    `ok: false`. If the target is down, start the dev server (or ask the user
    how) and wait until the base URL answers.
 
@@ -119,7 +119,7 @@ Rules for reading results:
 
    `verdict: blocked` means the app was unreachable: go back to step 2.
    `verdict: inconclusive` with exit code `4` is a brain or engine error: read
-   `hata`, do not guess a product fix.
+   `error`, do not guess a product fix.
 
 7. **Before blaming the product, check your own changes.** If the failure comes
    from an uncommitted change in the working tree (`git status`, `git diff`) that
@@ -133,7 +133,7 @@ Rules for reading results:
 
 9. **Stop at a cost limit.** If kobay reports that a budget, call or cost
    limit was hit, stop and ask the user. Do not change `KOBAY_MAX_*` variables or
-   the `beyin` limits in `.kobay/config.json` yourself. A raised limit only takes
+   the `brain` limits in `.kobay/config.json` yourself. A raised limit only takes
    effect after kobay (or the MCP server) restarts.
 
 10. **Stop and report.** If the same test still fails after two fix attempts,

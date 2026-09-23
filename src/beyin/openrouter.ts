@@ -1,5 +1,5 @@
 import type { BeyinAyari } from '../depo/index.js';
-import { BeyinCalismaHatasi, BeyinHatasi, type Beyin, type BeyinIstegi, type BeyinYaniti } from './index.js';
+import { BrainRuntimeError, BrainError, type Beyin, type BeyinIstegi, type BeyinYaniti } from './index.js';
 import {
   beyinGunluguYaz,
   type BeyinButcesi,
@@ -57,42 +57,42 @@ export class OpenRouterBeyni implements Beyin {
       const model = this.ayar.model ?? VARSAYILAN_OPENROUTER_MODELI;
       const yol = modelFiyatYolu(model);
       if (yol === null) {
-        throw new BeyinCalismaHatasi(
-          'maliyet_bilinmiyor',
-          `OpenRouter model kimliği fiyat sorgusuna uygun değil: ${model}. Çağrı başlatılmadı.`,
+        throw new BrainRuntimeError(
+          'cost_unknown',
+          `OpenRouter model id is not usable for a price lookup: ${model}. No call was started.`,
         );
       }
       let cevap: Response;
       try {
         cevap = await fetch(yol, { headers: { Authorization: `Bearer ${anahtar}` } });
       } catch {
-        throw new BeyinCalismaHatasi(
-          'maliyet_bilinmiyor',
-          `OpenRouter ${model} fiyatı alınamadı; çağrı başlatılmadı. Ağ bağlantısını ve model adını denetleyin.`,
+        throw new BrainRuntimeError(
+          'cost_unknown',
+          `Could not fetch the price for OpenRouter ${model}; no call was started. Check your network connection and the model name.`,
         );
       }
       if (!cevap.ok) {
-        throw new BeyinCalismaHatasi(
-          'maliyet_bilinmiyor',
-          `OpenRouter ${model} fiyatı doğrulanamadı (HTTP ${cevap.status}); çağrı başlatılmadı.`,
+        throw new BrainRuntimeError(
+          'cost_unknown',
+          `Could not verify the price for OpenRouter ${model} (HTTP ${cevap.status}); no call was started.`,
         );
       }
       let veri: { data?: { pricing?: { prompt?: unknown; completion?: unknown; request?: unknown } } };
       try {
         veri = await cevap.json() as typeof veri;
       } catch {
-        throw new BeyinCalismaHatasi(
-          'maliyet_bilinmiyor',
-          `OpenRouter ${model} fiyat yanıtı ayrıştırılamadı; çağrı başlatılmadı.`,
+        throw new BrainRuntimeError(
+          'cost_unknown',
+          `Could not parse the price response for OpenRouter ${model}; no call was started.`,
         );
       }
       const prompt = fiyatOku(veri.data?.pricing?.prompt);
       const completion = fiyatOku(veri.data?.pricing?.completion);
       const request = istekFiyatiOku(veri.data?.pricing?.request);
       if (prompt === undefined || completion === undefined || request === undefined) {
-        throw new BeyinCalismaHatasi(
-          'maliyet_bilinmiyor',
-          `OpenRouter ${model} fiyat bilgisinde prompt veya completion alanı yok ya da request alanı geçersiz; çağrı başlatılmadı.`,
+        throw new BrainRuntimeError(
+          'cost_unknown',
+          `The price info for OpenRouter ${model} has no prompt or completion field, or an invalid request field; no call was started.`,
         );
       }
       return { prompt, completion, request };
@@ -102,7 +102,7 @@ export class OpenRouterBeyni implements Beyin {
 
   async sor<T>(istek: BeyinIstegi): Promise<BeyinYaniti<T>> {
     const anahtar = this.env.OPENROUTER_API_KEY;
-    if (anahtar === undefined || anahtar === '') throw new BeyinHatasi('anahtar_yok');
+    if (anahtar === undefined || anahtar === '') throw new BrainError('key_missing');
     const baslangic = Date.now();
     let sonIstem = istemOlustur(istek);
     let sonHam = '';
@@ -135,7 +135,7 @@ export class OpenRouterBeyni implements Beyin {
             }),
             signal: AbortSignal.timeout((istek.zamanAsimiSn ?? 180) * 1000),
           });
-          if (!cevap.ok) throw new BeyinHatasi('ag');
+          if (!cevap.ok) throw new BrainError('network');
           const veri = await cevap.json() as {
             choices?: Array<{ message?: { content?: unknown } }>;
             usage?: { cost?: unknown };
@@ -149,15 +149,15 @@ export class OpenRouterBeyni implements Beyin {
           // İstek gönderildikten sonraki her hata (zaman aşımı, ağ, HTTP hatası): sağlayıcı faturalamış
           // olabilir, rezervasyon iade edilmez. cagriTamamla zaten kapattıysa bu çağrı etkisizdir.
           this.butce.cagriHarcandi(rezervasyon);
-          if (hata instanceof BeyinHatasi || hata instanceof BeyinCalismaHatasi) throw hata;
-          if (hata instanceof DOMException && hata.name === 'TimeoutError') throw new BeyinHatasi('zaman_asimi');
-          throw new BeyinHatasi('ag');
+          if (hata instanceof BrainError || hata instanceof BrainRuntimeError) throw hata;
+          if (hata instanceof DOMException && hata.name === 'TimeoutError') throw new BrainError('timeout');
+          throw new BrainError('network');
         }
       });
       await beyinGunluguYaz(istek.logDizini, istek.gorev, sonIstem, sonuc.ham, sonuc);
       return { ...sonuc, sureMs: Date.now() - baslangic, adaptor: this.ad };
     } catch (hata) {
-      const gunlukHam = hata instanceof BeyinCalismaHatasi && hata.detay !== undefined ? hata.detay : sonHam;
+      const gunlukHam = hata instanceof BrainRuntimeError && hata.detay !== undefined ? hata.detay : sonHam;
       await beyinGunluguYaz(istek.logDizini, istek.gorev, sonIstem, gunlukHam, sonKullanim);
       throw hata;
     }

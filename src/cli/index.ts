@@ -8,8 +8,8 @@ import { Command, CommanderError, InvalidArgumentError, Option } from 'commander
 import type { BeyinAyari, Kimlik } from '../depo/index.js';
 import { CIKIS } from './cikis.js';
 import { ciktiYaz } from './cikti.js';
-import { GirdiBittiHatasi, gizliSor, yanitBekle } from './gizli-sor.js';
-import { KullanimHatasi, basarisiz, type KomutSonucu } from './komut.js';
+import { InputClosedError, gizliSor, yanitBekle } from './gizli-sor.js';
+import { UsageError, basarisiz, type KomutSonucu } from './komut.js';
 import {
   agentInstall,
   codeGet,
@@ -93,7 +93,7 @@ async function acikSor(soru: string, akislar: CliAkislari): Promise<string> {
     return await yanitBekle(arayuz, akislar.input, soru);
   } catch (hata: unknown) {
     // İstemden sonra gelecek hata mesajı "Username: " ile aynı satıra düşmesin.
-    if (hata instanceof GirdiBittiHatasi) akislar.stderr.write('\n');
+    if (hata instanceof InputClosedError) akislar.stderr.write('\n');
     throw hata;
   } finally {
     arayuz.close();
@@ -104,12 +104,12 @@ async function girisBilgisi(akislar: CliAkislari): Promise<Kimlik> {
   try {
     const kullanici = process.env.KOBAY_LOGIN_USER ?? await acikSor('Username: ', akislar);
     const parola = process.env.KOBAY_LOGIN_PASS ?? await gizliSor('Password: ', akislar.input, akislar.stderr);
-    return { kullanici, parola };
+    return { username: kullanici, password: parola };
   } catch (hata: unknown) {
-    if (!(hata instanceof GirdiBittiHatasi)) throw hata;
-    throw new KullanimHatasi(
-      'Giriş bilgisi sorulamadı: standart girdi kapalı veya yanıt gelmeden bitti.'
-      + ' KOBAY_LOGIN_USER ve KOBAY_LOGIN_PASS ortam değişkenlerini verip komutu yeniden çalıştırın',
+    if (!(hata instanceof InputClosedError)) throw hata;
+    throw new UsageError(
+      'Could not prompt for credentials: standard input is closed or ended before an answer arrived.'
+      + ' Set the KOBAY_LOGIN_USER and KOBAY_LOGIN_PASS environment variables and run the command again',
     );
   }
 }
@@ -236,13 +236,13 @@ export function programOlustur(
     .action(async () => calistir(projectGet({ cwd: cwd() })));
 
   program.command('explore')
-    .description('browses the target app and refreshes the exploration map (.kobay/harita.json)')
+    .description('browses the target app and refreshes the exploration map (.kobay/map.json)')
     .action(async () => calistir(explore({ cwd: cwd() })));
 
   const test = program.command('test').description('generate test plans, create and run tests, and get results or failure bundles');
   const plan = test.command('plan').description('generate and accept test proposals with the brain');
   plan.command('generate')
-    .description('generates test proposals from the exploration map and document (.kobay/plan/onerileri.json)')
+    .description('generates test proposals from the exploration map and document (.kobay/plan/proposals.json)')
     .option('--hint <hint>', 'free-text hint for the brain (for example, "invoice flow only")')
     .action(async (secenekler: { hint?: string }) => calistir(planGenerate({
       cwd: cwd(),
@@ -305,7 +305,7 @@ export function programOlustur(
   const failure = test.command('failure').description('get the evidence bundle for a failed run');
   failure.command('get <id>')
     .description('copies the failure bundle with root cause, evidence files, and trace into a directory')
-    .option('--out <directory>', 'destination directory for the bundle (default: .kobay/failure-out/<id>, refreshed in place)')
+    .option('--out <dir>', 'destination directory for the bundle (default: .kobay/failure-out/<id>, refreshed in place)')
     .action(async (id: string, secenekler: { out?: string }) => calistir(failureGet({
       cwd: cwd(), id, ...(secenekler.out === undefined ? {} : { out: secenekler.out }),
     })));
@@ -336,7 +336,7 @@ export async function main(argv: string[] = process.argv, akislar: CliAkislari =
     return sonKod;
   } catch (hata: unknown) {
     if (hata instanceof CommanderError && hata.exitCode === 0) return CIKIS.GECTI;
-    const sonuc = basarisiz(hata instanceof Error ? hata : new Error('Komut ayrıştırılamadı'), CIKIS.KULLANIM);
+    const sonuc = basarisiz(hata instanceof Error ? hata : new Error('Command could not be parsed'), CIKIS.KULLANIM);
     const json = argv.some((deger, sira) => deger === '--output=json' || (deger === '--output' && argv[sira + 1] === 'json'));
     // Commander kullanım hatasını fırlatmadan ÖNCE kendisi basar (`Command.error()`
     // → configureOutput.writeErr: `error: …` satırı + kullanım yardımı). Hatanın

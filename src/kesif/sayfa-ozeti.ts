@@ -44,16 +44,16 @@ export async function sayfaOzeti(sayfa: Page, koken: string): Promise<Sayfa> {
         const etiket = (id ? form.querySelector(`label[for="${CSS.escape(id)}"]`) : null)
           ?? girdi.closest('label');
         const sonuc: FormAlani = {
-          ad: girdi.getAttribute('name') ?? id ?? '',
-          tip: girdi.getAttribute('type') ?? girdi.tagName.toLowerCase(),
+          name: girdi.getAttribute('name') ?? id ?? '',
+          type: girdi.getAttribute('type') ?? girdi.tagName.toLowerCase(),
         };
         const etiketMetni = etiket?.textContent?.replace(/\s+/g, ' ').trim();
         const placeholder = girdi.getAttribute('placeholder');
-        if (etiketMetni) sonuc.etiket = etiketMetni;
+        if (etiketMetni) sonuc.label = etiketMetni;
         if (placeholder) sonuc.placeholder = placeholder;
         return sonuc;
       });
-      const sonuc: Form = { alanlar };
+      const sonuc: Form = { fields: alanlar };
       const action = form.getAttribute('action');
       if (action) sonuc.action = action;
       return sonuc;
@@ -72,11 +72,11 @@ export async function sayfaOzeti(sayfa: Page, koken: string): Promise<Sayfa> {
 
   return {
     url: normalUrl(sayfa.url()) ?? sayfa.url(),
-    baslik,
-    basliklar,
-    linkler,
-    formlar,
-    dugmeler,
+    title: baslik,
+    headings: basliklar,
+    links: linkler,
+    forms: formlar,
+    buttons: dugmeler,
     menu,
   };
 }

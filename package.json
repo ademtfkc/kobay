@@ -1,6 +1,6 @@
 {
   "name": "kobay",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first AI test engine that explores apps, generates and runs tests, and returns evidence-backed failures.",
   "type": "module",
   "license": "Apache-2.0",
@@ -13,10 +13,26 @@
   "bugs": {
     "url": "https://github.com/ademtfkc/kobay/issues"
   },
-  "keywords": ["ai", "testing", "playwright", "e2e", "cli", "mcp"],
-  "engines": { "node": ">=22.12" },
-  "bin": { "kobay": "dist/cli/index.js" },
-  "files": ["dist/**/*.js", "beceri", "schemas", "test/kobay-demo/sunucu.mjs"],
+  "keywords": [
+    "ai",
+    "testing",
+    "playwright",
+    "e2e",
+    "cli",
+    "mcp"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "bin": {
+    "kobay": "dist/cli/index.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "beceri",
+    "schemas",
+    "test/kobay-demo/sunucu.mjs"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepare": "npm run build",

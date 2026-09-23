@@ -14,10 +14,11 @@ export interface OneriTaslagi {
 }
 
 export interface PlanYaniti {
-  oneriler: OneriTaslagi[];
+  proposals: OneriTaslagi[];
 }
 
 const TURKCE_ANAHTARLAR: Readonly<Record<string, string>> = {
+  oneriler: 'proposals',
   baslik: 'title',
   aciklama: 'description',
   oncelik: 'priority',
@@ -41,8 +42,8 @@ function anahtarlariNormallestir(deger: unknown): unknown {
 export function planYanitiniNormallestir(deger: unknown): unknown {
   if (typeof deger !== 'object' || deger === null || Array.isArray(deger)) return deger;
   const sonuc = anahtarlariNormallestir(deger) as Record<string, unknown>;
-  if (!Array.isArray(sonuc.oneriler)) return sonuc;
-  sonuc.oneriler = sonuc.oneriler.map((oneri) => {
+  if (!Array.isArray(sonuc.proposals)) return sonuc;
+  sonuc.proposals = sonuc.proposals.map((oneri) => {
     const normallesmisOneri = anahtarlariNormallestir(oneri) as Record<string, unknown>;
     if (Array.isArray(normallesmisOneri.steps)) {
       normallesmisOneri.steps = normallesmisOneri.steps.map(anahtarlariNormallestir);
@@ -75,7 +76,7 @@ const OneriTaslagiSemasi: v.GenericSchema<unknown, OneriTaslagi> = v.object({
 export const PlanYanitiSemasi: v.GenericSchema<unknown, PlanYaniti> = v.pipe(
   v.unknown(),
   v.transform(planYanitiniNormallestir),
-  v.object({ oneriler: v.array(OneriTaslagiSemasi) }),
+  v.object({ proposals: v.array(OneriTaslagiSemasi) }),
 );
 
 export interface PlanYenilemeYaniti {
@@ -103,7 +104,7 @@ function yenilemeYanitiniNormallestir(deger: unknown): unknown {
 /**
  * Plan yenileme yanıtının şeması. Adım sayısı şemanın parçasıdır: yanlış sayıda
  * adım gelirse beyin şema hatasıyla bir tur daha denenir, ikinci turda da
- * tutmazsa `BeyinHatasi('sema')` atılır.
+ * tutmazsa `BrainError('schema')` atılır.
  */
 export function planYenilemeYanitiSemasi(adimSayisi: number): v.GenericSchema<unknown, PlanYenilemeYaniti> {
   return v.pipe(

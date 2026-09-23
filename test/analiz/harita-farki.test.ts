@@ -6,11 +6,11 @@ import { domHaritaFarkiOlustur, haritaFarkiHesapla } from '../../src/analiz/inde
 function sayfa(degerler: Partial<Sayfa> = {}): Sayfa {
   return {
     url: 'http://uygulama.test/cariler',
-    baslik: 'Cariler',
-    basliklar: [],
-    linkler: [],
-    formlar: [],
-    dugmeler: [],
+    title: 'Cariler',
+    headings: [],
+    links: [],
+    forms: [],
+    buttons: [],
     menu: [],
     ...degerler,
   };
@@ -37,114 +37,114 @@ describe('haritaFarkiHesapla', () => {
   it('başlık, düğme ve form alanlarını boşlukları normalize ederek karşılaştırır', () => {
     const fark = haritaFarkiHesapla(
       sayfa({
-        basliklar: [' Cariler ', 'Ortak   Başlık'],
-        dugmeler: [' Kaydet '],
-        formlar: [{ alanlar: [
-          { ad: 'eposta', tip: 'email' },
-          { ad: '   ', tip: 'text', etiket: ' Telefon ' },
-          { ad: '', tip: 'text', placeholder: 'Adres' },
+        headings: [' Cariler ', 'Ortak   Başlık'],
+        buttons: [' Kaydet '],
+        forms: [{ fields: [
+          { name: 'eposta', type: 'email' },
+          { name: '   ', type: 'text', label: ' Telefon ' },
+          { name: '', type: 'text', placeholder: 'Adres' },
         ] }],
       }),
       sayfa({
-        basliklar: ['Müşteriler', 'Ortak Başlık'],
-        dugmeler: ['Güncelle'],
-        formlar: [{ alanlar: [
-          { ad: 'eposta', tip: 'email' },
-          { ad: '', tip: 'text', etiket: 'Telefon' },
-          { ad: 'vergiNo', tip: 'text' },
+        headings: ['Müşteriler', 'Ortak Başlık'],
+        buttons: ['Güncelle'],
+        forms: [{ fields: [
+          { name: 'eposta', type: 'email' },
+          { name: '', type: 'text', label: 'Telefon' },
+          { name: 'vergiNo', type: 'text' },
         ] }],
       }),
     );
 
     expect(fark).toEqual({
       url: 'http://uygulama.test/cariler',
-      eklenenBasliklar: ['Müşteriler'],
-      silinenBasliklar: ['Cariler'],
-      eklenenDugmeler: ['Güncelle'],
-      silinenDugmeler: ['Kaydet'],
-      eklenenFormAlanlari: ['vergiNo'],
-      silinenFormAlanlari: ['Adres'],
-      sayfaKimligiUyusuyor: true,
-      degisti: true,
+      addedHeadings: ['Müşteriler'],
+      removedHeadings: ['Cariler'],
+      addedButtons: ['Güncelle'],
+      removedButtons: ['Kaydet'],
+      addedFormFields: ['vergiNo'],
+      removedFormFields: ['Adres'],
+      pageIdentityMatches: true,
+      changed: true,
     });
   });
 
   it('büyük/küçük harf değişimini fark sayar', () => {
-    const fark = haritaFarkiHesapla(sayfa({ basliklar: ['Cariler'] }), sayfa({ basliklar: ['cariler'] }));
+    const fark = haritaFarkiHesapla(sayfa({ headings: ['Cariler'] }), sayfa({ headings: ['cariler'] }));
 
-    expect(fark.silinenBasliklar).toEqual(['Cariler']);
-    expect(fark.eklenenBasliklar).toEqual(['cariler']);
-    expect(fark.degisti).toBe(true);
+    expect(fark.removedHeadings).toEqual(['Cariler']);
+    expect(fark.addedHeadings).toEqual(['cariler']);
+    expect(fark.changed).toBe(true);
   });
 
   it('link ve menü değişimini gürültü olarak yok sayar', () => {
     const fark = haritaFarkiHesapla(
-      sayfa({ linkler: ['/cariler/1'], menu: ['Eski menü'] }),
-      sayfa({ linkler: ['/cariler/2'], menu: ['Yeni menü'] }),
+      sayfa({ links: ['/cariler/1'], menu: ['Eski menü'] }),
+      sayfa({ links: ['/cariler/2'], menu: ['Yeni menü'] }),
     );
 
-    expect(fark.degisti).toBe(false);
+    expect(fark.changed).toBe(false);
   });
 });
 
 describe('sayfa kimliği', () => {
   it('sayfa başlığı uyuşuyorsa tek başlık yeniden adlandırılsa da kimliği korur', () => {
     const fark = haritaFarkiHesapla(
-      sayfa({ baslik: 'Cariler', basliklar: ['Cariler'] }),
-      sayfa({ baslik: ' cariler ', basliklar: ['Müşteriler'] }),
+      sayfa({ title: 'Cariler', headings: ['Cariler'] }),
+      sayfa({ title: ' cariler ', headings: ['Müşteriler'] }),
     );
 
-    expect(fark.sayfaKimligiUyusuyor).toBe(true);
+    expect(fark.pageIdentityMatches).toBe(true);
   });
 
   it('giriş ekranına yönlenince (başlık değişince) kimliği tutmaz', () => {
     const fark = haritaFarkiHesapla(
-      sayfa({ baslik: 'Cariler', basliklar: ['Cariler'], dugmeler: ['Yeni cari'] }),
-      sayfa({ baslik: 'Giriş Yap', basliklar: ['Giriş Yap'], dugmeler: ['Giriş Yap'] }),
+      sayfa({ title: 'Cariler', headings: ['Cariler'], buttons: ['Yeni cari'] }),
+      sayfa({ title: 'Giriş Yap', headings: ['Giriş Yap'], buttons: ['Giriş Yap'] }),
     );
 
-    expect(fark.sayfaKimligiUyusuyor).toBe(false);
-    expect(fark.degisti).toBe(true);
+    expect(fark.pageIdentityMatches).toBe(false);
+    expect(fark.changed).toBe(true);
   });
 
   it('yalnız sayfa title değişimini fark sayar ama aynı sayfa varsaymaz', () => {
     const fark = haritaFarkiHesapla(
-      sayfa({ baslik: 'Cariler', basliklar: ['Cariler'] }),
-      sayfa({ baslik: 'Beklenmeyen sayfa', basliklar: ['Cariler'] }),
+      sayfa({ title: 'Cariler', headings: ['Cariler'] }),
+      sayfa({ title: 'Beklenmeyen sayfa', headings: ['Cariler'] }),
     );
 
-    expect(fark.sayfaKimligiUyusuyor).toBe(false);
-    expect(fark.degisti).toBe(true);
+    expect(fark.pageIdentityMatches).toBe(false);
+    expect(fark.changed).toBe(true);
   });
 
   it('title ile tek görünür başlık birlikte yeniden adlandırılırsa sayfa kimliğini korur', () => {
     const fark = haritaFarkiHesapla(
-      sayfa({ baslik: 'Cariler', basliklar: ['Cariler'] }),
-      sayfa({ baslik: 'Müşteriler', basliklar: ['Müşteriler'] }),
+      sayfa({ title: 'Cariler', headings: ['Cariler'] }),
+      sayfa({ title: 'Müşteriler', headings: ['Müşteriler'] }),
     );
 
-    expect(fark.sayfaKimligiUyusuyor).toBe(true);
-    expect(fark.degisti).toBe(true);
+    expect(fark.pageIdentityMatches).toBe(true);
+    expect(fark.changed).toBe(true);
   });
 
   it('sayfa başlığı okunamıyorsa keşif başlıklarından biri kalmış olmalı', () => {
     const kalan = haritaFarkiHesapla(
-      sayfa({ baslik: '', basliklar: ['Cariler', 'Son işlemler'] }),
-      sayfa({ baslik: '', basliklar: ['Cariler'] }),
+      sayfa({ title: '', headings: ['Cariler', 'Son işlemler'] }),
+      sayfa({ title: '', headings: ['Cariler'] }),
     );
     const kalmayan = haritaFarkiHesapla(
-      sayfa({ baslik: '', basliklar: ['Cariler', 'Son işlemler'] }),
-      sayfa({ baslik: '', basliklar: ['Giriş Yap'] }),
+      sayfa({ title: '', headings: ['Cariler', 'Son işlemler'] }),
+      sayfa({ title: '', headings: ['Giriş Yap'] }),
     );
 
-    expect(kalan.sayfaKimligiUyusuyor).toBe(true);
-    expect(kalmayan.sayfaKimligiUyusuyor).toBe(false);
+    expect(kalan.pageIdentityMatches).toBe(true);
+    expect(kalmayan.pageIdentityMatches).toBe(false);
   });
 
   it('keşifte hiç başlık ve sayfa başlığı yoksa kimliği tutuyor sayar', () => {
-    const fark = haritaFarkiHesapla(sayfa({ baslik: '' }), sayfa({ baslik: '', basliklar: ['Yeni'] }));
+    const fark = haritaFarkiHesapla(sayfa({ title: '' }), sayfa({ title: '', headings: ['Yeni'] }));
 
-    expect(fark.sayfaKimligiUyusuyor).toBe(true);
+    expect(fark.pageIdentityMatches).toBe(true);
   });
 });
 
@@ -158,14 +158,14 @@ describe('domHaritaFarkiOlustur', () => {
       <img src="http://10.255.255.1/y.png">
       <iframe src="http://10.255.255.1/z.html"></iframe>
       <button>Kaydet</button></body></html>`;
-    const kesif = sayfa({ basliklar: ['Cariler'], dugmeler: ['Kaydet'] });
+    const kesif = sayfa({ headings: ['Cariler'], buttons: ['Kaydet'] });
 
     const basladi = Date.now();
     const fark = await domHaritaFarkiOlustur(html, kesif, 'http://uygulama.test');
     const sure = Date.now() - basladi;
 
-    expect(fark.degisti).toBe(false);
-    expect(fark.sayfaKimligiUyusuyor).toBe(true);
+    expect(fark.changed).toBe(false);
+    expect(fark.pageIdentityMatches).toBe(true);
     expect(sure).toBeLessThan(15_000);
   }, 60_000);
 });

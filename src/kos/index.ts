@@ -14,7 +14,7 @@ import { kaliciCalismaAlaniHazirla } from './calisma-alani.js';
 import { testSureciOrtami } from './ortam.js';
 import { raporuAyristir } from './rapor.js';
 
-export { FixtureModuluYok, fixtureYenidenAktarimMetni, kaliciCalismaAlaniHazirla } from './calisma-alani.js';
+export { FixtureModuleMissing, fixtureYenidenAktarimMetni, kaliciCalismaAlaniHazirla } from './calisma-alani.js';
 export { testSureciOrtami } from './ortam.js';
 export { hataMetniniTemizle, raporuAyristir, type PlaywrightRaporSonucu } from './rapor.js';
 
@@ -132,7 +132,7 @@ export async function kostur(
   const specYolu = dizin.kodYolu(test.id);
   if (test.status === 'draft' || !(await dosyaVarMi(specYolu))) {
     const sonuc: KosuSonucu = {
-      ...temel, status: 'unknown', verdict: 'inconclusive', finishedAt: simdi(), errorMessage: 'Test kodu yok',
+      ...temel, status: 'unknown', verdict: 'inconclusive', finishedAt: simdi(), errorMessage: 'No test code',
     };
     const adimlar: AdimSonucu[] = [];
     await kaydet(dizin, test, sonuc, adimlar);
@@ -172,7 +172,7 @@ export async function kostur(
   const calisma = await kosuSureci(specYolu, configYolu, dizin.kok, env, zamanAsimiMs);
   if (calisma.zamanAsimi) {
     const sonuc: KosuSonucu = {
-      ...temel, status: 'failed', verdict: 'failed', failureKind: 'env', finishedAt: simdi(), errorMessage: 'Koşu zaman aşımı',
+      ...temel, status: 'failed', verdict: 'failed', failureKind: 'env', finishedAt: simdi(), errorMessage: 'Run timed out',
     };
     const adimlar: AdimSonucu[] = [];
     await kaydet(dizin, test, sonuc, adimlar);

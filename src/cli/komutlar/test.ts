@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { hataAnalizEt } from '../../analiz/index.js';
 import { beyinOlustur } from '../../beyin/index.js';
 import {
-  DosyaYok,
+  FileNotFound,
   type HaritaFarki,
   type KobayDizini,
   type TestKaydi,
@@ -14,7 +14,7 @@ import { kostur } from '../../kos/index.js';
 import { kodUret } from '../../uret/index.js';
 import { CIKIS, type CikisKodu } from '../cikis.js';
 import {
-  KullanimHatasi,
+  UsageError,
   basarili,
   basariliMetin,
   hataBilgisi,
@@ -41,7 +41,7 @@ export async function testCreate(a: { cwd: string; planPath: string }): Promise<
     try {
       plan = JSON.parse(await readFile(yol, 'utf8')) as unknown;
     } catch (hata: unknown) {
-      if (hata instanceof SyntaxError) throw new KullanimHatasi(`Plan dosyası geçerli JSON değil: ${yol}`);
+      if (hata instanceof SyntaxError) throw new UsageError(`Plan file is not valid JSON: ${yol}`);
       throw hata;
     }
     const test = planDosyasindanTest(plan);
@@ -49,10 +49,10 @@ export async function testCreate(a: { cwd: string; planPath: string }): Promise<
     // İnsan modunda test kaydının tamamı (plan adımları dahil) dökülmez; kimlik,
     // ad ve sayılar yeter. `--output json` aynı kaydı verir.
     return basariliMetin(test, [
-      `Test oluşturuldu: ${test.id}`,
-      `Ad: ${test.name}`,
-      `Adım sayısı: ${test.planSteps.length}, öncelik: ${test.priority}, durum: ${test.status}`,
-      `Sonraki: kobay test run ${test.id}`,
+      `Test created: ${test.id}`,
+      `Name: ${test.name}`,
+      `Steps: ${test.planSteps.length}, priority: ${test.priority}, status: ${test.status}`,
+      `Next: kobay test run ${test.id}`,
     ].join('\n'));
   });
 }
@@ -62,12 +62,15 @@ export async function testList(a: { cwd: string }): Promise<KomutSonucu> {
     const testler = await (await dizinBul(a.cwd)).testListele();
     const satirlar = testler.map((test) => ({
       id: test.id,
-      durum: test.status,
-      oncelik: test.priority,
-      ad: test.name,
+      status: test.status,
+      priority: test.priority,
+      name: test.name,
     }));
     if (satirlar.length === 0) {
-      return basarili(satirlar, 'Test yok; `kobay test plan generate` ile öneri üretip `kobay test plan accept` ile kabul edin');
+      return basarili(
+        satirlar,
+        'No tests; generate proposals with `kobay test plan generate` and accept them with `kobay test plan accept`',
+      );
     }
     return basarili(satirlar);
   });
@@ -86,7 +89,7 @@ export async function codeGet(a: { cwd: string; id: string }): Promise<KomutSonu
     await testOku(dizin, a.id);
     const kod = await dizin.kodOku(a.id);
     if (kod === null) {
-      throw new KullanimHatasi(`Test kodu üretilmemiş: ${a.id}; \`kobay test run ${a.id}\` ile kodu üretin`);
+      throw new UsageError(`Test code has not been generated: ${a.id}; generate it with \`kobay test run ${a.id}\``);
     }
     return basarili(kod);
   });
@@ -98,7 +101,7 @@ export async function testDelete(a: { cwd: string; id: string }): Promise<KomutS
     await testOku(dizin, a.id);
     await dizin.testSil(a.id);
     // İnsan modunda `{"id": ...}` dökümü yerine düz onay satırı; JSON modu aynı.
-    return basariliMetin({ id: a.id }, `Test silindi: ${a.id}`);
+    return basariliMetin({ id: a.id }, `Test deleted: ${a.id}`);
   });
 }
 
@@ -132,16 +135,16 @@ function kosuSatiriMetni(satir: Record<string, unknown>, errorMessage?: string):
   if (typeof satir.failureKind === 'string') metin += ` — ${satir.failureKind}`;
 
   let aciklama: string | undefined;
-  if (typeof satir.hata === 'string') aciklama = satir.hata;
-  else if (typeof satir.hata === 'object' && satir.hata !== null) {
-    const bilgi = satir.hata as { mesaj?: unknown };
-    aciklama = typeof bilgi.mesaj === 'string' ? bilgi.mesaj : JSON.stringify(satir.hata);
+  if (typeof satir.error === 'string') aciklama = satir.error;
+  else if (typeof satir.error === 'object' && satir.error !== null) {
+    const bilgi = satir.error as { message?: unknown };
+    aciklama = typeof bilgi.message === 'string' ? bilgi.message : JSON.stringify(satir.error);
   } else if (verdict === 'inconclusive' && errorMessage !== undefined) {
     aciklama = ilkSatir(errorMessage);
   }
   if (aciklama !== undefined) metin += ` — ${aciklama}`;
 
-  if (verdict === 'failed') metin += `\n  hata paketi: kobay test failure get ${id}`;
+  if (verdict === 'failed') metin += `\n  failure bundle: kobay test failure get ${id}`;
   return metin;
 }
 
@@ -163,7 +166,7 @@ async function eskiKosulariBuda(dizin: KobayDizini, testId: string, runId: strin
     await dizin.kosulariBuda(testId, { korunanlar: [runId] });
   } catch (hata: unknown) {
     const sebep = hata instanceof Error ? hata.message : String(hata);
-    process.stderr.write(`[kobay] Uyarı: eski koşu dizinleri budanamadı (${sebep}).\n`);
+    process.stderr.write(`[kobay] Warning: could not prune old run directories (${sebep}).\n`);
   }
 }
 
@@ -181,15 +184,16 @@ async function tekTestKostur(
         exitCode: CIKIS.MOTOR,
         satir: {
           id: test.id,
-          ad: test.name,
+          name: test.name,
           verdict: 'inconclusive',
-          hata: `Test kodu üretilmemiş; rerun yalnız var olan kodu koşturur. \`kobay test run ${test.id}\` ile üretin`,
+          error: `Test code has not been generated; rerun only runs existing code.`
+            + ` Generate it with \`kobay test run ${test.id}\``,
         },
       };
     }
     if (!rerun && (mevcutKod === null || test.status === 'draft')) {
       const harita = await haritaSagla(dizin);
-      const beyin = beyinOlustur(config.beyin, process.env);
+      const beyin = beyinOlustur(config.brain, process.env);
       const uretim = await kodUret(beyin, test, harita, {
         projeKoku: dizin.projeKoku,
         kobayKoku: dizin.kok,
@@ -215,16 +219,16 @@ async function tekTestKostur(
         exitCode: verdictCikisi('blocked'),
         satir: {
           id: test.id,
-          ad: test.name,
+          name: test.name,
           verdict: 'blocked' as Verdict,
           runId: kosu.sonuc.runId,
-          hata: `Hedef uygulamaya ulaşılamadı: ${config.baseUrl}; uygulamayı başlatıp yeniden koşturun`,
+          error: `Target app is not reachable: ${config.baseUrl}; start the app and run again`,
         },
       };
     }
     let sonKosuSonucu = kosu.sonuc;
     if (kosu.sonuc.verdict === 'failed') {
-      const beyin = beyinOlustur(config.beyin, process.env);
+      const beyin = beyinOlustur(config.brain, process.env);
       const paket = await hataAnalizEt(beyin, dizin, guncelTest, kosu.sonuc, kosu.adimlar, {
         logDizini: dizin.yol('logs'),
       });
@@ -239,7 +243,7 @@ async function tekTestKostur(
       exitCode: verdictCikisi(sonKosuSonucu.verdict),
       satir: {
         id: test.id,
-        ad: test.name,
+        name: test.name,
         verdict: sonKosuSonucu.verdict,
         runId: sonKosuSonucu.runId,
         ...(sonKosuSonucu.failureKind === undefined ? {} : { failureKind: sonKosuSonucu.failureKind }),
@@ -251,7 +255,7 @@ async function tekTestKostur(
     const bilgi = hataBilgisi(hata);
     return {
       exitCode: hataCikisKodu(hata),
-      satir: { id: test.id, ad: test.name, verdict: 'inconclusive', hata: bilgi },
+      satir: { id: test.id, name: test.name, verdict: 'inconclusive', error: bilgi },
     };
   }
 }
@@ -264,11 +268,11 @@ export async function testRun(a: {
 }): Promise<KomutSonucu> {
   return komutCalistir(async () => {
     if (a.all === true && a.ids !== undefined && a.ids.length > 0) {
-      throw new KullanimHatasi('--all ile test kimlikleri birlikte kullanılamaz; ya kimlik verin ya --all kullanın');
+      throw new UsageError('--all cannot be combined with test IDs; either pass IDs or use --all');
     }
     if (a.all !== true && (a.ids === undefined || a.ids.length === 0)) {
-      throw new KullanimHatasi(
-        'En az bir test kimliği veya --all gerekli; kimlikleri `kobay test list` ile görün',
+      throw new UsageError(
+        'At least one test ID or --all is required; list the IDs with `kobay test list`',
       );
     }
     const dizin = await dizinBul(a.cwd);
@@ -276,8 +280,8 @@ export async function testRun(a: {
       ? await dizin.testListele()
       : await Promise.all((a.ids ?? []).map(async (id) => testOku(dizin, id)));
     if (testler.length === 0) {
-      throw new KullanimHatasi(
-        'Koşturulacak test yok; `kobay test plan generate` ile öneri üretip `kobay test plan accept` ile kabul edin',
+      throw new UsageError(
+        'No tests to run; generate proposals with `kobay test plan generate` and accept them with `kobay test plan accept`',
       );
     }
     const sonuclar: Array<Record<string, unknown>> = [];
@@ -308,7 +312,7 @@ export async function testResult(a: { cwd: string; id: string; history?: boolean
     await testOku(dizin, a.id);
     const kosular = await dizin.kosuListele(a.id);
     if (kosular.length === 0) {
-      throw new KullanimHatasi(`Koşu sonucu yok: ${a.id}; önce \`kobay test run ${a.id}\` çalıştırın`);
+      throw new UsageError(`No run result: ${a.id}; run \`kobay test run ${a.id}\` first`);
     }
     return basarili(a.history === true ? kosular : kosular.at(-1));
   });
@@ -324,23 +328,24 @@ export async function failureGet(a: { cwd: string; id: string; out?: string }): 
     try {
       await dizin.hataPaketiKopyala(a.id, hedef);
     } catch (hata: unknown) {
-      if (hata instanceof DosyaYok) {
-        throw new KullanimHatasi(
-          `Hata paketi yok: ${a.id}; paket yalnız düşen koşudan sonra oluşur, önce \`kobay test run ${a.id}\` çalıştırın`,
+      if (hata instanceof FileNotFound) {
+        throw new UsageError(
+          `No failure bundle: ${a.id}; a bundle is created only after a failed run,`
+          + ` so run \`kobay test run ${a.id}\` first`,
         );
       }
       throw hata;
     }
     // İnsan modunda düz metin stdout'a: `kobay test failure get ... > not.txt` yönlendirmesi
     // JSON dökümü değil, okunur satırı almalı.
-    return basariliMetin({ id: a.id, hedef }, `Hata paketi kopyalandı: ${hedef}`);
+    return basariliMetin({ id: a.id, destination: hedef }, `Failure bundle copied: ${hedef}`);
   });
 }
 
 /** Son hata paketindeki harita farkı; paket yok ya da okunamıyorsa bağlam olmadan devam edilir. */
 async function sonHaritaFarki(dizin: KobayDizini, testId: string): Promise<HaritaFarki | undefined> {
   try {
-    return (await dizin.hataPaketiOku(testId)).haritaFarki;
+    return (await dizin.hataPaketiOku(testId)).mapDiff;
   } catch {
     return undefined;
   }
@@ -357,22 +362,22 @@ export async function testRefresh(a: { cwd: string; id: string; run?: boolean })
     const dizin = await dizinBul(a.cwd);
     const test = await testOku(dizin, a.id);
     if (test.url === undefined) {
-      throw new KullanimHatasi(
-        `Testin URL'si yok; yenilenemez: ${a.id}.`
-        + ' Plandan yeni test üretin: `kobay explore` → `kobay test plan generate`',
+      throw new UsageError(
+        `The test has no URL, so it cannot be refreshed: ${a.id}.`
+        + ' Generate a new test from a plan: `kobay explore` → `kobay test plan generate`',
       );
     }
 
     const { yeniSayfa, eskiSayfa } = await sayfaKesfiniYenile(dizin, test.url);
     const [config, haritaFarki] = await Promise.all([dizin.configOku(), sonHaritaFarki(dizin, a.id)]);
-    const beyin = beyinOlustur(config.beyin, process.env);
+    const beyin = beyinOlustur(config.brain, process.env);
     const yeniPlan = await planYenile(
       beyin,
       {
         test,
         eskiSayfa,
         yeniSayfa,
-        ...(haritaFarki === undefined ? {} : { haritaFarki }),
+        ...(haritaFarki === undefined ? {} : { mapDiff: haritaFarki }),
       },
       dizin.yol('logs'),
     );
@@ -390,13 +395,13 @@ export async function testRefresh(a: { cwd: string; id: string; run?: boolean })
 
     const ozet = {
       id: guncelTest.id,
-      ad: guncelTest.name,
-      ...(guncelTest.name === test.name ? {} : { eskiAd: test.name }),
+      name: guncelTest.name,
+      ...(guncelTest.name === test.name ? {} : { previousName: test.name }),
       url: test.url,
-      sayfa: yeniSayfa.url,
-      adimSayisi: guncelTest.planSteps.length,
+      pageUrl: yeniSayfa.url,
+      stepCount: guncelTest.planSteps.length,
       planSteps: guncelTest.planSteps,
-      durum: guncelTest.status,
+      status: guncelTest.status,
       codeVersion: guncelTest.codeVersion,
     };
     const adimSatirlari = guncelTest.planSteps
@@ -405,14 +410,14 @@ export async function testRefresh(a: { cwd: string; id: string; run?: boolean })
     // İnsan modunda özetin JSON dökümü basılmaz; kimlik, sayfa ve yeni adımlar
     // bu metinde durur. `--output json` aynı gövdeyi verir.
     const basMetni = [
-      `Sayfa yenilendi: ${yeniSayfa.url}`,
-      `Test: ${guncelTest.id} — ${guncelTest.name}${guncelTest.name === test.name ? '' : ` (eski: ${test.name})`}`,
-      `Yeni plan (${guncelTest.planSteps.length} adım, durum: ${guncelTest.status}):`,
+      `Page refreshed: ${yeniSayfa.url}`,
+      `Test: ${guncelTest.id} — ${guncelTest.name}${guncelTest.name === test.name ? '' : ` (was: ${test.name})`}`,
+      `New plan (${guncelTest.planSteps.length} step${guncelTest.planSteps.length === 1 ? '' : 's'}, status: ${guncelTest.status}):`,
       adimSatirlari,
     ].join('\n');
 
     if (a.run === false) {
-      return basariliMetin(ozet, `${basMetni}\nKoşu yapılmadı (--no-run); kod \`kobay test run ${a.id}\` ile üretilir`);
+      return basariliMetin(ozet, `${basMetni}\nNot run (--no-run); generate the code with \`kobay test run ${a.id}\``);
     }
 
     const kosu = await testRun({ cwd: a.cwd, ids: [a.id] });
@@ -423,9 +428,9 @@ export async function testRefresh(a: { cwd: string; id: string; run?: boolean })
       exitCode: kosu.exitCode,
       json: {
         ...ozet,
-        durum: kosuSonrasi.status,
+        status: kosuSonrasi.status,
         codeVersion: kosuSonrasi.codeVersion,
-        kosu: satir ?? null,
+        run: satir ?? null,
       },
       // Koşu satırları `test run` ile aynı biçimde; düşen koşuda metin stderr'e gider.
       metin: `${basMetni}\n${kosu.mesaj ?? ''}`,

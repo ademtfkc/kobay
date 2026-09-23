@@ -45,11 +45,11 @@ async function geciciKobay(): Promise<string> {
 function harita(baseUrl: string): Harita {
   return {
     baseUrl,
-    girisYapildi: true,
-    kesifTarihi: '2026-09-17T00:00:00.000Z',
-    sayfalar: [
-      { url: `${baseUrl}/`, baslik: 'Ana Sayfa', basliklar: ['Ana Sayfa'], linkler: [], formlar: [], dugmeler: [], menu: [] },
-      { url: `${baseUrl}/liste`, baslik: 'Liste', basliklar: ['Liste'], linkler: [], formlar: [], dugmeler: [], menu: [] },
+    loggedIn: true,
+    exploredAt: '2026-09-17T00:00:00.000Z',
+    pages: [
+      { url: `${baseUrl}/`, title: 'Ana Sayfa', headings: ['Ana Sayfa'], links: [], forms: [], buttons: [], menu: [] },
+      { url: `${baseUrl}/liste`, title: 'Liste', headings: ['Liste'], links: [], forms: [], buttons: [], menu: [] },
     ],
   };
 }
@@ -93,7 +93,7 @@ function sahteBeyin(kodlar: string[], istemler: string[]): Beyin {
       istemler.push(istek.kullanici);
       const kod = kodlar[Math.min(sira, kodlar.length - 1)];
       sira += 1;
-      return { json: { kod } as T, ham: JSON.stringify({ kod }), sureMs: 0, adaptor: 'test' };
+      return { json: { code: kod } as T, ham: JSON.stringify({ code: kod }), sureMs: 0, adaptor: 'test' };
     },
   };
 }
@@ -102,8 +102,13 @@ describe('kod üretimi', () => {
   it('yanıt iskeletindeki Türkçe anahtarları değişmez ilan eder', () => {
     const istem = sistemIstemi();
 
-    expect(istem).toContain('{"kod": "...", "aciklama": "..."}');
-    expect(istem).toContain('anahtarları şemanın değişmez anahtarlarıdır; bunları çevirme');
+    expect(istem).toContain('{"code": "...", "explanation": "..."}');
+    expect(istem).toContain("The keys code and explanation are the schema's fixed keys; do not translate them");
+    expect(istem).toContain(
+      "Write names, descriptions and rationale in the language of the application's UI and docs;"
+      + ' if mixed or unclear, use English.',
+    );
+    expect(istem).not.toMatch(/[çğıöşüÇĞİÖŞÜ]/);
   });
 
   it('doğru kodu tek denemede üretir ve Playwright ile listeler', async (context) => {
@@ -140,7 +145,7 @@ describe('kod üretimi', () => {
       kobayKoku: kok,
     });
     expect(sonuc.denemeler).toBe(2);
-    expect(istemler[1]).toContain('haritada olmayan');
+    expect(istemler[1]).toContain('not in the map');
   });
 
   it('iki tur da geçersizse hata fırlatır', async (context) => {
@@ -149,7 +154,7 @@ describe('kod üretimi', () => {
     await expect(kodUret(sahteBeyin(['not valid typescript', 'still invalid'], []), testKaydi(), harita('http://ornek.test'), {
       projeKoku: kok,
       kobayKoku: kok,
-    })).rejects.toThrow('Kod üretilemedi');
+    })).rejects.toThrow('Code generation failed');
   });
 });
 
@@ -186,7 +191,7 @@ test('listeyi doğrular', async ({ page }) => {
     expect(statikHata(kod, {
       ...testKaydi(),
       planSteps: [{ type: 'assertion', description: "Sayfa başlığının 'Panel · Analizcim' olduğunu doğrula" }, ...testKaydi().planSteps.slice(1)],
-    }, basitHarita)).toContain('Adım 0');
+    }, basitHarita)).toContain('Step 0');
   });
 });
 
@@ -206,7 +211,7 @@ describe('üretim kodu güvenlik denetimi', () => {
     ['sistem modülü', 'const dosyalar = fs.readFileSync;'],
   ])('%s içeren kodu reddeder', (_ad, ekKod) => {
     const kod = `${dogruKod('http://ornek.test')}\n${ekKod}`;
-    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('hız kesici tarafından reddedildi');
+    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('rejected by the speed bump');
   });
 
   it('dize ve yorum metnindeki yasaklı sözcükleri çalıştırılabilir kod saymaz', () => {
@@ -227,7 +232,7 @@ describe('üretim kodu güvenlik denetimi', () => {
     const hamMetin = `${dogruKod('http://ornek.test')}\nconst baslik = \`process ve fs metni\`;`;
     const ifadeli = `${dogruKod('http://ornek.test')}\nconst baslik = \`sonuç: \${process.cwd()}\`;`;
     expect(statikHata(hamMetin, testKaydi(), basitHarita)).toBeNull();
-    expect(statikHata(ifadeli, testKaydi(), basitHarita)).toContain('process erişimi');
+    expect(statikHata(ifadeli, testKaydi(), basitHarita)).toContain('process access');
   });
 
   it.each([
@@ -236,8 +241,8 @@ describe('üretim kodu güvenlik denetimi', () => {
   ])('Unicode kaçışlı tanımlayıcıyı reddeder: %s', (gizlenmisKod) => {
     const kod = `${dogruKod('http://ornek.test')}\n${gizlenmisKod};`;
     const hata = statikHata(kod, testKaydi(), basitHarita);
-    expect(hata).toContain('Unicode kaçışı');
-    expect(hata).toContain('güvenlik sınırı değildir');
+    expect(hata).toContain('Unicode escapes');
+    expect(hata).toContain('not a security boundary');
   });
 
   it.each([
@@ -246,12 +251,12 @@ describe('üretim kodu güvenlik denetimi', () => {
     ['regex sınıfındaki bölü', String.raw`const r = /[/'"]/; process.exit(1); const s = '"';`],
   ])('regex literal ile gizlenen Unicode kaçışını reddeder: %s', (_ad, gizlenmisKod) => {
     const kod = `${dogruKod('http://ornek.test')}\n${gizlenmisKod}`;
-    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('hız kesici tarafından reddedildi');
+    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('rejected by the speed bump');
   });
 
   it('süslü parantez sonrası belirsiz bölü işaretini reddeder', () => {
     const kod = `${dogruKod('http://ornek.test')}\n${String.raw`const x = function () {} / process.exit(1) / 1;`}`;
-    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('hız kesici tarafından reddedildi');
+    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('rejected by the speed bump');
   });
 
   it('meşru regex ve bölme işlemini kabul eder', () => {
@@ -285,9 +290,9 @@ test('listeyi doğrular', async ({ page }) => {
     await expect(kodUret(sahteBeyin([tehlikeliKod, tehlikeliKod], istemler), testKaydi(), basitHarita, {
       projeKoku: '/tmp/kobay-uret-guvenlik',
       kobayKoku: '/tmp/kobay-uret-guvenlik',
-    })).rejects.toThrow('hız kesici tarafından reddedildi');
+    })).rejects.toThrow('rejected by the speed bump');
 
-    expect(istemler[1]).toContain('güvenlik sınırı değildir');
+    expect(istemler[1]).toContain('not a security boundary');
   });
 });
 
@@ -305,7 +310,7 @@ describe('hız kesici: modül bildirimleri (denetim 3 madde 4a)', () => {
     ['yorum önekli export', `/**/export { x } from './x';`],
   ])('%s reddedilir', (_ad, satir) => {
     const kod = dogruKod('http://ornek.test').replace(`${ilk}\n`, `${ilk}\n${satir}\n`);
-    expect(statikHata(kod, testKaydi(), basitHarita)).toMatch(/hız kesici tarafından reddedildi.*(import|export) bildirimi/);
+    expect(statikHata(kod, testKaydi(), basitHarita)).toMatch(/rejected by the speed bump.*no (import|export) declaration/);
   });
 
   it('izinli satırla aynı satırdaki ikinci bildirimi reddeder', () => {
@@ -321,7 +326,7 @@ describe('hız kesici: modül bildirimleri (denetim 3 madde 4a)', () => {
     ['arguments ile sarmalayıcıya erişim', "arguments[1]('node:child_process');"],
   ])('%s reddedilir', (_ad, ekKod) => {
     const kod = `${dogruKod('http://ornek.test')}\n${ekKod}`;
-    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('hız kesici tarafından reddedildi');
+    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('rejected by the speed bump');
   });
 });
 
@@ -353,7 +358,7 @@ describe('hız kesici: yanlış pozitifler (denetim 3 madde 9)', () => {
     ['serbest __dirname', 'console.log(__dirname);'],
   ])('kaçış kapalı kalır: %s', (_ad, ekKod) => {
     const kod = `${dogruKod('http://ornek.test')}\n${ekKod}`;
-    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('hız kesici tarafından reddedildi');
+    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('rejected by the speed bump');
   });
 
   it.each([
@@ -362,7 +367,7 @@ describe('hız kesici: yanlış pozitifler (denetim 3 madde 9)', () => {
     ['şablon ifadesinde nesneden sonra bölü', 'const s = `${ {a: 1}\n/ 2 / 1 }`;'],
   ])('gerçekten belirsiz bölü hâlâ reddedilir: %s', (_ad, ekKod) => {
     const kod = `${dogruKod('http://ornek.test')}\n${ekKod}`;
-    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('kestirilemedi');
+    expect(statikHata(kod, testKaydi(), basitHarita)).toContain('could not tell whether');
   });
 });
 
@@ -465,7 +470,7 @@ describe('geçici Playwright config', () => {
     }
 
     await expect(readFile(configYolu, 'utf8')).resolves.toBe(ozel);
-    expect(uyarilar.join('')).toContain('reporter satırını elle kaldırın');
+    expect(uyarilar.join('')).toContain('remove the reporter line by hand');
   });
 });
 
@@ -479,10 +484,10 @@ describe('fixture', () => {
     try {
       const girisContext = await tarayici.newContext();
       const girisSayfasi = await girisContext.newPage();
-      await girisSayfasi.goto(`${demo.url}/giris`);
-      await girisSayfasi.getByLabel('Kullanıcı').fill('demo');
-      await girisSayfasi.getByLabel('Parola').fill('demo123');
-      await girisSayfasi.getByRole('button', { name: 'Giriş yap' }).click();
+      await girisSayfasi.goto(`${demo.url}/login`);
+      await girisSayfasi.getByLabel('Username').fill('demo');
+      await girisSayfasi.getByLabel('Password').fill('demo123');
+      await girisSayfasi.getByRole('button', { name: 'Log in' }).click();
       await yazAtomik(stateYolu, `${JSON.stringify(await girisContext.storageState())}\n`);
       await girisContext.close();
     } finally {
@@ -491,15 +496,15 @@ describe('fixture', () => {
 
     const specYolu = join(kok, 'tests', 'fixture.spec.ts');
     await yazAtomik(specYolu, `import { test, expect } from './_fixture';
-test('fixture kanıtları', async ({ page }) => {
-  await test.step('0: Listeye git', async () => {
-    await page.goto('${demo.url}/liste');
-    await page.evaluate(() => console.warn('fixture uyarısı'));
+test('fixture evidence', async ({ page }) => {
+  await test.step('0: Go to the record list', async () => {
+    await page.goto('${demo.url}/records');
+    await page.evaluate(() => console.warn('fixture warning'));
     await page.evaluate(() => fetch('/fixture-yok'));
-    await expect(page.getByRole('heading', { name: 'Kayıt Listesi' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Record List' })).toBeVisible();
   });
-  await test.step('1: İlk kaydı doğrula', async () => {
-    await expect(page.getByText('Birinci kayıt')).toBeVisible();
+  await test.step('1: Verify the first record', async () => {
+    await expect(page.getByText('First record')).toBeVisible();
   });
 });
 `);
@@ -518,7 +523,7 @@ test('fixture kanıtları', async ({ page }) => {
       access(join(kanitDizini, 'network.json')),
     ]);
     const konsol = JSON.parse(await readFile(join(kanitDizini, 'console.json'), 'utf8'));
-    expect(konsol).toContainEqual({ tip: 'warning', metin: 'fixture uyarısı', stepIndex: 0 });
+    expect(konsol).toContainEqual({ tip: 'warning', metin: 'fixture warning', stepIndex: 0 });
     expect(konsol.some((k: { tip: string; metin: string }) => k.tip === 'error' && k.metin.includes('404'))).toBe(true);
     expect(JSON.parse(await readFile(join(kanitDizini, 'network.json'), 'utf8'))).toEqual([
       expect.objectContaining({ method: 'GET', status: 404, stepIndex: 0 }),

@@ -15,7 +15,7 @@ const altSurecCalistir: AltSurecCalistir = (komut, argumanlar) => new Promise((c
   altSurec.once('error', reddet);
   altSurec.once('exit', (kod, sinyal) => {
     if (sinyal !== null) {
-      reddet(new Error(`Playwright kurulumu ${sinyal} sinyaliyle durdu`));
+      reddet(new Error(`Playwright install stopped on signal ${sinyal}`));
       return;
     }
     coz(kod ?? 1);
@@ -32,11 +32,11 @@ export async function installBrowser(a: {
     if (a.withDeps === true) argumanlar.push('--with-deps');
     argumanlar.push('chromium');
     const kod = await (a.calistir ?? altSurecCalistir)(process.execPath, argumanlar);
-    if (kod !== 0) throw new Error(`Chromium kurulumu başarısız oldu (exit ${kod})`);
+    if (kod !== 0) throw new Error(`Chromium install failed (exit ${kod})`);
     // İnsan modunda ham JSON yerine tek onay satırı; JSON modu aynı gövdeyi verir.
     return basariliMetin(
       { browser: 'chromium', withDeps: a.withDeps === true },
-      'Kobay Playwright sürümünün Chromium tarayıcısı kuruldu',
+      'Installed the Chromium browser matching kobay\'s Playwright version',
     );
   });
 }

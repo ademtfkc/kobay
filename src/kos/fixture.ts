@@ -66,7 +66,7 @@ export const test = temel.extend<{ page: Page }>({
         ag.push({
           url: istek.url(),
           method: istek.method(),
-          hata: istek.failure()?.errorText ?? 'Bilinmeyen ağ hatası',
+          hata: istek.failure()?.errorText ?? 'Unknown network error',
           ...adimAlani(aktifStepIndex),
         });
       });

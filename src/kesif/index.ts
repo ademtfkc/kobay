@@ -52,8 +52,8 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
 
     return {
       baseUrl: secenekler.baseUrl,
-      girisYapildi,
-      sayfalar: await gez(sayfa, {
+      loggedIn: girisYapildi,
+      pages: await gez(sayfa, {
         baseUrl: secenekler.baseUrl,
         maxSayfa,
         derinlik,
@@ -63,7 +63,7 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
           ? { ekranGoruntusuDizini: secenekler.ekranGoruntusuDizini }
           : {}),
       }),
-      kesifTarihi: new Date().toISOString(),
+      exploredAt: new Date().toISOString(),
     };
   } finally {
     await context.close();
@@ -74,7 +74,7 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
 export { girisFormuBul } from './giris.js';
 export {
   girisiGonder,
-  KimlikOriginHatasi,
+  CredentialOriginError,
   kimlikOriginDogrula,
   loginUrlDogrula,
   oturumDurumunuYaz,

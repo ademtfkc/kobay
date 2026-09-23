@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { chromium } from '@playwright/test';
 import { yazAtomik, type BeyinAyari } from '../../depo/index.js';
-import { KullanimHatasi, YetkiHatasi, basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
+import { UsageError, PermissionError, basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -38,10 +38,10 @@ export async function setup(a: {
     const adaptor = a.beyin ?? 'claude';
     const env = a.env ?? process.env;
     if ((adaptor === 'claude' || adaptor === 'codex') && !(await komutVarMi(adaptor))) {
-      throw new KullanimHatasi(`${adaptor} PATH içinde bulunamadı; başka bir beyin seçin`);
+      throw new UsageError(`${adaptor} not found on PATH; pick another brain`);
     }
     if (adaptor === 'openrouter' && !env.OPENROUTER_API_KEY) {
-      throw new YetkiHatasi('OPENROUTER_API_KEY tanımlı değil; başka bir beyin seçin veya anahtarı ortamda tanımlayın');
+      throw new PermissionError('OPENROUTER_API_KEY is not set; pick another brain or set the key in the environment');
     }
     const beyin: BeyinAyari = {
       adaptor,
@@ -49,9 +49,9 @@ export async function setup(a: {
       ...(a.effort === undefined ? {} : { effort: a.effort }),
     };
     const yol = join(a.home ?? homedir(), '.kobay', 'config.json');
-    await yazAtomik(yol, `${JSON.stringify({ beyin }, null, 2)}\n`);
+    await yazAtomik(yol, `${JSON.stringify({ brain: beyin }, null, 2)}\n`);
     const chromiumKurulu = await chromiumVarMi();
-    const oneri = chromiumKurulu ? undefined : 'Chromium eksik: `kobay install-browser` çalıştırın';
+    const oneri = chromiumKurulu ? undefined : 'Chromium is missing: run `kobay install-browser`';
     // İnsan modunda ham JSON dökümü yerine özet: ayar dosyası, seçilen beyin ve
     // sonraki komut. JSON modu (`--output json`) aynı gövdeyi verir.
     const ayrinti = [
@@ -59,11 +59,19 @@ export async function setup(a: {
       ...(beyin.effort === undefined ? [] : [`effort: ${beyin.effort}`]),
     ];
     const metin = [
-      `Varsayılan beyin ayarlandı: ${adaptor}${ayrinti.length === 0 ? '' : ` (${ayrinti.join(', ')})`}`,
-      `Ayar dosyası: ${yol}`,
-      chromiumKurulu ? 'Chromium: kurulu' : 'Chromium: eksik; `kobay install-browser` çalıştırın',
-      `Sonraki: ${chromiumKurulu ? 'kobay project create --url <URL>' : 'kobay install-browser'}`,
+      `Default brain set: ${adaptor}${ayrinti.length === 0 ? '' : ` (${ayrinti.join(', ')})`}`,
+      `Config file: ${yol}`,
+      chromiumKurulu ? 'Chromium: installed' : 'Chromium: missing; run `kobay install-browser`',
+      `Next: ${chromiumKurulu ? 'kobay project create --url <URL>' : 'kobay install-browser'}`,
     ].join('\n');
-    return basariliMetin({ yol, beyin, chromiumKurulu, ...(oneri === undefined ? {} : { oneri }) }, metin);
+    return basariliMetin(
+      {
+        path: yol,
+        brain: beyin,
+        chromiumInstalled: chromiumKurulu,
+        ...(oneri === undefined ? {} : { hint: oneri }),
+      },
+      metin,
+    );
   });
 }

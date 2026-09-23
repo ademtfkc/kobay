@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Beyin, BeyinIstegi, BeyinYaniti } from './index.js';
-import { BeyinHatasi } from './index.js';
+import { BrainError } from './index.js';
 import { beyinGunluguYaz, type BeyinButcesi, semaylaSor, istemOlustur } from './ortak.js';
 
 export class SahteBeyin implements Beyin {
@@ -11,7 +11,7 @@ export class SahteBeyin implements Beyin {
 
   async sor<T>(istek: BeyinIstegi): Promise<BeyinYaniti<T>> {
     const dizin = this.env.KOBAY_SAHTE_YANIT_DIZINI;
-    if (dizin === undefined || dizin === '') throw new BeyinHatasi('bos_yanit');
+    if (dizin === undefined || dizin === '') throw new BrainError('empty_response');
     const baslangic = Date.now();
     let sonIstem = istemOlustur(istek);
     let sonHam = '';
@@ -26,7 +26,7 @@ export class SahteBeyin implements Beyin {
         } catch (hata: unknown) {
           this.butce.cagriIptal(rezervasyon);
           if (typeof hata === 'object' && hata !== null && 'code' in hata && hata.code === 'ENOENT') {
-            throw new BeyinHatasi('bos_yanit');
+            throw new BrainError('empty_response');
           }
           throw hata;
         }

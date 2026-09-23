@@ -57,9 +57,9 @@ describe('kesfet', () => {
     await expect(kesfet({
       baseUrl: 'http://uygulama.test',
       loginUrl: 'https://kimlik.test/giris',
-      kimlik: { kullanici: 'demo', parola: 'gizli' },
+      kimlik: { username: 'demo', password: 'gizli' },
       storageStateYolu: join(dizin, 'storage.json'),
-    })).rejects.toThrow('aynı origin');
+    })).rejects.toThrow('same origin as baseUrl');
   });
 
   it('yönlendirme veya form hedefi başka origin ise parolayı oraya göndermez', async (context) => {
@@ -97,11 +97,11 @@ describe('kesfet', () => {
         await expect(kesfet({
           baseUrl: hedefUrl,
           loginUrl,
-          kimlik: { kullanici: 'demo', parola: 'sizmamali-parola', origin: new URL(hedefUrl).origin },
+          kimlik: { username: 'demo', password: 'sizmamali-parola', origin: new URL(hedefUrl).origin },
           storageStateYolu: join(dizin, 'storage.json'),
           maxSayfa: 1,
           sayfaZamanAsimiMs: 5_000,
-        })).rejects.toThrow('farklı origin');
+        })).rejects.toThrow('different origin');
       }
       expect(gelenGovdeler).toEqual([]);
     } finally {
@@ -136,11 +136,11 @@ describe('kesfet', () => {
       for (const origin of ['http://mesru.test', undefined]) {
         await expect(kesfet({
           baseUrl: url,
-          kimlik: { kullanici: 'demo', parola: 'sizmamali-parola', ...(origin === undefined ? {} : { origin }) },
+          kimlik: { username: 'demo', password: 'sizmamali-parola', ...(origin === undefined ? {} : { origin }) },
           storageStateYolu: join(dizin, 'storage.json'),
           maxSayfa: 1,
           sayfaZamanAsimiMs: 5_000,
-        })).rejects.toThrow('parola gönderilmedi');
+        })).rejects.toThrow('the password was not sent');
       }
       expect(istekler.join('\n')).not.toContain('sizmamali-parola');
       expect(istekler.filter((satir) => satir.startsWith('POST'))).toEqual([]);
@@ -155,16 +155,16 @@ describe('kesfet', () => {
     const state = join(dizin, 'storage.json');
     const harita = await kesfet({
       baseUrl: demo.url,
-      loginUrl: `${demo.url}/giris`,
-      kimlik: { kullanici: 'demo', parola: 'demo123', origin: new URL(demo.url).origin },
+      loginUrl: `${demo.url}/login`,
+      kimlik: { username: 'demo', password: 'demo123', origin: new URL(demo.url).origin },
       storageStateYolu: state,
     });
 
-    expect(harita.girisYapildi).toBe(true);
-    expect(harita.sayfalar.map(({ url }) => new URL(url).pathname)).toEqual(['/giris', '/', '/liste', '/yeni']);
-    expect(harita.sayfalar.some(({ url }) => new URL(url).pathname === '/cikis')).toBe(false);
-    expect(harita.sayfalar.find(({ url }) => new URL(url).pathname === '/yeni')?.formlar[0]?.alanlar.map(({ ad }) => ad))
-      .toEqual(['ad', 'tutar']);
+    expect(harita.loggedIn).toBe(true);
+    expect(harita.pages.map(({ url }) => new URL(url).pathname)).toEqual(['/login', '/', '/records', '/new']);
+    expect(harita.pages.some(({ url }) => new URL(url).pathname === '/logout')).toBe(false);
+    expect(harita.pages.find(({ url }) => new URL(url).pathname === '/new')?.forms[0]?.fields.map(({ name }) => name))
+      .toEqual(['name', 'amount']);
     expect((await stat(state)).mode & 0o777).toBe(0o600);
   });
 
@@ -173,9 +173,9 @@ describe('kesfet', () => {
     const dizin = await geciciDizin();
     const harita = await kesfet({ baseUrl: demo.url, storageStateYolu: join(dizin, 'storage.json') });
 
-    expect(harita.girisYapildi).toBe(false);
-    expect(harita.sayfalar).toHaveLength(1);
-    expect(new URL(harita.sayfalar[0]?.url ?? '').pathname).toBe('/giris');
+    expect(harita.loggedIn).toBe(false);
+    expect(harita.pages).toHaveLength(1);
+    expect(new URL(harita.pages[0]?.url ?? '').pathname).toBe('/login');
   });
 
   it('maxSayfa sınırında yalnız bir sayfa döner', async (context) => {
@@ -183,12 +183,12 @@ describe('kesfet', () => {
     const dizin = await geciciDizin();
     const harita = await kesfet({
       baseUrl: demo.url,
-      loginUrl: `${demo.url}/giris`,
-      kimlik: { kullanici: 'demo', parola: 'demo123', origin: new URL(demo.url).origin },
+      loginUrl: `${demo.url}/login`,
+      kimlik: { username: 'demo', password: 'demo123', origin: new URL(demo.url).origin },
       maxSayfa: 1,
       storageStateYolu: join(dizin, 'storage.json'),
     });
-    expect(harita.sayfalar).toHaveLength(1);
+    expect(harita.pages).toHaveLength(1);
   });
 });
 

@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import type { Beyin } from '../beyin/index.js';
 import {
   PlanDosyasiSemasi,
-  SemaHatasi,
+  SchemaError,
   yeniTestId,
   type Harita,
   type Oneri,
@@ -62,7 +62,7 @@ export async function planUret(
   belge: string | undefined,
   ipucu?: string,
   logDizini?: string,
-): Promise<{ oneriler: Oneri[]; dusurulen: Array<{ title: string; sebep: string }> }> {
+): Promise<{ proposals: Oneri[]; dropped: Array<{ title: string; reason: string }> }> {
   const yanit = await beyin.sor<PlanYaniti>({
     gorev: 'plan',
     sistem: PLAN_SISTEM_ISTEMI,
@@ -71,28 +71,28 @@ export async function planUret(
     ...(logDizini === undefined ? {} : { logDizini }),
   });
   const oneriler: Oneri[] = [];
-  const dusurulen: Array<{ title: string; sebep: string }> = [];
+  const dusurulen: Array<{ title: string; reason: string }> = [];
   const kaliplar = haritaYolKaliplari(harita);
 
-  for (const taslak of yanit.json.oneriler) {
+  for (const taslak of yanit.json.proposals) {
     const karar = oneriUrlKarari(taslak.url, harita, kaliplar);
     if (!karar.kabul) {
-      const kalipMetni = karar.kalip === null ? 'kalıp çıkarılamadı' : `kalıp: ${karar.kalip}`;
+      const kalipMetni = karar.kalip === null ? 'no pattern could be derived' : `pattern: ${karar.kalip}`;
       dusurulen.push({
         title: taslak.title,
-        sebep: `URL haritada yok ve yol kalıbı eşleşmedi: ${taslak.url} (${kalipMetni})`,
+        reason: `URL is not in the map and no path pattern matched: ${taslak.url} (${kalipMetni})`,
       });
       continue;
     }
     if (taslak.steps.length < 1 || taslak.steps.length > 200) {
-      dusurulen.push({ title: taslak.title, sebep: `Adım sayısı 1–200 aralığında değil: ${taslak.steps.length}` });
+      dusurulen.push({ title: taslak.title, reason: `Step count is outside the 1-200 range: ${taslak.steps.length}` });
       continue;
     }
     oneriler.push({ ...taslak, proposalId: yeniOneriId() });
   }
 
-  if (oneriler.length === 0) throw new Error('Kullanılabilir öneri üretilemedi');
-  return { oneriler, dusurulen };
+  if (oneriler.length === 0) throw new Error('No usable proposal was produced');
+  return { proposals: oneriler, dropped: dusurulen };
 }
 
 /** Plan önerisini henüz kod üretilmemiş taslak test kaydına dönüştürür. */
@@ -116,7 +116,7 @@ export function oneriyiTesteCevir(oneri: Oneri): TestKaydi {
 /** Elle yazılan plan dosyasını taslak test kaydına dönüştürür. */
 export function planDosyasindanTest(planJson: unknown): TestKaydi {
   const sonuc = v.safeParse(PlanDosyasiSemasi, planJson);
-  if (!sonuc.success) throw new SemaHatasi(semaSorunlariniMetneCevir(sonuc.issues));
+  if (!sonuc.success) throw new SchemaError(semaSorunlariniMetneCevir(sonuc.issues));
   return planDosyasiniTesteCevir(sonuc.output);
 }
 

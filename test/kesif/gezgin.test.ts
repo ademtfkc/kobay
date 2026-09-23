@@ -14,7 +14,7 @@ describe('baglantiIzlenebilir', () => {
   });
 
   it('normal bağlantıyı kabul eder', () => {
-    expect(baglantiIzlenebilir('Yeni Kayıt')).toBe(true);
+    expect(baglantiIzlenebilir('New Record')).toBe(true);
   });
 });
 
@@ -44,7 +44,7 @@ describe('URL kalıbı kotası', () => {
       })),
     } as unknown as Page;
     sayfaOzetiSahte.mockImplementation(async () => ({
-      url: etkinUrl, baslik: '', basliklar: [], linkler: [], formlar: [], dugmeler: [], menu: [],
+      url: etkinUrl, title: '', headings: [], links: [], forms: [], buttons: [], menu: [],
     }));
 
     await gez(sayfa, {

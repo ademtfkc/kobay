@@ -32,8 +32,8 @@ async function girisliHarita(): Promise<{ harita: Harita; storageStateYolu: stri
   const storageStateYolu = join(dizin, 'storage.json');
   const harita = await kesfet({
     baseUrl: demo.url,
-    loginUrl: `${demo.url}/giris`,
-    kimlik: { kullanici: 'demo', parola: 'demo123', origin: new URL(demo.url).origin },
+    loginUrl: `${demo.url}/login`,
+    kimlik: { username: 'demo', password: 'demo123', origin: new URL(demo.url).origin },
     storageStateYolu,
   });
   return { harita, storageStateYolu };
@@ -43,12 +43,12 @@ async function girisliHarita(): Promise<{ harita: Harita; storageStateYolu: stri
 function bayatlat(harita: Harita, yol: string): Harita {
   return {
     ...harita,
-    sayfalar: harita.sayfalar.map((sayfa) => (new URL(sayfa.url).pathname === yol
+    pages: harita.pages.map((sayfa) => (new URL(sayfa.url).pathname === yol
       ? {
         ...sayfa,
-        baslik: 'Cariler',
-        basliklar: ['Cariler'],
-        dugmeler: ['Kaldır'],
+        title: 'Cariler',
+        headings: ['Cariler'],
+        buttons: ['Kaldır'],
       }
       : sayfa)),
   };
@@ -59,40 +59,40 @@ describe('sayfayiYenile', () => {
     const dizin = await mkdtemp(join(tmpdir(), 'kobay-yenile-origin-'));
     await expect(sayfayiYenile({
       baseUrl: 'http://uygulama.test',
-      url: '/liste',
+      url: '/records',
       storageStateYolu: join(dizin, 'storage.json'),
       loginUrl: 'https://kimlik.test/giris',
-      kimlik: { kullanici: 'demo', parola: 'gizli' },
-    })).rejects.toThrow('aynı origin');
+      kimlik: { username: 'demo', password: 'gizli' },
+    })).rejects.toThrow('same origin as baseUrl');
   });
 
   it('tek sayfayı gerçek tarayıcıyla yeniler, haritadaki diğer sayfalara dokunmaz', async (context) => {
     if (!e2eMumkun(context)) return;
     const { harita, storageStateYolu } = await girisliHarita();
-    const bayat = bayatlat(harita, '/liste');
-    const digerleriOnce = bayat.sayfalar
-      .filter((sayfa) => new URL(sayfa.url).pathname !== '/liste')
+    const bayat = bayatlat(harita, '/records');
+    const digerleriOnce = bayat.pages
+      .filter((sayfa) => new URL(sayfa.url).pathname !== '/records')
       .map((sayfa) => JSON.stringify(sayfa));
 
-    const yeniSayfa = await sayfayiYenile({ baseUrl: demo.url, url: '/liste', storageStateYolu });
-    const sonuc = haritadaSayfayiDegistir(bayat, '/liste', yeniSayfa);
+    const yeniSayfa = await sayfayiYenile({ baseUrl: demo.url, url: '/records', storageStateYolu });
+    const sonuc = haritadaSayfayiDegistir(bayat, '/records', yeniSayfa);
 
     expect(sonuc).not.toBeNull();
-    expect(yeniSayfa.baslik).toBe('Kayıt Listesi');
-    expect(yeniSayfa.basliklar).toContain('Kayıt Listesi');
-    expect(yeniSayfa.dugmeler).toContain('Sil');
-    expect(sonuc?.eskiSayfa.baslik).toBe('Cariler');
+    expect(yeniSayfa.title).toBe('Record List');
+    expect(yeniSayfa.headings).toContain('Record List');
+    expect(yeniSayfa.buttons).toContain('Delete');
+    expect(sonuc?.eskiSayfa.title).toBe('Cariler');
 
     const guncel = sonuc?.harita as Harita;
-    expect(guncel.sayfalar).toHaveLength(bayat.sayfalar.length);
-    expect(guncel.sayfalar.map((sayfa) => new URL(sayfa.url).pathname))
-      .toEqual(['/giris', '/', '/liste', '/yeni']);
-    expect(guncel.sayfalar[2]?.baslik).toBe('Kayıt Listesi');
-    expect(guncel.sayfalar
-      .filter((sayfa) => new URL(sayfa.url).pathname !== '/liste')
+    expect(guncel.pages).toHaveLength(bayat.pages.length);
+    expect(guncel.pages.map((sayfa) => new URL(sayfa.url).pathname))
+      .toEqual(['/login', '/', '/records', '/new']);
+    expect(guncel.pages[2]?.title).toBe('Record List');
+    expect(guncel.pages
+      .filter((sayfa) => new URL(sayfa.url).pathname !== '/records')
       .map((sayfa) => JSON.stringify(sayfa))).toEqual(digerleriOnce);
     expect(guncel.baseUrl).toBe(bayat.baseUrl);
-    expect(guncel.girisYapildi).toBe(bayat.girisYapildi);
+    expect(guncel.loggedIn).toBe(bayat.loggedIn);
   });
 
   it('oturum yokken kimlikle yeniden giriş yapıp istenen sayfayı döndürür', async (context) => {
@@ -102,14 +102,14 @@ describe('sayfayiYenile', () => {
 
     const yeniSayfa = await sayfayiYenile({
       baseUrl: demo.url,
-      url: '/liste',
+      url: '/records',
       storageStateYolu,
-      loginUrl: `${demo.url}/giris`,
-      kimlik: { kullanici: 'demo', parola: 'demo123', origin: new URL(demo.url).origin },
+      loginUrl: `${demo.url}/login`,
+      kimlik: { username: 'demo', password: 'demo123', origin: new URL(demo.url).origin },
     });
 
-    expect(new URL(yeniSayfa.url).pathname).toBe('/liste');
-    expect(yeniSayfa.baslik).toBe('Kayıt Listesi');
+    expect(new URL(yeniSayfa.url).pathname).toBe('/records');
+    expect(yeniSayfa.title).toBe('Record List');
   });
 
   it('oturum yok ve kimlik yoksa yanlış sayfanın özetini döndürmez', async (context) => {
@@ -118,42 +118,42 @@ describe('sayfayiYenile', () => {
 
     await expect(sayfayiYenile({
       baseUrl: demo.url,
-      url: '/liste',
+      url: '/records',
       storageStateYolu: join(dizin, 'storage.json'),
-    })).rejects.toThrow(/Sayfa yenilenemedi/);
+    })).rejects.toThrow(/Page could not be refreshed/);
   });
 });
 
 describe('haritadaSayfayiDegistir', () => {
-  const sayfa = (url: string, baslik: string): Sayfa => ({
-    url, baslik, basliklar: [baslik], linkler: [], formlar: [], dugmeler: [], menu: [],
+  const sayfa = (url: string, title: string): Sayfa => ({
+    url, title, headings: [title], links: [], forms: [], buttons: [], menu: [],
   });
   const harita: Harita = {
     baseUrl: 'http://uygulama.test',
-    girisYapildi: true,
-    kesifTarihi: '2026-09-17T00:00:00.000Z',
-    sayfalar: [
+    loggedIn: true,
+    exploredAt: '2026-09-17T00:00:00.000Z',
+    pages: [
       sayfa('http://uygulama.test/', 'Ana'),
       sayfa('http://uygulama.test/cariler', 'Cariler'),
     ],
   };
 
   it('göreli URL’yi yol eşleşmesiyle bulur', () => {
-    expect(haritadaSayfaBul(harita, '/cariler')?.baslik).toBe('Cariler');
-    expect(haritadaSayfaBul(harita, 'http://uygulama.test/cariler')?.baslik).toBe('Cariler');
+    expect(haritadaSayfaBul(harita, '/cariler')?.title).toBe('Cariler');
+    expect(haritadaSayfaBul(harita, 'http://uygulama.test/cariler')?.title).toBe('Cariler');
   });
 
   it('haritada olmayan sayfa için null döner ve haritayı değiştirmez', () => {
     expect(haritadaSayfaBul(harita, '/faturalar')).toBeNull();
     expect(haritadaSayfayiDegistir(harita, '/faturalar', sayfa('http://uygulama.test/faturalar', 'Faturalar')))
       .toBeNull();
-    expect(harita.sayfalar).toHaveLength(2);
+    expect(harita.pages).toHaveLength(2);
   });
 
-  it('değiştirilen haritayı yeni nesne olarak döndürür, kesifTarihi’ni günceller', () => {
+  it('değiştirilen haritayı yeni nesne olarak döndürür, exploredAt’ni günceller', () => {
     const sonuc = haritadaSayfayiDegistir(harita, '/cariler', sayfa('http://uygulama.test/cariler', 'Müşteriler'));
-    expect(sonuc?.harita.sayfalar[1]?.baslik).toBe('Müşteriler');
-    expect(sonuc?.harita.kesifTarihi).not.toBe(harita.kesifTarihi);
-    expect(harita.sayfalar[1]?.baslik).toBe('Cariler');
+    expect(sonuc?.harita.pages[1]?.title).toBe('Müşteriler');
+    expect(sonuc?.harita.exploredAt).not.toBe(harita.exploredAt);
+    expect(harita.pages[1]?.title).toBe('Cariler');
   });
 });

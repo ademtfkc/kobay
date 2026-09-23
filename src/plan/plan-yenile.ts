@@ -9,7 +9,7 @@ export interface PlanYenilemeBaglami {
   eskiSayfa?: Sayfa;
   yeniSayfa: Sayfa;
   /** Son hata paketindeki harita farkı; varsa yeniden adlandırmayı doğrudan gösterir. */
-  haritaFarki?: HaritaFarki;
+  mapDiff?: HaritaFarki;
 }
 
 export interface PlanYenilemeSonucu {
@@ -28,7 +28,7 @@ export async function planYenile(
   logDizini?: string,
 ): Promise<PlanYenilemeSonucu> {
   const adimSayisi = baglam.test.planSteps.length;
-  if (adimSayisi === 0) throw new Error(`Testin plan adımı yok; yenilenemez: ${baglam.test.id}`);
+  if (adimSayisi === 0) throw new Error(`The test has no plan steps, so it cannot be refreshed: ${baglam.test.id}`);
 
   const yanit = await beyin.sor<PlanYenilemeYaniti>({
     gorev: `plan-yenile-${baglam.test.id}`,
@@ -37,7 +37,7 @@ export async function planYenile(
       test: { name: baglam.test.name, planSteps: baglam.test.planSteps },
       yeniSayfa: baglam.yeniSayfa,
       ...(baglam.eskiSayfa === undefined ? {} : { eskiSayfa: baglam.eskiSayfa }),
-      ...(baglam.haritaFarki === undefined ? {} : { haritaFarki: baglam.haritaFarki }),
+      ...(baglam.mapDiff === undefined ? {} : { mapDiff: baglam.mapDiff }),
     }),
     sema: planYenilemeYanitiSemasi(adimSayisi),
     ...(logDizini === undefined ? {} : { logDizini }),

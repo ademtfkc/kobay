@@ -5,7 +5,7 @@ import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
 import { KobayDizini, SAKLANAN_KOSU, yazAtomik, type PlanAdimi, type TestKaydi } from '../../src/depo/index.js';
 import {
-  FixtureModuluYok,
+  FixtureModuleMissing,
   fixtureYenidenAktarimMetni,
   hedefAyaktaMi,
   kaliciCalismaAlaniHazirla,
@@ -42,22 +42,22 @@ async function geciciDizin(baseUrl: string): Promise<KobayDizini> {
 
 function testKaydi(id: string, planSteps: PlanAdimi[], status: TestKaydi['status'] = 'ready'): TestKaydi {
   return {
-    id, name: 'giriş ekranını doğrular', type: 'frontend', createdFrom: 'cli', status, planSteps, priority: 'p1', codeVersion: 1,
+    id, name: 'verifies the login screen', type: 'frontend', createdFrom: 'cli', status, planSteps, priority: 'p1', codeVersion: 1,
     createdAt: '2026-09-17T00:00:00.000Z', updatedAt: '2026-09-17T00:00:00.000Z',
   };
 }
 
 function kod(baseUrl: string, hatali = false, ucuncuAdim = false): string {
   return `import { test, expect } from './_fixture';
-test('giriş ekranını doğrular', async ({ page }) => {
-  await test.step('0: Giriş sayfasını aç', async () => {
-    await page.goto('${baseUrl}/giris');
+test('verifies the login screen', async ({ page }) => {
+  await test.step('0: Open the login page', async () => {
+    await page.goto('${baseUrl}/login');
   });
-  await test.step('1: Giriş başlığını gör', async () => {
-    await expect(page.getByRole('heading', { name: '${hatali ? 'Yanlış başlık' : 'Giriş'}' })).toBeVisible();
+  await test.step('1: See the login heading', async () => {
+    await expect(page.getByRole('heading', { name: '${hatali ? 'Wrong heading' : 'Login'}' })).toBeVisible();
   });
-  ${ucuncuAdim ? `await test.step('2: Ulaşılmaması gereken adım', async () => {
-    await expect(page.getByRole('button', { name: 'Giriş yap' })).toBeVisible();
+  ${ucuncuAdim ? `await test.step('2: Step that must never be reached', async () => {
+    await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
   });` : ''}
 });
 `;
@@ -134,7 +134,7 @@ describe('raporuAyristir — sahte yeşil koruması', () => {
       [{ type: 'action', description: 'Sayfayı aç' }],
       kok,
     );
-    expect(sonuc.motorHatasi).toContain('hiç test koşmadı');
+    expect(sonuc.motorHatasi).toContain('ran no tests');
   });
 
   it('test geçti görünse bile hiçbir adım koşmadıysa motor hatası bildirir', async () => {
@@ -149,7 +149,7 @@ describe('raporuAyristir — sahte yeşil koruması', () => {
       kok,
     );
     expect(sonuc.adimlar[0]).toMatchObject({ status: 'skipped' });
-    expect(sonuc.motorHatasi).toContain('hiçbir adımın koştuğunu göstermiyor');
+    expect(sonuc.motorHatasi).toContain('does not show a single step running');
   });
 
   it('gerçekten koşan rapora motor hatası uydurmaz', async () => {
@@ -196,9 +196,9 @@ describe('kaliciCalismaAlaniHazirla', () => {
   it('paketin fixture modülü yoksa açık hata atar ve fixture yazmaz', async () => {
     const kok = await mkdtemp(join(tmpdir(), 'kobay-calisma-alani-'));
     const sahtePaket = await mkdtemp(join(tmpdir(), 'kobay-sahte-paket-'));
-    await expect(fixtureYenidenAktarimMetni(sahtePaket)).rejects.toThrow(FixtureModuluYok);
+    await expect(fixtureYenidenAktarimMetni(sahtePaket)).rejects.toThrow(FixtureModuleMissing);
     await expect(fixtureYenidenAktarimMetni(sahtePaket)).rejects.toThrow(/npm run build/);
-    await expect(kaliciCalismaAlaniHazirla(kok, sahtePaket)).rejects.toThrow(FixtureModuluYok);
+    await expect(kaliciCalismaAlaniHazirla(kok, sahtePaket)).rejects.toThrow(FixtureModuleMissing);
     await expect(access(join(kok, 'tests', '_fixture.ts'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -247,16 +247,16 @@ describe('kostur', () => {
     const test = testKaydi('t_abcd1234', [], 'draft');
     await dizin.testYaz(test);
     const { sonuc } = await kostur(dizin, test, { baseUrl: 'data:text/plain,ok' });
-    expect(sonuc).toMatchObject({ verdict: 'inconclusive', errorMessage: 'Test kodu yok' });
+    expect(sonuc).toMatchObject({ verdict: 'inconclusive', errorMessage: 'No test code' });
   });
 
   it('geçen testin üç adımını, kanıtlarını ve trace dosyasını kaydeder', async (context) => {
     if (!playwrightMumkun(context) || demo === undefined) return;
     const dizin = await geciciDizin(demo.url);
     const test = testKaydi('t_abcd1234', [
-      { type: 'action', description: 'Giriş sayfasını aç' },
-      { type: 'assertion', description: 'Giriş başlığını gör' },
-      { type: 'assertion', description: 'Giriş düğmesini gör' },
+      { type: 'action', description: 'Open the login page' },
+      { type: 'assertion', description: 'See the login heading' },
+      { type: 'assertion', description: 'See the login button' },
     ]);
     await Promise.all([dizin.testYaz(test), dizin.kodYaz(test.id, kod(demo.url, false, true))]);
     const { sonuc, adimlar } = await kostur(dizin, test, { baseUrl: demo.url, testZamanAsimiMs: 10_000 });
@@ -271,8 +271,8 @@ describe('kostur', () => {
     if (!playwrightMumkun(context) || demo === undefined) return;
     const dizin = await geciciDizin(demo.url);
     const test = testKaydi('t_abcd1234', [
-      { type: 'action', description: 'Giriş sayfasını aç' },
-      { type: 'assertion', description: 'Giriş başlığını gör' },
+      { type: 'action', description: 'Open the login page' },
+      { type: 'assertion', description: 'See the login heading' },
       { type: 'assertion', description: 'Ulaşılmaması gereken adım' },
     ]);
     await Promise.all([dizin.testYaz(test), dizin.kodYaz(test.id, kod(demo.url, true, true))]);
@@ -287,8 +287,8 @@ describe('kostur', () => {
     if (!playwrightMumkun(context) || demo === undefined) return;
     const dizin = await geciciDizin(demo.url);
     const test = testKaydi('t_abcd1234', [
-      { type: 'action', description: 'Giriş sayfasını aç' },
-      { type: 'assertion', description: 'Giriş başlığını gör' },
+      { type: 'action', description: 'Open the login page' },
+      { type: 'assertion', description: 'See the login heading' },
     ]);
     await Promise.all([dizin.testYaz(test), dizin.kodYaz(test.id, kod(demo.url))]);
     // Eski kurulumdan kalan yol: ayrı bir @playwright/test kopyası yüklenir, hiç test koşmaz.
@@ -304,7 +304,7 @@ describe('kostur', () => {
 
   it('çalışma alanı hazırlanamazsa tarayıcı açmadan inconclusive döner', async () => {
     const dizin = await geciciDizin('data:text/plain,ok');
-    const test = testKaydi('t_abcd1234', [{ type: 'action', description: 'Giriş sayfasını aç' }]);
+    const test = testKaydi('t_abcd1234', [{ type: 'action', description: 'Open the login page' }]);
     await Promise.all([dizin.testYaz(test), dizin.kodYaz(test.id, kod('http://ornek.test'))]);
     // Fixture yoluna dizin koyarak hazırlığı bozuyoruz: koşu Playwright'ı hiç çağıramamalı.
     await mkdir(join(dizin.kok, 'tests', '_fixture.ts'), { recursive: true });
@@ -318,8 +318,8 @@ describe('kostur', () => {
     if (!playwrightMumkun(context) || demo === undefined) return;
     const dizin = await geciciDizin(demo.url);
     const test = testKaydi('t_abcd1234', [
-      { type: 'action', description: 'Giriş sayfasını aç' },
-      { type: 'assertion', description: 'Giriş başlığını gör' },
+      { type: 'action', description: 'Open the login page' },
+      { type: 'assertion', description: 'See the login heading' },
     ]);
     // Spec hiç test tanımlamıyor: Playwright "No tests found" der, rapor sıfır istatistikle döner.
     await Promise.all([dizin.testYaz(test), dizin.kodYaz(test.id, "import { test, expect } from './_fixture';\nvoid test; void expect;\n")]);
@@ -358,10 +358,10 @@ describe('kostur sır yalıtımı', () => {
     try {
       const baglam = await tarayici.newContext();
       const sayfa = await baglam.newPage();
-      await sayfa.goto(`${demo.url}/giris`);
-      await sayfa.getByLabel('Kullanıcı').fill('demo');
-      await sayfa.getByLabel('Parola').fill('demo123');
-      await sayfa.getByRole('button', { name: 'Giriş yap' }).click();
+      await sayfa.goto(`${demo.url}/login`);
+      await sayfa.getByLabel('Username').fill('demo');
+      await sayfa.getByLabel('Password').fill('demo123');
+      await sayfa.getByRole('button', { name: 'Log in' }).click();
       await sayfa.waitForURL(`${demo.url}/`);
       await dizin.storageStateYaz(JSON.stringify(await baglam.storageState()));
     } finally {
@@ -369,20 +369,20 @@ describe('kostur sır yalıtımı', () => {
     }
 
     const test = testKaydi('t_5e1f0a11', [
-      { type: 'action', description: 'Panele git' },
-      { type: 'assertion', description: 'Panel başlığını gör' },
+      { type: 'action', description: 'Go to the dashboard' },
+      { type: 'assertion', description: 'See the dashboard heading' },
     ]);
     const ortamDosyasi = join(dizin.kok, 'sizan-ortam.json');
     // Hız kesicinin aşıldığını varsayan kod: modül düzeyinde ve test içinde ortamı diske döker.
     const sizdiran = `import { test, expect } from './_fixture';
 import { writeFileSync } from 'node:fs';
 writeFileSync(${JSON.stringify(`${ortamDosyasi}.modul`)}, JSON.stringify(process.env));
-test('giriş ekranını doğrular', async ({ page }) => {
-  await test.step('0: Panele git', async () => {
+test('verifies the login screen', async ({ page }) => {
+  await test.step('0: Go to the dashboard', async () => {
     await page.goto('${demo.url}/');
   });
-  await test.step('1: Panel başlığını gör', async () => {
-    await expect(page.getByRole('heading', { name: 'Kontrol Paneli' })).toBeVisible();
+  await test.step('1: See the dashboard heading', async () => {
+    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
     writeFileSync(${JSON.stringify(ortamDosyasi)}, JSON.stringify(process.env));
   });
 });

@@ -86,15 +86,15 @@ function motorHatasiBul(rapor: unknown, sonucKayitlari: BilinmeyenKayit[]): stri
   const hatalar = Array.isArray(kok.errors) ? kok.errors : [];
   if (hatalar.length > 0) {
     return hatalar.map(hataMetni).find((metin) => metin !== undefined)
-      ?? 'Playwright rapora hata yazdı ama mesajı okunamadı.';
+      ?? 'Playwright wrote an error into the report but its message could not be read.';
   }
   const istatistik = kayitMi(kok.stats) ? kok.stats : undefined;
-  if (istatistik === undefined) return 'Playwright raporunda stats yok; koşu doğrulanamadı.';
+  if (istatistik === undefined) return 'The Playwright report has no stats; the run could not be verified.';
   const kosan = sayi(istatistik.expected) + sayi(istatistik.unexpected) + sayi(istatistik.flaky);
   if (kosan === 0) {
-    return `Playwright hiç test koşmadı (expected ${sayi(istatistik.expected)}, unexpected ${sayi(istatistik.unexpected)}, flaky ${sayi(istatistik.flaky)}, skipped ${sayi(istatistik.skipped)}).`;
+    return `Playwright ran no tests (expected ${sayi(istatistik.expected)}, unexpected ${sayi(istatistik.unexpected)}, flaky ${sayi(istatistik.flaky)}, skipped ${sayi(istatistik.skipped)}).`;
   }
-  if (sonucKayitlari.length === 0) return 'Playwright raporunda test sonucu yok; koşu doğrulanamadı.';
+  if (sonucKayitlari.length === 0) return 'The Playwright report has no test results; the run could not be verified.';
   return undefined;
 }
 
@@ -147,7 +147,7 @@ export async function raporuAyristir(
   const yesilGorunuyor = !testBasarisiz && testHatasi === undefined;
   const motorHatasi = motorHatasiBul(rapor, sonucKayitlari)
     ?? (yesilGorunuyor && hicAdimKosmadi
-      ? 'Rapor hiçbir adımın koştuğunu göstermiyor; koşu doğrulanamadı.'
+      ? 'The report does not show a single step running; the run could not be verified.'
       : undefined);
 
   return {

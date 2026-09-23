@@ -125,7 +125,7 @@ describe('MCP isError yalnız gerçek araç hatalarında', () => {
     try {
       const sonuc = await baglanti.istemci.callTool({ name: 'test_run', arguments: { ids: ['t_yok12345'] } });
       expect(sonuc.isError).toBe(true);
-      expect(JSON.stringify(govde(sonuc))).toContain('Test bulunamadı');
+      expect(JSON.stringify(govde(sonuc))).toContain('Test not found');
     } finally {
       await baglanti.kapat();
     }

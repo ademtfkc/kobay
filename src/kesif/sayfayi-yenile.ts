@@ -70,7 +70,7 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
 
     const gelenYol = new URL(sayfa.url()).pathname;
     if (gelenYol !== beklenenYol) {
-      throw new Error(`Sayfa yenilenemedi: ${beklenenYol} istendi, ${gelenYol} geldi (oturum düşmüş olabilir)`);
+      throw new Error(`Page could not be refreshed: asked for ${beklenenYol}, got ${gelenYol} (the session may have expired)`);
     }
     return await sayfaOzeti(sayfa, new URL(secenekler.baseUrl).origin);
   } finally {
@@ -83,12 +83,12 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
 function sayfaSirasi(harita: Harita, istenenUrl: string): number {
   const istenenYol = urlYolu(istenenUrl, harita.baseUrl);
   if (istenenYol === null) return -1;
-  return harita.sayfalar.findIndex((sayfa) => urlYolu(sayfa.url, harita.baseUrl) === istenenYol);
+  return harita.pages.findIndex((sayfa) => urlYolu(sayfa.url, harita.baseUrl) === istenenYol);
 }
 
 /** Haritadaki sayfayı yol eşleşmesiyle bulur; yoksa null. Tarayıcı gerekmez. */
 export function haritadaSayfaBul(harita: Harita, istenenUrl: string): Sayfa | null {
-  return harita.sayfalar[sayfaSirasi(harita, istenenUrl)] ?? null;
+  return harita.pages[sayfaSirasi(harita, istenenUrl)] ?? null;
 }
 
 /**
@@ -102,13 +102,13 @@ export function haritadaSayfayiDegistir(
   yeniSayfa: Sayfa,
 ): { harita: Harita; eskiSayfa: Sayfa } | null {
   const sira = sayfaSirasi(harita, istenenUrl);
-  const eskiSayfa = harita.sayfalar[sira];
+  const eskiSayfa = harita.pages[sira];
   if (sira < 0 || eskiSayfa === undefined) return null;
 
-  const sayfalar = [...harita.sayfalar];
+  const sayfalar = [...harita.pages];
   sayfalar[sira] = yeniSayfa;
   return {
-    harita: { ...harita, sayfalar, kesifTarihi: new Date().toISOString() },
+    harita: { ...harita, pages: sayfalar, exploredAt: new Date().toISOString() },
     eskiSayfa,
   };
 }

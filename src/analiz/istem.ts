@@ -1,5 +1,9 @@
 import type { AdimSonucu, HaritaFarki, TestKaydi } from '../depo/index.js';
 
+/** Beynin serbest metin alanlarını hangi dilde yazacağını söyleyen ortak cümle. */
+export const DIL_KURALI = 'Write names, descriptions and rationale in the language of the '
+  + "application's UI and docs; if mixed or unclear, use English.";
+
 export interface AnalizIstemBaglami {
   dusenAdim: AdimSonucu;
   hataMetni: string;
@@ -9,31 +13,32 @@ export interface AnalizIstemBaglami {
   agHatalari: Array<{ url: string; method: string; status?: number; hata?: string; stepIndex?: number }>;
   kod: string;
   test: TestKaydi;
-  haritaFarki?: HaritaFarki;
+  mapDiff?: HaritaFarki;
 }
 
 export function analizSistemIstemiOlustur(): string {
-  return `Sen tarayıcı testi başarısızlıklarında kök neden analistisin. Yalnızca verilen kanıta dayan; JSON şemasına eksiksiz uy.
+  return `You are a root cause analyst for browser test failures. Rely only on the evidence given; follow the JSON schema exactly.
 
-Yalnız şu tam JSON iskeletine uyan bir nesne döndür:
+Return only an object matching this exact JSON skeleton:
 {"rootCauseHypothesis":"...","failureKind":"test_bug","recommendedFixTarget":{"kind":"selector","reference":"...","rationale":"..."},"evidence":[{"kind":"snapshot","stepIndex":0,"summary":"..."}]}
 
-rootCauseHypothesis, failureKind, recommendedFixTarget, kind, reference, rationale, evidence, stepIndex ve summary anahtarları İngilizce ve değişmezdir; bunları çevirme. Türkçe yalnız metin değerlerinde kalabilir.
-failureKind yalnız product_bug, product_changed, test_bug, env, flaky veya unknown olabilir.
-Metin değerlerinde Kobay'ın iç JSON alan adlarını (ör. sayfaKimligiUyusuyor, degisti, eklenenBasliklar) kullanma; bulguyu kullanıcı dilinde açıkla.
+The keys rootCauseHypothesis, failureKind, recommendedFixTarget, kind, reference, rationale, evidence, stepIndex and summary are English and fixed; do not translate them. Only the text values may be in another language.
+${DIL_KURALI}
+failureKind can only be product_bug, product_changed, test_bug, env, flaky or unknown.
+Do not use Kobay's internal JSON field names (for example pageIdentityMatches, changed, addedHeadings) in the text values; explain the finding in plain words.
 
-failureKind kuralları:
-- Testin aradığı öğe keşif haritasında varken güncel DOM'da yoksa ve yerine benzer işi yapan yeni bir öğe gelmişse (yeniden adlandırma; silinen başlık/düğmenin karşısında eklenen bir başlık/düğme var): product_changed; recommendedFixTarget.kind: code. reference sayfa URL'sini ve eski → yeni öğeyi göstermeli. rationale keşfin bayatladığını, keşfin yenilenip testin yeniden üretilmesi gerektiğini söylemeli. Bunu test_bug ile karıştırma.
-- Öğe silinmiş ve yerine bir şey gelmemişse (fark bloğunda silinen var, eklenen yok) bu product_changed DEĞİLDİR: ürün yanlışlıkla bozulmuş olabilir, product_bug düşün.
-- Keşif haritasıyla fark bloğunda sayfaKimligiUyusuyor false ise sayfa artık keşifteki sayfa değildir (oturum düşmüş, giriş ekranına yönlenmiş olabilir): product_changed deme; env ya da unknown düşün.
-- Seçici bulunamadı ve DOM'da benzer öğe varsa: test_bug; recommendedFixTarget.kind: selector. reference test kodundaki satırı veya seçiciyi göstermeli.
-- Hedef 5xx, ağ hatası ya da zaman aşımı ise: env; recommendedFixTarget.kind: env.
-- Öğe DOM'da var ama assertion metni uyuşmuyorsa: product_bug; recommendedFixTarget.kind: code. reference sayfa URL'sini ve ilgili öğeyi tarif etmeli.
-- recommendedFixTarget.kind code ve failureKind product_bug ise rationale, kaynak dosyayı bulmak için ürün kodunda hata mesajındaki beklenmeyen Received değerini/metnini arama ipucu vermeli.
-- Kanıt yeterli değilse: unknown; recommendedFixTarget.kind: unknown.
+failureKind rules:
+- If the element the test looks for exists in the exploration map but not in the current DOM, and a new element doing a similar job took its place (a rename; an added heading/button facing a removed heading/button): product_changed; recommendedFixTarget.kind: code. reference must show the page URL and the old → new element. rationale must say that the exploration went stale and that exploration has to be refreshed and the test regenerated. Do not confuse this with test_bug.
+- If the element was removed and nothing replaced it (the diff block has removals but no additions) this is NOT product_changed: the product may have been broken by accident, consider product_bug.
+- If pageIdentityMatches is false in the diff block against the exploration map, the page is no longer the page from the exploration (the session may have dropped, it may have been redirected to the login screen): do not say product_changed; consider env or unknown.
+- Selector not found and a similar element exists in the DOM: test_bug; recommendedFixTarget.kind: selector. reference must show the line or the selector in the test code.
+- If the target returned 5xx, a network error or a timeout: env; recommendedFixTarget.kind: env.
+- If the element is in the DOM but the assertion text does not match: product_bug; recommendedFixTarget.kind: code. reference must describe the page URL and the element involved.
+- When recommendedFixTarget.kind is code and failureKind is product_bug, rationale must hint at searching the product code for the unexpected Received value/text from the error message in order to find the source file.
+- If the evidence is not enough: unknown; recommendedFixTarget.kind: unknown.
 
-evidence en fazla 6 madde olsun. Her madde yalnız kind, stepIndex ve kısa summary içersin; dosya yolu yazma.
-evidence.kind yalnız screenshot, snapshot, console, network veya log olabilir; dom, diff, error gibi başka değer kullanma (DOM gözlemi için snapshot, hata metni için log, harita farkı için snapshot).`;
+evidence must have at most 6 items. Every item must carry only kind, stepIndex and a short summary; do not write file paths.
+evidence.kind can only be screenshot, snapshot, console, network or log; do not use other values such as dom, diff or error (use snapshot for a DOM observation, log for an error message, snapshot for a map diff).`;
 }
 
 function jsonBlok(baslik: string, veri: unknown): string {
@@ -43,23 +48,33 @@ function jsonBlok(baslik: string, veri: unknown): string {
 /** Beyne taşınacak hata bağlamını kurar; konsol ve ağ kayıtlarını 20'şer adetle sınırlar. */
 export function analizKullaniciIstemiOlustur(baglam: AnalizIstemBaglami): string {
   return [
-    '# Başarısız test analizi',
-    jsonBlok('Test', { id: baglam.test.id, ad: baglam.test.name, url: baglam.test.url ?? null }),
-    jsonBlok('Düşen adım', baglam.dusenAdim),
-    `## Hata metni\n${baglam.hataMetni}`,
-    jsonBlok('Ekran görüntüsü', baglam.ekranGoruntusu),
-    `## Temizlenmiş DOM\n${baglam.dom ?? '[DOM dosyası yok]'}`,
-    baglam.haritaFarki === undefined
-      ? '## Keşif haritasıyla fark\n[harita farkı yok]'
+    '# Failed test analysis',
+    jsonBlok('Test', { id: baglam.test.id, name: baglam.test.name, url: baglam.test.url ?? null }),
+    jsonBlok('Failed step', baglam.dusenAdim),
+    `## Error message\n${baglam.hataMetni}`,
+    jsonBlok('Screenshot', { exists: baglam.ekranGoruntusu.varMi, path: baglam.ekranGoruntusu.yol }),
+    `## Cleaned DOM\n${baglam.dom ?? '[no DOM file]'}`,
+    baglam.mapDiff === undefined
+      ? '## Diff against the exploration map\n[no map diff]'
       : [
-        jsonBlok('Keşif haritasıyla fark', baglam.haritaFarki),
-        baglam.haritaFarki.sayfaKimligiUyusuyor
-          ? 'sayfaKimligiUyusuyor true: DOM hâlâ keşifteki sayfayı gösteriyor.'
-          : 'sayfaKimligiUyusuyor false: DOM keşifteki sayfa değil (ör. oturum düşmüş, giriş ekranına yönlenmiş). product_changed deme; env ya da unknown düşün.',
+        jsonBlok('Diff against the exploration map', baglam.mapDiff),
+        baglam.mapDiff.pageIdentityMatches
+          ? 'pageIdentityMatches true: the DOM still shows the page from the exploration.'
+          : 'pageIdentityMatches false: the DOM is not the page from the exploration (for example the session dropped, or it was redirected to the login screen). Do not say product_changed; consider env or unknown.',
       ].join('\n'),
-    jsonBlok('Konsol hataları (en fazla 20)', baglam.konsolHatalari.slice(0, 20)),
-    jsonBlok('Ağ hataları (en fazla 20)', baglam.agHatalari.slice(0, 20)),
-    `## Test kodu\n${baglam.kod || '[Test kodu yok]'}`,
-    jsonBlok('Plan adımları', baglam.test.planSteps),
+    jsonBlok('Console errors (at most 20)', baglam.konsolHatalari.slice(0, 20).map((kayit) => ({
+      type: kayit.tip,
+      text: kayit.metin,
+      ...(kayit.stepIndex === undefined ? {} : { stepIndex: kayit.stepIndex }),
+    }))),
+    jsonBlok('Network errors (at most 20)', baglam.agHatalari.slice(0, 20).map((kayit) => ({
+      url: kayit.url,
+      method: kayit.method,
+      ...(kayit.status === undefined ? {} : { status: kayit.status }),
+      ...(kayit.hata === undefined ? {} : { error: kayit.hata }),
+      ...(kayit.stepIndex === undefined ? {} : { stepIndex: kayit.stepIndex }),
+    }))),
+    `## Test code\n${baglam.kod || '[no test code]'}`,
+    jsonBlok('Plan steps', baglam.test.planSteps),
   ].join('\n\n');
 }

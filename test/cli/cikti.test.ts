@@ -25,12 +25,12 @@ describe('insan modunda tablo hücreleri', () => {
     expect(hucreMetni('planSteps', [
       { type: 'action', description: 'Cariler sayfasını aç' },
       { type: 'assertion', description: 'Başlığı gör' },
-    ])).toBe('2 adım');
-    expect(hucreMetni('evidence', [])).toBe('0 kanıt');
-    expect(hucreMetni('bilinmeyen', [{ a: 1 }, { a: 2 }, { a: 3 }])).toBe('3 öğe');
-    expect(hucreMetni('basliklar', ['Cariler', 'Faturalar'])).toBe('Cariler, Faturalar');
+    ])).toBe('2 steps');
+    expect(hucreMetni('evidence', [])).toBe('0 evidence items');
+    expect(hucreMetni('bilinmeyen', [{ a: 1 }, { a: 2 }, { a: 3 }])).toBe('3 items');
+    expect(hucreMetni('headings', ['Cariler', 'Faturalar'])).toBe('Cariler, Faturalar');
     expect(hucreMetni('recommendedFixTarget', { kind: 'selector', reference: '/cariler' })).toBe('selector');
-    expect(hucreMetni('hata', { kod: 'KullanimHatasi', mesaj: 'Test bulunamadı' })).toBe('Test bulunamadı');
+    expect(hucreMetni('error', { code: 'UsageError', message: 'Test bulunamadı' })).toBe('Test bulunamadı');
     expect(hucreMetni('bos', undefined)).toBe('');
     expect(hucreMetni('uzun', 'x'.repeat(80))).toBe(`${'x'.repeat(59)}…`);
   });
@@ -53,7 +53,7 @@ describe('insan modunda tablo hücreleri', () => {
     }, false, stdout, new PassThrough());
 
     expect(cikti.oku()).not.toContain('[object Object]');
-    expect(cikti.oku().trim()).toBe('t_abc12345\tCari ekleme akışı\t2 adım\tdraft');
+    expect(cikti.oku().trim()).toBe('t_abc12345\tCari ekleme akışı\t2 steps\tdraft');
   });
 });
 
@@ -82,13 +82,13 @@ describe('CLI çıktı sınırı', () => {
 
       expect(exitCode).toBe(0);
       const dizin = await KobayDizini.bul(cwd);
-      await expect(dizin?.configOku()).resolves.toMatchObject({ beyin: { adaptor: 'sahte' } });
+      await expect(dizin?.configOku()).resolves.toMatchObject({ brain: { adaptor: 'sahte' } });
 
       const guncelleme = await main([
         'node', 'kobay', '--cwd', cwd, 'project', 'update', flag, 'codex',
       ], { input: Readable.from([]), stdout: new PassThrough(), stderr: new PassThrough() });
       expect(guncelleme).toBe(0);
-      await expect(dizin?.configOku()).resolves.toMatchObject({ beyin: { adaptor: 'codex' } });
+      await expect(dizin?.configOku()).resolves.toMatchObject({ brain: { adaptor: 'codex' } });
     }
   });
 
@@ -105,7 +105,7 @@ describe('CLI çıktı sınırı', () => {
     );
 
     expect(exitCode).toBe(2);
-    expect(JSON.parse(cikti.oku())).toMatchObject({ ok: false, exitCode: 2, hata: { kod: 'KullanimHatasi' } });
+    expect(JSON.parse(cikti.oku())).toMatchObject({ ok: false, exitCode: 2, error: { code: 'UsageError' } });
     expect(cikti.oku().trim().split('\n')).toHaveLength(1);
     expect(hata.oku()).toBe('');
   });
@@ -137,7 +137,7 @@ describe('CLI çıktı sınırı', () => {
 
     expect(jsonKod).toBe(2);
     expect(jsonMetni.oku().trim().split('\n')).toHaveLength(1);
-    expect(JSON.parse(jsonMetni.oku())).toMatchObject({ ok: false, exitCode: 2, hata: { kod: 'CommanderError' } });
+    expect(JSON.parse(jsonMetni.oku())).toMatchObject({ ok: false, exitCode: 2, error: { code: 'CommanderError' } });
   });
 
   it('test düşüşünü hata nesnesine çevirmeden JSON data olarak korur', async () => {
@@ -168,7 +168,7 @@ describe('CLI çıktı sınırı', () => {
     expect(`${cikti.oku()}${hata.oku()}`).not.toContain('cok-gizli-parola');
     const dizin = await KobayDizini.bul(cwd);
     await expect(dizin?.kimlikOku()).resolves.toEqual({
-      kullanici: 'demo', parola: 'cok-gizli-parola', origin: 'http://uygulama.test',
+      username: 'demo', password: 'cok-gizli-parola', origin: 'http://uygulama.test',
     });
   });
 
@@ -191,8 +191,8 @@ describe('CLI çıktı sınırı', () => {
       expect(hata.oku(), ad).toContain('KOBAY_LOGIN_USER');
       expect(hata.oku(), ad).toContain('KOBAY_LOGIN_PASS');
       // Hata mesajı istemle aynı satıra düşmez.
-      expect(hata.oku(), ad).not.toMatch(/(Username|Password): Giriş/);
-      expect(hata.oku(), ad).toMatch(/\nGiriş bilgisi sorulamadı/);
+      expect(hata.oku(), ad).not.toMatch(/(Username|Password): Could not/);
+      expect(hata.oku(), ad).toMatch(/\nCould not prompt for credentials/);
       await expect(KobayDizini.bul(cwd), ad).resolves.toBeNull();
     }
   });

@@ -1,7 +1,7 @@
 import { realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
-  DosyaYok,
+  FileNotFound,
   KobayDizini,
   hataPaketiCikisYolu,
   type Harita,
@@ -11,13 +11,13 @@ import {
   type TestKaydi,
 } from '../../depo/index.js';
 import { haritadaSayfaBul, haritadaSayfayiDegistir, kesfet, sayfayiYenile } from '../../kesif/index.js';
-import { KimlikOriginHatasi, kimlikOriginDogrula } from '../../kesif/oturum.js';
+import { CredentialOriginError, kimlikOriginDogrula } from '../../kesif/oturum.js';
 import { hedefAyaktaMi } from '../../kos/index.js';
-import { HedefYokHatasi, KullanimHatasi, YetkiHatasi } from '../komut.js';
+import { TargetUnreachableError, UsageError, PermissionError } from '../komut.js';
 
 export async function dizinBul(cwd: string): Promise<KobayDizini> {
   const dizin = await KobayDizini.bul(cwd);
-  if (dizin === null) throw new KullanimHatasi('.kobay bulunamadı; önce `kobay project create --url ...` çalıştırın');
+  if (dizin === null) throw new UsageError('.kobay not found; run `kobay project create --url ...` first');
   return dizin;
 }
 
@@ -55,9 +55,10 @@ export function gizliYolReddet(
     && kalan.length > izinliOnEk.length
     && izinliOnEk.every((parca, i) => kalan[i] === parca);
   if (!(izinli ? kalan.slice(izinliOnEk.length) : kalan).some((parca) => parca.startsWith('.'))) return;
-  const istisna = izinliOnEk.length === 0 ? '' : `${izinliOnEk.join('/')}/ altı dışında `;
-  throw new KullanimHatasi(
-    `${alan} ${istisna}.kobay altını veya adı nokta ile başlayan dosya/dizini (.env, .git …) gösteremez: ${yol}`,
+  const istisna = izinliOnEk.length === 0 ? '' : ` (except under ${izinliOnEk.join('/')}/)`;
+  throw new UsageError(
+    `${alan} cannot point inside .kobay${istisna}`
+    + ` or at a file/directory whose name starts with a dot (.env, .git …): ${yol}`,
   );
 }
 
@@ -94,7 +95,7 @@ type YolKapsami = 'kokIci' | 'kokDisiSerbest';
 
 function kokDisiReddet(kok: string, yol: string, alan: string): void {
   if (kokIcindeMi(kok, yol)) return;
-  throw new KullanimHatasi(`${alan} proje kökü dışında olamaz: ${yol}`);
+  throw new UsageError(`${alan} cannot be outside the project root: ${yol}`);
 }
 
 /**
@@ -166,10 +167,10 @@ function kimlikHedefeUyar(kimlik: Kimlik, config: KobayConfig): void {
   try {
     kimlikOriginDogrula(kimlik, new URL(config.baseUrl).origin);
   } catch (hata: unknown) {
-    if (!(hata instanceof KimlikOriginHatasi)) throw hata;
-    throw new YetkiHatasi(
-      `${hata.message} Giriş bilgisini bu adres için yeniden verin: \`kobay project create --url ${config.baseUrl}`
-      + ' --login --force` (giriş sayfası ayrıysa --login-url ile)',
+    if (!(hata instanceof CredentialOriginError)) throw hata;
+    throw new PermissionError(
+      `${hata.message} Re-enter the credentials for this address: \`kobay project create --url ${config.baseUrl}`
+      + ' --login --force` (use --login-url when the login page differs)',
     );
   }
 }
@@ -179,8 +180,8 @@ export async function testOku(dizin: KobayDizini, id: string): Promise<TestKaydi
   try {
     return await dizin.testOku(id);
   } catch (hata: unknown) {
-    if (hata instanceof DosyaYok) {
-      throw new KullanimHatasi(`Test bulunamadı: ${id}; kimlikleri \`kobay test list\` ile görün`);
+    if (hata instanceof FileNotFound) {
+      throw new UsageError(`Test not found: ${id}; list the IDs with \`kobay test list\``);
     }
     throw hata;
   }
@@ -189,9 +190,9 @@ export async function testOku(dizin: KobayDizini, id: string): Promise<TestKaydi
 /** Tarayıcı açmadan hedefi yoklar; ayakta değilse exit 3 ile net mesaj verir. */
 async function hedefiDogrula(baseUrl: string): Promise<void> {
   if (await hedefAyaktaMi(baseUrl)) return;
-  throw new HedefYokHatasi(
-    `Hedef uygulamaya ulaşılamadı: ${baseUrl}; uygulamayı başlatın`
-    + ' veya `kobay project update --base-url <URL>` ile adresi düzeltin',
+  throw new TargetUnreachableError(
+    `Target app is not reachable: ${baseUrl}; start the app`
+    + ' or fix the address with `kobay project update --base-url <URL>`',
   );
 }
 
@@ -201,8 +202,8 @@ const AG_HATASI_DESENI = /net::ERR_|ERR_CONNECTION|ECONNREFUSED|ENOTFOUND|ERR_NA
 function agHatasiniCevir(hata: unknown, baseUrl: string): never {
   const metin = hata instanceof Error ? hata.message : String(hata);
   if (AG_HATASI_DESENI.test(metin)) {
-    throw new HedefYokHatasi(
-      `Hedef uygulamaya ulaşılamadı: ${baseUrl}; uygulamayı başlatıp komutu yeniden çalıştırın`,
+    throw new TargetUnreachableError(
+      `Target app is not reachable: ${baseUrl}; start the app and run the command again`,
     );
   }
   throw hata;
@@ -223,8 +224,8 @@ export async function kesfiYenile(dizin: KobayDizini): Promise<Harita> {
   } catch (hata: unknown) {
     agHatasiniCevir(hata, config.baseUrl);
   }
-  if (kimlik !== null && !harita.girisYapildi) {
-    throw new YetkiHatasi('Giriş başarısız; kullanıcı adı, parola ve giriş URL’sini denetleyin');
+  if (kimlik !== null && !harita.loggedIn) {
+    throw new PermissionError('Login failed; check the username, the password, and the login URL');
   }
   await dizin.haritaYaz(harita);
   return harita;
@@ -247,9 +248,9 @@ export async function sayfaKesfiniYenile(
     dizin.kimlikOku(),
     dizin.haritaOku(),
   ]);
-  if (harita === null) throw new KullanimHatasi('Keşif haritası yok; önce `kobay explore` çalıştırın');
+  if (harita === null) throw new UsageError('No exploration map; run `kobay explore` first');
   if (haritadaSayfaBul(harita, testUrl) === null) {
-    throw new KullanimHatasi(`Test sayfası keşif haritasında yok: ${testUrl}; önce \`kobay explore\` çalıştırın`);
+    throw new UsageError(`Test page is not in the exploration map: ${testUrl}; run \`kobay explore\` first`);
   }
   if (kimlik !== null) kimlikHedefeUyar(kimlik, config);
   await hedefiDogrula(config.baseUrl);
@@ -267,7 +268,7 @@ export async function sayfaKesfiniYenile(
     agHatasiniCevir(hata, config.baseUrl);
   }
   const guncel = haritadaSayfayiDegistir(harita, testUrl, yeniSayfa);
-  if (guncel === null) throw new KullanimHatasi(`Test sayfası keşif haritasında yok: ${testUrl}`);
+  if (guncel === null) throw new UsageError(`Test page is not in the exploration map: ${testUrl}`);
   await dizin.haritaYaz(guncel.harita);
   return { yeniSayfa, eskiSayfa: guncel.eskiSayfa };
 }

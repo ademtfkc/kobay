@@ -5,42 +5,48 @@ export interface CiktiZarfi {
   ok: boolean;
   exitCode: number;
   data?: unknown;
-  hata?: { kod: string; mesaj: string };
+  error?: { code: string; message: string };
 }
 
-function hataMi(veri: unknown): veri is { hata: { kod: string; mesaj: string } } {
-  if (typeof veri !== 'object' || veri === null || !('hata' in veri)) return false;
-  const hata = veri.hata;
-  return typeof hata === 'object' && hata !== null && 'kod' in hata && 'mesaj' in hata;
+function hataMi(veri: unknown): veri is { error: { code: string; message: string } } {
+  if (typeof veri !== 'object' || veri === null || !('error' in veri)) return false;
+  const hata = veri.error;
+  return typeof hata === 'object' && hata !== null && 'code' in hata && 'message' in hata;
 }
 
 export function ciktiZarfi(sonuc: KomutSonucu): CiktiZarfi {
   if (sonuc.exitCode !== 0) {
-    if (hataMi(sonuc.json)) return { ok: false, exitCode: sonuc.exitCode, hata: sonuc.json.hata };
+    if (hataMi(sonuc.json)) return { ok: false, exitCode: sonuc.exitCode, error: sonuc.json.error };
     return { ok: false, exitCode: sonuc.exitCode, data: sonuc.json };
   }
   return { ok: true, exitCode: sonuc.exitCode, data: sonuc.json };
 }
 
-/** İç içe dizi hücrelerinde sayının yanına yazılan birim; bilinmeyen alan "öğe" olur. */
+/** İç içe dizi hücrelerinde sayının yanına yazılan birim; bilinmeyen alan "item" olur. */
 const DIZI_BIRIMLERI: Record<string, string> = {
-  planSteps: 'adım',
-  steps: 'adım',
-  adimlar: 'adım',
-  evidence: 'kanıt',
-  sayfalar: 'sayfa',
-  linkler: 'link',
-  formlar: 'form',
-  dugmeler: 'düğme',
-  basliklar: 'başlık',
-  oneriler: 'öneri',
-  dusurulen: 'öneri',
-  testler: 'test',
-  kosular: 'koşu',
+  planSteps: 'step',
+  steps: 'step',
+  evidence: 'evidence item',
+  pages: 'page',
+  links: 'link',
+  forms: 'form',
+  fields: 'form field',
+  buttons: 'button',
+  headings: 'heading',
+  menu: 'menu item',
+  proposals: 'proposal',
+  dropped: 'proposal',
+  tests: 'test',
+  runs: 'run',
 };
 
+/** Sayı + birim; İngilizcede 1 dışındaki sayılarda birim çoğullanır. */
+function birimliSayi(sayi: number, birim: string): string {
+  return `${sayi} ${birim}${sayi === 1 ? '' : 's'}`;
+}
+
 /** Nesne hücresinde önce okunur bir alan aranır; yoksa kısa JSON basılır. */
-const OZET_ALANLARI = ['description', 'title', 'name', 'ad', 'baslik', 'mesaj', 'kind', 'id'];
+const OZET_ALANLARI = ['description', 'title', 'name', 'message', 'kind', 'id'];
 
 const HUCRE_SINIRI = 60;
 
@@ -59,19 +65,19 @@ function nesneOzeti(deger: Record<string, unknown>): string {
 }
 
 /**
- * Tablo hücresini insan okunur tek satıra indirir: nesne dizileri "6 adım",
+ * Tablo hücresini insan okunur tek satıra indirir: nesne dizileri "6 steps",
  * ilkel diziler virgülle, nesneler tek alanlık özetle basılır. Böylece hiçbir
  * hücrede `[object Object]` görünmez.
  */
 export function hucreMetni(anahtar: string, deger: unknown): string {
   if (deger === null || deger === undefined) return '';
   if (Array.isArray(deger)) {
-    const birim = DIZI_BIRIMLERI[anahtar] ?? 'öğe';
-    if (deger.length === 0) return `0 ${birim}`;
+    const birim = DIZI_BIRIMLERI[anahtar] ?? 'item';
+    if (deger.length === 0) return birimliSayi(0, birim);
     if (deger.every((oge) => typeof oge !== 'object' || oge === null)) {
       return kisalt(deger.map((oge) => String(oge ?? '')).join(', '));
     }
-    return `${deger.length} ${birim}`;
+    return birimliSayi(deger.length, birim);
   }
   if (typeof deger === 'object') return nesneOzeti(deger as Record<string, unknown>);
   return kisalt(String(deger));

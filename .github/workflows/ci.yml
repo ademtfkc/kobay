@@ -29,5 +29,10 @@ jobs:
       - name: Install Chromium
         if: runner.os != 'Linux'
         run: node dist/cli/index.js install-browser
-      - run: npm run test:kati
+      - name: Run the strict test suite
+        # CI'da 0.1 kurulumu yok; sürümler arası testler bilerek atlanır.
+        # Katı kipte atlama normalde hatadır, bu bayrak ona açık izindir.
+        env:
+          KOBAY_01_DIST: skip
+        run: npm run test:kati
       - run: npm run duman

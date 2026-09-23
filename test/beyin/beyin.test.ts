@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BeyinHatasi, beyinOlustur } from '../../src/beyin/index.js';
+import { BrainError, beyinOlustur } from '../../src/beyin/index.js';
 import {
   BeyinButcesi,
   eksikKapanislariTamamla,
@@ -184,7 +184,7 @@ describe('CLI adaptörleri', () => {
 
     const uyarilar = stderr.mock.calls.map(([metin]) => String(metin)).filter((metin) => metin.includes('ANTHROPIC_API_KEY'));
     expect(uyarilar).toHaveLength(1);
-    expect(uyarilar[0]).toContain('faturalanabilir');
+    expect(uyarilar[0]).toContain('may be billed to your API account');
   });
 
   it('codex bayraklarını geçirir ve -o dosyasındaki JSON yanıtını okur', async () => {
@@ -217,13 +217,13 @@ describe('CLI adaptörleri', () => {
       KOBAY_SAHTE_CIKTI: await ciktiDosyasi('{"result":"{\\"tamam\\":true}","total_cost_usd":0.01}'),
     }));
     await expect(beyin.sor({ gorev: 'yavas', sistem: 'S', kullanici: 'K', sema, zamanAsimiSn: 0.02 }))
-      .rejects.toMatchObject({ sebep: 'zaman_asimi' });
+      .rejects.toMatchObject({ sebep: 'timeout' });
   });
 
   it('CLI PATH içinde yoksa cli_yok hatası verir', async () => {
     const beyin = beyinOlustur({ adaptor: 'claude' }, { PATH: join(await geciciDizin(), 'bos') });
     await expect(beyin.sor({ gorev: 'yok', sistem: 'S', kullanici: 'K', sema }))
-      .rejects.toMatchObject({ sebep: 'cli_yok' });
+      .rejects.toMatchObject({ sebep: 'cli_missing' });
   });
 
   it('CLI sıfır olmayan kodla çıkarsa stderr özetini maskeleyip cli_hatasi olarak günlüğe yazar', async () => {
@@ -237,11 +237,11 @@ describe('CLI adaptörleri', () => {
     });
 
     const hata = await beyin.sor({ gorev: 'cli', sistem: 'S', kullanici: 'K', sema, logDizini }).catch((neden: unknown) => neden);
-    expect(hata).toMatchObject({ sebep: 'cli_hatasi', message: expect.stringContaining('CLI 7') });
-    expect((hata as Error).message).toContain('[maskelendi]');
+    expect(hata).toMatchObject({ sebep: 'cli_error', message: expect.stringContaining('CLI exited with code 7') });
+    expect((hata as Error).message).toContain('[redacted]');
     expect((hata as Error).message).not.toContain('cok-gizli-token');
     const gunluk = await readFile(join(logDizini, 'beyin-cli-1.log'), 'utf8');
-    expect(gunluk).toContain('[maskelendi]');
+    expect(gunluk).toContain('[redacted]');
     expect(gunluk).not.toContain('cok-gizli-token');
   });
 
@@ -256,8 +256,8 @@ describe('CLI adaptörleri', () => {
     }));
 
     await expect(beyin.sor({ gorev: 'butce', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_tavani',
-      message: expect.stringContaining('KOBAY_MAX_BUDGET_USD'),
+      sebep: 'cost_cap',
+      message: expect.stringContaining('KOBAY_MAX_BUDGET_USD or brain.maxBudgetUsd'),
     });
     const kaydedilen = JSON.parse(await readFile(kayit, 'utf8')) as { girdi: string };
     expect(kaydedilen.girdi).not.toContain('Önceki yanıt şemaya uymadı');
@@ -267,10 +267,10 @@ describe('CLI adaptörleri', () => {
 describe('şema, günlük ve diğer adaptörler', () => {
   it('şema hatasında bir kez tekrar dener; ikinci hatada ham yanıtla sema hatası verir', async () => {
     const logDizini = await geciciDizin();
-    const icIceSema = v.object({ oneriler: v.array(v.object({ steps: v.array(v.object({ description: v.string() })) })) });
+    const icIceSema = v.object({ proposals: v.array(v.object({ steps: v.array(v.object({ description: v.string() })) })) });
     const tamamlamalar = [
-      new Response(JSON.stringify({ choices: [{ message: { content: '{"oneriler":[{"steps":[{}]}]}' } }], usage: { cost: 0.005 } }), { status: 200 }),
-      new Response(JSON.stringify({ choices: [{ message: { content: '{"oneriler":[{"steps":[{}]}]}' } }], usage: { cost: 0.005 } }), { status: 200 }),
+      new Response(JSON.stringify({ choices: [{ message: { content: '{"proposals":[{"steps":[{}]}]}' } }], usage: { cost: 0.005 } }), { status: 200 }),
+      new Response(JSON.stringify({ choices: [{ message: { content: '{"proposals":[{"steps":[{}]}]}' } }], usage: { cost: 0.005 } }), { status: 200 }),
     ];
     const fetchSahte = vi.fn().mockImplementation(async (url: string) => (
       url.includes('/api/v1/model/') ? fiyatYaniti() : tamamlamalar.shift()
@@ -278,13 +278,13 @@ describe('şema, günlük ve diğer adaptörler', () => {
     vi.stubGlobal('fetch', fetchSahte);
     const beyin = beyinOlustur({ adaptor: 'openrouter', model: 'test/model' }, { OPENROUTER_API_KEY: 'test-anahtar' });
     await expect(beyin.sor({ gorev: 'tekrar', sistem: 'S', kullanici: 'K', sema: icIceSema, logDizini }))
-      .rejects.toMatchObject({ sebep: 'sema', ham: '{"oneriler":[{"steps":[{}]}]}' } satisfies Partial<BeyinHatasi>);
+      .rejects.toMatchObject({ sebep: 'schema', ham: '{"proposals":[{"steps":[{}]}]}' } satisfies Partial<BrainError>);
     expect(fetchSahte).toHaveBeenCalledTimes(3);
     const tamamlamaCagrilari = fetchSahte.mock.calls.filter(([url]) => String(url).includes('/chat/completions'));
     expect(JSON.parse(String(tamamlamaCagrilari[1]?.[1]?.body)).messages[0].content)
-      .toContain('oneriler[0].steps[0].description');
-    await expect(readFile(join(logDizini, 'beyin-tekrar-1.log'), 'utf8')).resolves.toContain('---\n{"oneriler":[{"steps":[{}]}]}');
-    await expect(readFile(join(logDizini, 'beyin-tekrar-2.log'), 'utf8')).resolves.toContain('---\n{"oneriler":[{"steps":[{}]}]}');
+      .toContain('proposals[0].steps[0].description');
+    await expect(readFile(join(logDizini, 'beyin-tekrar-1.log'), 'utf8')).resolves.toContain('---\n{"proposals":[{"steps":[{}]}]}');
+    await expect(readFile(join(logDizini, 'beyin-tekrar-2.log'), 'utf8')).resolves.toContain('---\n{"proposals":[{"steps":[{}]}]}');
   });
 
   it('sahte adaptör dosyadaki yanıtı döner, yoksa bos_yanit verir ve günlük yazar', async () => {
@@ -295,7 +295,7 @@ describe('şema, günlük ve diğer adaptörler', () => {
     await expect(beyin.sor({ gorev: 'plan', sistem: 'S', kullanici: 'K', sema, logDizini })).resolves.toMatchObject({ json: { tamam: true } });
     await expect(readFile(join(logDizini, 'beyin-plan-1.log'), 'utf8')).resolves.toContain('---\n{"tamam":true}');
     await expect(beyin.sor({ gorev: 'yok', sistem: 'S', kullanici: 'K', sema }))
-      .rejects.toMatchObject({ sebep: 'bos_yanit' });
+      .rejects.toMatchObject({ sebep: 'empty_response' });
   });
 
   it('OpenRouter doğru istek gövdesi ve yetkilendirme başlığını gönderir; anahtar yoksa açık hata verir', async () => {
@@ -327,7 +327,7 @@ describe('şema, günlük ve diğer adaptörler', () => {
       model: 'google/gemini-3.8-flash', max_tokens: 4096,
     });
     await expect(beyinOlustur({ adaptor: 'openrouter' }, {}).sor({ gorev: 'ag', sistem: 'S', kullanici: 'K', sema }))
-      .rejects.toMatchObject({ sebep: 'anahtar_yok' });
+      .rejects.toMatchObject({ sebep: 'key_missing' });
   });
 
   it('aynı süreç ortamını paylaşan beyin örneklerinde çağrı tavanını aşınca ikinci çağrıyı başlatmaz', async () => {
@@ -341,8 +341,8 @@ describe('şema, günlük ve diğer adaptörler', () => {
     expect(ilkYanit).toMatchObject({ json: { tamam: true } });
     expect(ilkYanit).not.toHaveProperty('maliyetUsd');
     await expect(ikinciBeyin.sor({ gorev: 'sinir', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'cagri_tavani',
-      message: expect.stringContaining('KOBAY_MAX_BRAIN_CALLS'),
+      sebep: 'call_cap',
+      message: expect.stringContaining('KOBAY_MAX_BRAIN_CALLS or brain.maxCalls'),
     });
   });
 
@@ -359,12 +359,12 @@ describe('şema, günlük ve diğer adaptörler', () => {
     });
     // Dar politika önceki beyne de uygulanır; sonra gelen gevşek politika tavanı yükseltmez.
     await expect(genis.sor({ gorev: 'ayri', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'cagri_tavani',
+      sebep: 'call_cap',
     });
     const gevsek = beyinOlustur({ adaptor: 'sahte', maxCalls: 1000 }, paylasilanOrtam);
     await expect(gevsek.sor({ gorev: 'ayri', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'cagri_tavani',
-      message: expect.stringContaining('kullanıcıdan onay isteyin'),
+      sebep: 'call_cap',
+      message: expect.stringContaining('Ask the user for approval'),
     });
   });
 
@@ -376,8 +376,8 @@ describe('şema, günlük ve diğer adaptörler', () => {
     const beyin = beyinOlustur({ adaptor: 'openrouter', maxTotalCostUsd: 0.5 }, { OPENROUTER_API_KEY: 'test' });
 
     await expect(beyin.sor({ gorev: 'pahali', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_tavani',
-      message: expect.stringContaining('KOBAY_MAX_TOTAL_COST_USD'),
+      sebep: 'cost_cap',
+      message: expect.stringContaining('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd'),
     });
     expect(fetchSahte).toHaveBeenCalledTimes(1);
     expect(String(fetchSahte.mock.calls[0]?.[0])).toContain('/api/v1/model/');
@@ -395,7 +395,7 @@ describe('şema, günlük ve diğer adaptörler', () => {
     const beyin = beyinOlustur({ adaptor: 'openrouter', maxCalls: 1 }, { OPENROUTER_API_KEY: 'test' });
 
     await expect(beyin.sor({ gorev: 'tekrar-siniri', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'cagri_tavani',
+      sebep: 'call_cap',
     });
     expect(fetchSahte).toHaveBeenCalledTimes(2);
   });
@@ -406,7 +406,7 @@ describe('şema, günlük ve diğer adaptörler', () => {
     const beyin = beyinOlustur({ adaptor: 'openrouter' }, { OPENROUTER_API_KEY: 'test' });
 
     await expect(beyin.sor({ gorev: 'fiyatsiz', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_bilinmiyor', message: expect.stringContaining('çağrı başlatılmadı'),
+      sebep: 'cost_unknown', message: expect.stringContaining('no call was started'),
     });
     expect(fetchSahte).toHaveBeenCalledTimes(1);
   });
@@ -424,10 +424,10 @@ describe('şema, günlük ve diğer adaptörler', () => {
     );
 
     await expect(beyin.sor({ gorev: 'maliyetsiz', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_bilinmiyor', message: expect.stringContaining('rezervasyon harcanmış sayıldı'),
+      sebep: 'cost_unknown', message: expect.stringContaining('reservation was counted as spent'),
     });
     await expect(beyin.sor({ gorev: 'ikinci', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_tavani',
+      sebep: 'cost_cap',
     });
     expect(fetchSahte.mock.calls.filter(([url]) => String(url).includes('/chat/completions'))).toHaveLength(1);
   });
@@ -453,15 +453,15 @@ describe('şema, günlük ve diğer adaptörler', () => {
     const ilk = beyin.sor({ gorev: 'ilk', sistem: 'S', kullanici: 'K', sema });
     await vi.waitFor(() => { expect(tamamlamaSayisi).toBe(1); });
     await expect(beyin.sor({ gorev: 'es-zamanli', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_tavani',
+      sebep: 'cost_cap',
     });
     expect(tamamlamaSayisi).toBe(1);
 
     ilkReddet?.(new Error('ağ kesildi'));
-    await expect(ilk).rejects.toMatchObject({ sebep: 'ag' });
+    await expect(ilk).rejects.toMatchObject({ sebep: 'network' });
     // Sağlayıcı faturalamış olabilir: ~0.33 USD rezervasyon harcanmış sayılır, kalan 0.17 yeni çağrıya yetmez.
     await expect(beyin.sor({ gorev: 'iade-yok', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_tavani',
+      sebep: 'cost_cap',
     });
     expect(tamamlamaSayisi).toBe(1);
   });
@@ -469,7 +469,7 @@ describe('şema, günlük ve diğer adaptörler', () => {
   it('maliyet rezervasyonunu eşzamanlı kontrolde sayar ve başarısız çağrıda iade eder', () => {
     const butce = new BeyinButcesi({ adaptor: 'openrouter', maxTotalCostUsd: 0.5 }, {});
     const ilk = butce.cagriBaslat(0.3);
-    expect(() => butce.cagriBaslat(0.3)).toThrow(/kalan 0\.2000 USD/);
+    expect(() => butce.cagriBaslat(0.3)).toThrow(/0\.2000 USD left/);
     butce.cagriIptal(ilk);
     const ikinci = butce.cagriBaslat(0.3);
     expect(ikinci.azamiMaliyetUsd).toBe(0.3);
@@ -508,7 +508,7 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
     const beyin = beyinOlustur({ adaptor: 'openrouter', model: 'test/model' }, { OPENROUTER_API_KEY: 'test' });
 
     await expect(beyin.sor({ gorev: 'fiyat', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_bilinmiyor',
+      sebep: 'cost_unknown',
     });
     expect(fetchSahte).toHaveBeenCalledTimes(1);
   });
@@ -525,11 +525,11 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
 
     for (let i = 0; i < 2; i += 1) {
       await expect(beyin.sor({ gorev: 'cikis1', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-        sebep: 'cli_hatasi',
+        sebep: 'cli_error',
       });
     }
     await expect(beyin.sor({ gorev: 'cikis1', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({
-      sebep: 'maliyet_tavani',
+      sebep: 'cost_cap',
     });
     expect(await cagriSayisi(cli.sayac)).toBe(2);
   });
@@ -544,7 +544,7 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
 
     // `zaman_asimi` hatası zaten CLI'nin açılıp SIGTERM ile kesildiğini kanıtlar.
     await expect(beyin.sor({ gorev: 'yavas', sistem: 'S', kullanici: 'K', sema, zamanAsimiSn: 0.3 }))
-      .rejects.toMatchObject({ sebep: 'zaman_asimi' });
+      .rejects.toMatchObject({ sebep: 'timeout' });
     const zamanAsimindanSonra = await cagriSayisi(cli.sayac);
 
     // Maliyet okunamadığı için rezervasyonun tamamı harcanmış sayılır: toplam
@@ -552,7 +552,7 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
     // Mutlak sayı yerine artışa bakılır; kesilen sürecin kaydı yetişip
     // yetişmediği makinenin süreç açma hızına bağlıdır, davranışa değil.
     await expect(beyin.sor({ gorev: 'yavas', sistem: 'S', kullanici: 'K', sema, zamanAsimiSn: 0.3 }))
-      .rejects.toMatchObject({ sebep: 'maliyet_tavani' });
+      .rejects.toMatchObject({ sebep: 'cost_cap' });
     expect(await cagriSayisi(cli.sayac)).toBe(zamanAsimindanSonra);
   });
 
@@ -561,8 +561,8 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
       { adaptor: 'claude', maxBudgetUsd: 1, maxTotalCostUsd: 1 },
       { PATH: join(await geciciDizin(), 'bos') },
     );
-    await expect(beyin.sor({ gorev: 'yok', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cli_yok' });
-    await expect(beyin.sor({ gorev: 'yok', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cli_yok' });
+    await expect(beyin.sor({ gorev: 'yok', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cli_missing' });
+    await expect(beyin.sor({ gorev: 'yok', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cli_missing' });
   });
 
   it.each([['0'], ['1']])('#5 Claude bütçe aşımını subtype ile tanır (çıkış kodu %s), metne bakmaz, yeniden denemez', async (kod) => {
@@ -576,8 +576,8 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
     });
 
     const hata = await beyin.sor({ gorev: 'butce', sistem: 'S', kullanici: 'K', sema }).catch((neden: unknown) => neden);
-    expect(hata).toMatchObject({ sebep: 'maliyet_tavani' });
-    expect((hata as Error).message).toContain('kullanıcıdan onay isteyin');
+    expect(hata).toMatchObject({ sebep: 'cost_cap' });
+    expect((hata as Error).message).toContain('Ask the user for approval');
     expect((hata as Error).message).not.toMatch(/değerini artırın/);
     expect(await cagriSayisi(cli.sayac)).toBe(1);
   });
@@ -587,8 +587,8 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
     const beyin = beyinOlustur({ adaptor: 'claude', maxBudgetUsd: 1, maxTotalCostUsd: 1 }, {
       PATH: cli.path, T_CIKTI: 'JSON değil',
     });
-    await expect(beyin.sor({ gorev: 'bozuk', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cli_hatasi' });
-    await expect(beyin.sor({ gorev: 'bozuk', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'maliyet_tavani' });
+    await expect(beyin.sor({ gorev: 'bozuk', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cli_error' });
+    await expect(beyin.sor({ gorev: 'bozuk', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cost_cap' });
     expect(await cagriSayisi(cli.sayac)).toBe(1);
   });
 
@@ -630,7 +630,7 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
     // maliyet_tavani; sonraki gevşek politikalar sayaç sıfırlamaz, yeni çağrı başlamaz.
     expect(basarili).toBe(1);
     expect(await cagriSayisi(cli.sayac)).toBe(2);
-    expect(hatalar.at(-1)).toContain('kullanıcıdan onay isteyin');
+    expect(hatalar.at(-1)).toContain('Ask the user for approval');
     expect(hatalar.join('\n')).not.toMatch(/değerini artırın/);
   });
 
@@ -638,8 +638,8 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
     const butce = new BeyinButcesi({ adaptor: 'openrouter', maxTotalCostUsd: 0.5 }, {});
     butce.cagriTamamla(butce.cagriBaslat(0.3), 0.3);
     butce.politikaEkle({ adaptor: 'openrouter', maxTotalCostUsd: 100 }, {});
-    expect(() => butce.cagriBaslat(0.3)).toThrow(/kalan 0\.2000 USD/);
+    expect(() => butce.cagriBaslat(0.3)).toThrow(/0\.2000 USD left/);
     butce.politikaEkle({ adaptor: 'openrouter', maxTotalCostUsd: 0.4 }, {});
-    expect(() => butce.cagriBaslat(0.15)).toThrow(/Tavan 0\.4000 USD/);
+    expect(() => butce.cagriBaslat(0.15)).toThrow(/Limit 0\.4000 USD/);
   });
 });

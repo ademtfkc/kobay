@@ -1,13 +1,13 @@
-import { McpKaydiOkunamadi } from '../beceri/index.js';
-import { BeyinHatasi } from '../beyin/index.js';
+import { McpRegistryUnreadable } from '../beceri/index.js';
+import { BrainError } from '../beyin/index.js';
 import {
-  DosyaYok,
-  GecersizKimlik,
-  GuvensizCikisYolu,
-  KimlikGeriAlinamadi,
-  KimlikIslemiYurumede,
-  PaketYarim,
-  SemaHatasi,
+  FileNotFound,
+  InvalidId,
+  UnsafeOutputPath,
+  CredentialsRollbackFailed,
+  CredentialsTxnInProgress,
+  BundleIncomplete,
+  SchemaError,
 } from '../depo/index.js';
 import { CIKIS, type CikisKodu } from './cikis.js';
 
@@ -19,25 +19,25 @@ export interface KomutSonucu {
   metin?: string;
 }
 
-export class KullanimHatasi extends Error {
+export class UsageError extends Error {
   constructor(mesaj: string) {
     super(mesaj);
-    this.name = 'KullanimHatasi';
+    this.name = 'UsageError';
   }
 }
 
-export class YetkiHatasi extends Error {
+export class PermissionError extends Error {
   constructor(mesaj: string) {
     super(mesaj);
-    this.name = 'YetkiHatasi';
+    this.name = 'PermissionError';
   }
 }
 
 /** Hedef uygulama ayakta değil; exit 3 (HEDEF_YOK) ile ayrı sınıflanır. */
-export class HedefYokHatasi extends Error {
+export class TargetUnreachableError extends Error {
   constructor(mesaj: string) {
     super(mesaj);
-    this.name = 'HedefYokHatasi';
+    this.name = 'TargetUnreachableError';
   }
 }
 
@@ -50,55 +50,55 @@ export function basariliMetin(json: unknown, metin: string): KomutSonucu {
   return { exitCode: CIKIS.GECTI, json, metin };
 }
 
-/** Beyin hata kodlarını (`cli_yok`, `sema`…) eyleme yönlendiren Türkçe mesaja çevirir. */
-function beyinMesaji(hata: BeyinHatasi): string {
+/** Beyin hata kodlarını (`cli_yok`, `sema`…) eyleme yönlendiren İngilizce mesaja çevirir. */
+function beyinMesaji(hata: BrainError): string {
   switch (hata.sebep) {
-    case 'cli_yok':
-      return 'Beyin CLI’si PATH içinde bulunamadı; `kobay doctor` ile denetleyin,'
-        + ' `kobay setup --beyin codex` ile başka bir beyin seçin';
-    case 'zaman_asimi':
-      return 'Beyin zamanında yanıt vermedi; komutu yeniden çalıştırın veya'
-        + ' `kobay project update --model <model>` ile daha hızlı bir model seçin';
-    case 'sema':
-      return 'Beyin beklenen JSON şemasını döndürmedi; `.kobay/logs/` altındaki son beyin günlüğüne bakıp'
-        + ' komutu yeniden çalıştırın';
-    case 'bos_yanit':
-      return 'Beyin boş yanıt döndürdü; `.kobay/logs/` altındaki son beyin günlüğüne bakıp'
-        + ' komutu yeniden çalıştırın';
-    case 'ag':
-      return 'Beyne ulaşılamadı (ağ hatası); bağlantıyı denetleyip komutu yeniden çalıştırın';
-    case 'anahtar_yok':
-      return 'OPENROUTER_API_KEY tanımlı değil; anahtarı ortamda tanımlayın veya'
-        + ' `kobay setup --beyin claude` ile beyni değiştirin';
+    case 'cli_missing':
+      return 'Brain CLI not found on PATH; check it with `kobay doctor`,'
+        + ' or pick another brain with `kobay setup --brain codex`';
+    case 'timeout':
+      return 'The brain did not answer in time; run the command again or'
+        + ' pick a faster model with `kobay project update --model <model>`';
+    case 'schema':
+      return 'The brain did not return the expected JSON schema; check the latest brain log under'
+        + ' `.kobay/logs/` and run the command again';
+    case 'empty_response':
+      return 'The brain returned an empty answer; check the latest brain log under'
+        + ' `.kobay/logs/` and run the command again';
+    case 'network':
+      return 'The brain could not be reached (network error); check the connection and run the command again';
+    case 'key_missing':
+      return 'OPENROUTER_API_KEY is not set; set the key in the environment or'
+        + ' switch the brain with `kobay setup --brain claude`';
   }
 }
 
-export function hataBilgisi(hata: unknown): { kod: string; mesaj: string } {
-  if (hata instanceof BeyinHatasi) return { kod: hata.name, mesaj: beyinMesaji(hata) };
-  if (hata instanceof Error) return { kod: hata.name, mesaj: hata.message };
-  return { kod: 'BilinmeyenHata', mesaj: 'Bilinmeyen hata' };
+export function hataBilgisi(hata: unknown): { code: string; message: string } {
+  if (hata instanceof BrainError) return { code: hata.name, message: beyinMesaji(hata) };
+  if (hata instanceof Error) return { code: hata.name, message: hata.message };
+  return { code: 'UnknownError', message: 'Unknown error' };
 }
 
 export function hataCikisKodu(hata: unknown, varsayilan: CikisKodu = CIKIS.MOTOR): CikisKodu {
   if (
-    hata instanceof KullanimHatasi || hata instanceof GecersizKimlik || hata instanceof DosyaYok
-    || hata instanceof SemaHatasi
+    hata instanceof UsageError || hata instanceof InvalidId || hata instanceof FileNotFound
+    || hata instanceof SchemaError
     // Kullanıcının düzeltmesi gereken bir yol sorunu: motor arızası değil.
-    || hata instanceof GuvensizCikisYolu
+    || hata instanceof UnsafeOutputPath
     // Kullanıcının elindeki `.mcp.json` bozuk; kobay'ın arızası değil.
-    || hata instanceof McpKaydiOkunamadi
+    || hata instanceof McpRegistryUnreadable
     // Aynı projede ikinci bir değiştirme komutu: kobay arızası değil, çağrı
     // sırası sorunu. Kullanıcı öteki komutun bitmesini bekleyip yeniden dener.
-    || hata instanceof KimlikIslemiYurumede
+    || hata instanceof CredentialsTxnInProgress
   ) {
     return CIKIS.KULLANIM;
   }
-  if (hata instanceof HedefYokHatasi) return CIKIS.HEDEF_YOK;
-  if (hata instanceof YetkiHatasi) return CIKIS.YETKI;
+  if (hata instanceof TargetUnreachableError) return CIKIS.HEDEF_YOK;
+  if (hata instanceof PermissionError) return CIKIS.YETKI;
   // Geri alma tamamlanamadı: kullanıcının komutunda değil, dosya sisteminde
   // sorun var. Varsayılana bırakılamaz; `test run` gibi komutlar varsayılanı
   // DUSTU (1) veriyor ve tutarsız proje "test düştü" diye görünürdü.
-  if (hata instanceof BeyinHatasi || hata instanceof PaketYarim || hata instanceof KimlikGeriAlinamadi) {
+  if (hata instanceof BrainError || hata instanceof BundleIncomplete || hata instanceof CredentialsRollbackFailed) {
     return CIKIS.MOTOR;
   }
   return varsayilan;
@@ -106,7 +106,7 @@ export function hataCikisKodu(hata: unknown, varsayilan: CikisKodu = CIKIS.MOTOR
 
 export function basarisiz(hata: unknown, varsayilan?: CikisKodu): KomutSonucu {
   const bilgi = hataBilgisi(hata);
-  return { exitCode: hataCikisKodu(hata, varsayilan), json: { hata: bilgi }, mesaj: bilgi.mesaj };
+  return { exitCode: hataCikisKodu(hata, varsayilan), json: { error: bilgi }, mesaj: bilgi.message };
 }
 
 export async function komutCalistir(

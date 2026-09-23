@@ -2,7 +2,7 @@ import { beceriKur, kurulumMesaji, mcpKayitTalimati } from '../../beceri/index.j
 import { basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
 
 /**
- * JSON alanları (`islem`, `mcp.islem`) sabit kalır; insan çıktısı İngilizcedir
+ * JSON alanları (`action`, `mcp.action`) sabit kalır; insan çıktısı İngilizcedir
  * (bkz. `kurulumMesaji`). İnsan modunda stdout'a yalnız bu metin gider — ham
  * JSON dökümü basılmaz (`basariliMetin` sözleşmesi, `doctor` ile aynı davranış).
  *

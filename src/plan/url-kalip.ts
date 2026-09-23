@@ -33,7 +33,7 @@ export function yolKalibi(url: string, baseUrl: string): string | null {
 /** Haritadaki sayfalardan benzersiz yol kalıplarını çıkarır. */
 export function haritaYolKaliplari(harita: Harita): string[] {
   const kaliplar = new Set<string>();
-  for (const sayfa of harita.sayfalar) {
+  for (const sayfa of harita.pages) {
     const kalip = yolKalibi(sayfa.url, harita.baseUrl);
     if (kalip !== null) kaliplar.add(kalip);
   }
@@ -63,7 +63,7 @@ export function oneriUrlKarari(
   if (yol === null) return { kabul: false, tur: 'yok', kalip: null };
 
   const kalip = yolKalibi(onerininUrlsi, harita.baseUrl);
-  const tamEslesme = harita.sayfalar.some(
+  const tamEslesme = harita.pages.some(
     (sayfa) => yoluNormallestir(sayfa.url, harita.baseUrl) === yol,
   );
   if (tamEslesme) return { kabul: true, tur: 'yol', kalip };

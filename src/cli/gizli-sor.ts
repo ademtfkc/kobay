@@ -2,10 +2,10 @@ import { createInterface, type Interface } from 'node:readline/promises';
 import { Writable, type Readable } from 'node:stream';
 
 /** Soru yanıtlanamadan girdi akışı bittiğinde (stdin kapalı, `< /dev/null`) fırlatılır. */
-export class GirdiBittiHatasi extends Error {
+export class InputClosedError extends Error {
   constructor() {
-    super('Girdi akışı yanıt gelmeden kapandı');
-    this.name = 'GirdiBittiHatasi';
+    super('Input stream closed before an answer arrived');
+    this.name = 'InputClosedError';
   }
 }
 
@@ -14,13 +14,13 @@ export class GirdiBittiHatasi extends Error {
  * üst düzey await ile exit 13'e düşer. Kapanışı yarıştırıp açık hataya çevirir.
  */
 export async function yanitBekle(arayuz: Interface, input: Readable, soru: string): Promise<string> {
-  if (input.readableEnded || input.destroyed) throw new GirdiBittiHatasi();
+  if (input.readableEnded || input.destroyed) throw new InputClosedError();
   return new Promise<string>((coz, reddet) => {
-    const kapandi = (): void => reddet(new GirdiBittiHatasi());
+    const kapandi = (): void => reddet(new InputClosedError());
     arayuz.once('close', kapandi);
     arayuz.question(soru).then(
       (yanit) => { arayuz.off('close', kapandi); coz(yanit); },
-      (hata: unknown) => { arayuz.off('close', kapandi); reddet(hata instanceof Error ? hata : new GirdiBittiHatasi()); },
+      (hata: unknown) => { arayuz.off('close', kapandi); reddet(hata instanceof Error ? hata : new InputClosedError()); },
     );
   });
 }

@@ -6,32 +6,32 @@ export interface PlanAdimi {
 }
 
 export interface FormAlani {
-  ad: string;
-  tip: string;
-  etiket?: string;
+  name: string;
+  type: string;
+  label?: string;
   placeholder?: string;
 }
 
 export interface Form {
   action?: string;
-  alanlar: FormAlani[];
+  fields: FormAlani[];
 }
 
 export interface Sayfa {
   url: string;
-  baslik: string;
-  basliklar: string[];
-  linkler: string[];
-  formlar: Form[];
-  dugmeler: string[];
+  title: string;
+  headings: string[];
+  links: string[];
+  forms: Form[];
+  buttons: string[];
   menu: string[];
 }
 
 export interface Harita {
   baseUrl: string;
-  girisYapildi: boolean;
-  sayfalar: Sayfa[];
-  kesifTarihi: string;
+  loggedIn: boolean;
+  pages: Sayfa[];
+  exploredAt: string;
 }
 
 export interface Oneri {
@@ -78,15 +78,15 @@ export type Verdict = 'passed' | 'failed' | 'blocked' | 'inconclusive';
 
 export interface HaritaFarki {
   url: string;
-  eklenenBasliklar: string[];
-  silinenBasliklar: string[];
-  eklenenDugmeler: string[];
-  silinenDugmeler: string[];
-  eklenenFormAlanlari: string[];
-  silinenFormAlanlari: string[];
+  addedHeadings: string[];
+  removedHeadings: string[];
+  addedButtons: string[];
+  removedButtons: string[];
+  addedFormFields: string[];
+  removedFormFields: string[];
   /** Kaydedilmiş DOM hâlâ keşifteki sayfayı mı gösteriyor (false ise ortam şüphelisi). */
-  sayfaKimligiUyusuyor: boolean;
-  degisti: boolean;
+  pageIdentityMatches: boolean;
+  changed: boolean;
 }
 
 export interface AdimSonucu {
@@ -138,7 +138,7 @@ export interface HataPaketi {
   steps: AdimSonucu[];
   code: string;
   failure: HataAnalizi;
-  haritaFarki?: HaritaFarki;
+  mapDiff?: HaritaFarki;
 }
 
 export interface BeyinAyari {
@@ -159,12 +159,12 @@ export interface KobayConfig {
   baseUrl: string;
   docsPath?: string;
   loginUrl?: string;
-  beyin: BeyinAyari;
+  brain: BeyinAyari;
 }
 
 export interface Kimlik {
-  kullanici: string;
-  parola: string;
+  username: string;
+  password: string;
   /**
    * Kimliğin verildiği hedef origin'i. Parola yalnız bu origin'e yazılır;
    * eski biçimde (origin'siz) kayıtlı kimlik hiçbir yere gönderilmez.

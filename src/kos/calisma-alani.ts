@@ -5,13 +5,13 @@ import { yazAtomik } from '../depo/index.js';
 import { fixtureSablonu } from './fixture-sablonu.js';
 
 /** Üretilen testlerin yükleyeceği fixture modülü bulunamadığında atılır. */
-export class FixtureModuluYok extends Error {
+export class FixtureModuleMissing extends Error {
   constructor(paketKoku: string) {
     super(
-      `Kobay fixture modülü bulunamadı (${paketKoku}). Paket eksik ya da yarım derlenmiş; `
-      + 'kobay kaynağında `npm run build` çalıştırın veya kobay\'ı yeniden kurun.',
+      `Kobay fixture module not found (${paketKoku}). The package is missing or only partly built; `
+      + 'run `npm run build` in the kobay source, or reinstall kobay.',
     );
-    this.name = 'FixtureModuluYok';
+    this.name = 'FixtureModuleMissing';
   }
 }
 
@@ -59,14 +59,14 @@ async function farkliysaYaz(yol: string, icerik: string): Promise<void> {
  *
  * Yol bir kere yazılıp bırakılamaz: kurulum değişince (npm link → npm install -g, sürüm
  * yükseltme) eski paketin fixture'ı ayrı bir @playwright/test kopyası yükler, Playwright
- * hiç test koşturamaz. Hedef modül yoksa `FixtureModuluYok` atılır.
+ * hiç test koşturamaz. Hedef modül yoksa `FixtureModuleMissing` atılır.
  */
 export async function fixtureYenidenAktarimMetni(paketKoku: string = AKTIF_PAKET_KOKU): Promise<string> {
   for (const aday of FIXTURE_ADAYLARI) {
     const yol = join(paketKoku, aday);
     if (await dosyaVarMi(yol)) return fixtureSablonu(yol);
   }
-  throw new FixtureModuluYok(paketKoku);
+  throw new FixtureModuleMissing(paketKoku);
 }
 
 /**

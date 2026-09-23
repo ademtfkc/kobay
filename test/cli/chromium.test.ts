@@ -24,13 +24,13 @@ it('gerçek Chromium ile demo uygulamasını keşfeder', async (context) => {
     await projectCreate({
       cwd,
       url: sunucu.url,
-      login: { kullanici: 'demo', parola: 'demo123' },
-      loginUrl: `${sunucu.url}/giris`,
+      login: { username: 'demo', password: 'demo123' },
+      loginUrl: `${sunucu.url}/login`,
       beyin: { adaptor: 'sahte' },
     });
     const sonuc = await explore({ cwd });
     expect(sonuc.exitCode).toBe(0);
-    expect((sonuc.json as { sayfalar: unknown[] }).sayfalar.length).toBeGreaterThan(0);
+    expect((sonuc.json as { pages: unknown[] }).pages.length).toBeGreaterThan(0);
   } finally {
     await sunucu.kapat();
   }

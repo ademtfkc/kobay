@@ -9,7 +9,7 @@ import {
   type KobayConfig,
 } from '../../depo/index.js';
 import { loginUrlDogrula } from '../../kesif/oturum.js';
-import { KullanimHatasi, basarili, basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
+import { UsageError, basarili, basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
 import { belgeYoluDenetle, dizinBul } from './ortak.js';
 
 function beyinAyariMi(deger: unknown): deger is BeyinAyari {
@@ -23,12 +23,17 @@ function beyinAyariMi(deger: unknown): deger is BeyinAyari {
 async function varsayilanBeyinOku(): Promise<BeyinAyari> {
   try {
     const veri = JSON.parse(await readFile(join(homedir(), '.kobay', 'config.json'), 'utf8')) as unknown;
-    if (typeof veri === 'object' && veri !== null && 'beyin' in veri && beyinAyariMi(veri.beyin)) return veri.beyin;
-    throw new KullanimHatasi('Global Kobay ayarı geçersiz; `kobay setup` komutunu yeniden çalıştırın');
+    if (typeof veri === 'object' && veri !== null) {
+      // 0.1 küresel ayarı `beyin` yazıyordu; okuma toleransı kalıcı dosyalardaki gibi.
+      const kayit = veri as Record<string, unknown>;
+      const ayar = kayit.brain ?? kayit.beyin;
+      if (beyinAyariMi(ayar)) return ayar;
+    }
+    throw new UsageError('The global Kobay config is invalid; run `kobay setup` again');
   } catch (hata: unknown) {
     if (typeof hata === 'object' && hata !== null && 'code' in hata && hata.code === 'ENOENT') return { adaptor: 'claude' };
     if (hata instanceof SyntaxError) {
-      throw new KullanimHatasi('Global Kobay ayarı geçerli JSON değil; `kobay setup` komutunu yeniden çalıştırın');
+      throw new UsageError('The global Kobay config is not valid JSON; run `kobay setup` again');
     }
     throw hata;
   }
@@ -38,7 +43,7 @@ function urlDogrula(url: string): void {
   try {
     new URL(url);
   } catch {
-    throw new KullanimHatasi(`Geçersiz URL: ${url}`);
+    throw new UsageError(`Invalid URL: ${url}`);
   }
 }
 
@@ -84,8 +89,8 @@ async function yabanciKimligiKenaraAl(
 
 function silinmeNotu(silinen: string[]): string {
   if (!silinen.includes('credentials.json')) return '';
-  return '; hedef origin değiştiği için kayıtlı giriş bilgisi ve oturum silindi,'
-    + ' giriş gerekiyorsa `kobay project create --url <URL> --login --force` ile yeniden verin';
+  return '; the target origin changed, so the saved credentials and session were deleted —'
+    + ' if login is needed, re-enter them with `kobay project create --url <URL> --login --force`';
 }
 
 /**
@@ -102,18 +107,18 @@ function projeOzeti(a: {
   sonraki: string;
 }): string {
   const beyinAyrintisi = [
-    ...(a.config.beyin.model === undefined ? [] : [`model: ${a.config.beyin.model}`]),
-    ...(a.config.beyin.effort === undefined ? [] : [`effort: ${a.config.beyin.effort}`]),
+    ...(a.config.brain.model === undefined ? [] : [`model: ${a.config.brain.model}`]),
+    ...(a.config.brain.effort === undefined ? [] : [`effort: ${a.config.brain.effort}`]),
   ];
   return [
     `${a.baslik}: ${a.kok}`,
-    `Hedef: ${a.config.baseUrl}`,
-    `Beyin: ${a.config.beyin.adaptor}${beyinAyrintisi.length === 0 ? '' : ` (${beyinAyrintisi.join(', ')})`}`,
-    ...(a.config.loginUrl === undefined ? [] : [`Giriş sayfası: ${a.config.loginUrl}`]),
-    ...(a.config.docsPath === undefined ? [] : [`Belge: ${a.config.docsPath}`]),
+    `Target: ${a.config.baseUrl}`,
+    `Brain: ${a.config.brain.adaptor}${beyinAyrintisi.length === 0 ? '' : ` (${beyinAyrintisi.join(', ')})`}`,
+    ...(a.config.loginUrl === undefined ? [] : [`Login page: ${a.config.loginUrl}`]),
+    ...(a.config.docsPath === undefined ? [] : [`Document: ${a.config.docsPath}`]),
     ...(a.ekSatirlar ?? []),
-    ...(a.silinen.length === 0 ? [] : [`Geçersiz kılınan: ${a.silinen.join(', ')}${silinmeNotu(a.silinen)}`]),
-    `Sonraki: ${a.sonraki}`,
+    ...(a.silinen.length === 0 ? [] : [`Invalidated: ${a.silinen.join(', ')}${silinmeNotu(a.silinen)}`]),
+    `Next: ${a.sonraki}`,
   ].join('\n');
 }
 
@@ -130,9 +135,9 @@ export async function projectCreate(a: {
   return komutCalistir(async () => {
     const mevcut = await KobayDizini.bul(a.cwd);
     if (mevcut !== null && a.force !== true) {
-      throw new KullanimHatasi(
-        'Bu proje zaten var; ayrıntılar için `kobay project get`, alan güncellemek için `kobay project update`,'
-        + ' config’i sıfırlamak için `kobay project create --force` çalıştırın',
+      throw new UsageError(
+        'This project already exists; run `kobay project get` for details, `kobay project update` to change a field,'
+        + ' or `kobay project create --force` to reset the config',
       );
     }
     urlDogrula(a.url);
@@ -141,18 +146,18 @@ export async function projectCreate(a: {
       try {
         loginUrlDogrula(a.url, a.loginUrl);
       } catch (hata) {
-        throw new KullanimHatasi(hata instanceof Error ? hata.message : String(hata));
+        throw new UsageError(hata instanceof Error ? hata.message : String(hata));
       }
     }
     const projeKoku = mevcut?.projeKoku ?? a.cwd;
     if (a.docs !== undefined) await belgeYoluDenetle(projeKoku, a.docs, 'docs');
     // --force: mevcut beyin ayarı (maliyet tavanları dahil) temel alınır; okunamıyorsa varsayılana düşülür.
     const eskiConfig = mevcut === null ? null : await mevcut.configOku().catch(() => null);
-    const temelBeyin = eskiConfig?.beyin
+    const temelBeyin = eskiConfig?.brain
       ?? (a.beyin?.adaptor === undefined ? await varsayilanBeyinOku() : { adaptor: a.beyin.adaptor });
     const config: KobayConfig = {
       baseUrl: a.url,
-      beyin: beyinBirlestir(temelBeyin, a.beyin),
+      brain: beyinBirlestir(temelBeyin, a.beyin),
       ...(a.docs === undefined ? {} : { docsPath: a.docs }),
       ...(a.loginUrl === undefined ? {} : { loginUrl: a.loginUrl }),
     };
@@ -201,13 +206,13 @@ export async function projectCreate(a: {
       silinen = a.login === undefined ? islem?.adlar ?? [] : [];
     }
     return basariliMetin(
-      { kok: dizin.kok, config, ...(silinen.length === 0 ? {} : { gecersizKilinan: silinen }) },
+      { root: dizin.kok, config, ...(silinen.length === 0 ? {} : { invalidated: silinen }) },
       projeOzeti({
-        baslik: mevcut === null ? 'Proje oluşturuldu' : 'Proje config’i üzerine yazıldı',
+        baslik: mevcut === null ? 'Project created' : 'Project config overwritten',
         kok: dizin.kok,
         config,
         silinen,
-        ...(a.login === undefined ? {} : { ekSatirlar: ['Giriş bilgisi: kaydedildi'] }),
+        ...(a.login === undefined ? {} : { ekSatirlar: ['Credentials: saved'] }),
         sonraki: 'kobay explore',
       }),
     );
@@ -224,8 +229,8 @@ export async function projectUpdate(a: {
   return komutCalistir(async () => {
     const dizin = await dizinBul(a.cwd);
     if (a.url === undefined && a.docs === undefined && a.loginUrl === undefined && a.beyin === undefined) {
-      throw new KullanimHatasi(
-        'Güncellenecek alan yok; --base-url, --login-url, --docs-path veya --beyin/--model/--effort verin',
+      throw new UsageError(
+        'No field to update; pass --base-url, --login-url, --docs-path, or --brain/--model/--effort',
       );
     }
     if (a.url !== undefined) urlDogrula(a.url);
@@ -238,12 +243,12 @@ export async function projectUpdate(a: {
       ...(a.docs === undefined ? {} : { docsPath: a.docs }),
       ...(a.loginUrl === undefined ? {} : { loginUrl: a.loginUrl }),
       // Beyin alanları tek tek birleşir: verilmeyen alan (tavanlar dahil) mevcut ayarda kalır.
-      beyin: beyinBirlestir(mevcut.beyin, a.beyin),
+      brain: beyinBirlestir(mevcut.brain, a.beyin),
     };
     try {
       loginUrlDogrula(config.baseUrl, config.loginUrl);
     } catch (hata) {
-      throw new KullanimHatasi(hata instanceof Error ? hata.message : String(hata));
+      throw new UsageError(hata instanceof Error ? hata.message : String(hata));
     }
     // İşlem gibi: eski origin'in giriş bilgisi/oturumu önce kenara alınır, yeni
     // hedef yazıldıktan sonra silinir. Config yazımı düşerse ikisi de geri gelir.
@@ -269,9 +274,9 @@ export async function projectUpdate(a: {
     }
     const silinen = islem?.adlar ?? [];
     return basariliMetin(
-      { kok: dizin.kok, config, ...(silinen.length === 0 ? {} : { gecersizKilinan: silinen }) },
+      { root: dizin.kok, config, ...(silinen.length === 0 ? {} : { invalidated: silinen }) },
       projeOzeti({
-        baslik: 'Proje güncellendi',
+        baslik: 'Project updated',
         kok: dizin.kok,
         config,
         silinen,
@@ -290,6 +295,6 @@ export async function projectGet(a: { cwd: string }): Promise<KomutSonucu> {
       dizin.testListele(),
       dizin.haritaOku(),
     ]);
-    return basarili({ config, testSayisi: testler.length, haritaVar: harita !== null });
+    return basarili({ config, testCount: testler.length, hasMap: harita !== null });
   });
 }

@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BeyinHatasi, beyinOlustur } from '../../src/beyin/index.js';
+import { BrainError, beyinOlustur } from '../../src/beyin/index.js';
 import { yazAtomik, type HaritaFarki, type Sayfa, type TestKaydi } from '../../src/depo/index.js';
 import {
   PLAN_YENILEME_SISTEM_ISTEMI,
@@ -30,32 +30,32 @@ const test: TestKaydi = {
 
 const eskiSayfa: Sayfa = {
   url: 'http://uygulama.test/cariler',
-  baslik: 'Cariler',
-  basliklar: ['Cariler'],
-  linkler: [],
-  formlar: [],
-  dugmeler: ['Cari Ekle'],
+  title: 'Cariler',
+  headings: ['Cariler'],
+  links: [],
+  forms: [],
+  buttons: ['Cari Ekle'],
   menu: ['Cariler'],
 };
 
 const yeniSayfa: Sayfa = {
   ...eskiSayfa,
-  baslik: 'Müşteriler',
-  basliklar: ['Müşteriler'],
-  dugmeler: ['Müşteri Ekle'],
+  title: 'Müşteriler',
+  headings: ['Müşteriler'],
+  buttons: ['Müşteri Ekle'],
   menu: ['Müşteriler'],
 };
 
-const haritaFarki: HaritaFarki = {
+const mapDiff: HaritaFarki = {
   url: 'http://uygulama.test/cariler',
-  eklenenBasliklar: ['Müşteriler'],
-  silinenBasliklar: ['Cariler'],
-  eklenenDugmeler: ['Müşteri Ekle'],
-  silinenDugmeler: ['Cari Ekle'],
-  eklenenFormAlanlari: [],
-  silinenFormAlanlari: [],
-  sayfaKimligiUyusuyor: true,
-  degisti: true,
+  addedHeadings: ['Müşteriler'],
+  removedHeadings: ['Cariler'],
+  addedButtons: ['Müşteri Ekle'],
+  removedButtons: ['Cari Ekle'],
+  addedFormFields: [],
+  removedFormFields: [],
+  pageIdentityMatches: true,
+  changed: true,
 };
 
 async function sahteBeyin(icerik: unknown, gorev = `plan-yenile-${test.id}`) {
@@ -75,7 +75,7 @@ describe('planYenile', () => {
       ],
     });
 
-    const sonuc = await planYenile(beyin, { test, eskiSayfa, yeniSayfa, haritaFarki });
+    const sonuc = await planYenile(beyin, { test, eskiSayfa, yeniSayfa, mapDiff });
 
     expect(sonuc.name).toBe('Müşteriler listesini görüntüle');
     expect(sonuc.planSteps).toHaveLength(test.planSteps.length);
@@ -101,7 +101,7 @@ describe('planYenile', () => {
     expect(sonuc.planSteps[2]).toEqual({ type: 'assertion', description: 'Başlığı doğrula' });
   });
 
-  it('adım sayısı değişirse BeyinHatasi(sema) atar', async () => {
+  it('adım sayısı değişirse BrainError(sema) atar', async () => {
     const beyin = await sahteBeyin({
       name: 'Müşteriler listesi',
       steps: [{ type: 'action', description: 'Müşteriler sayfasını aç' }],
@@ -109,8 +109,8 @@ describe('planYenile', () => {
 
     const hata = await planYenile(beyin, { test, eskiSayfa, yeniSayfa }).catch((sebep: unknown) => sebep);
 
-    expect(hata).toBeInstanceOf(BeyinHatasi);
-    expect((hata as BeyinHatasi).sebep).toBe('sema');
+    expect(hata).toBeInstanceOf(BrainError);
+    expect((hata as BrainError).sebep).toBe('schema');
   });
 
   it('adı olmayan yanıtta da şema hatası verir', async () => {
@@ -118,14 +118,14 @@ describe('planYenile', () => {
       steps: test.planSteps.map((adim) => ({ ...adim })),
     });
 
-    await expect(planYenile(beyin, { test, eskiSayfa, yeniSayfa })).rejects.toBeInstanceOf(BeyinHatasi);
+    await expect(planYenile(beyin, { test, eskiSayfa, yeniSayfa })).rejects.toBeInstanceOf(BrainError);
   });
 
   it('plan adımı olmayan testi beyne sormadan reddeder', async () => {
     const beyin = await sahteBeyin({ name: 'x', steps: [] });
 
     await expect(planYenile(beyin, { test: { ...test, planSteps: [] }, eskiSayfa, yeniSayfa }))
-      .rejects.toThrow(/plan adımı yok/);
+      .rejects.toThrow(/has no plan steps/);
   });
 });
 
@@ -135,16 +135,22 @@ describe('planYenilemeKullaniciIstemiOlustur', () => {
       test: { name: test.name, planSteps: test.planSteps },
       eskiSayfa,
       yeniSayfa,
-      haritaFarki,
+      mapDiff,
     });
 
-    expect(istem).toContain('3 adım');
+    expect(istem).toContain('3 steps');
     expect(istem).toContain('0. [action] Cariler sayfasını aç');
-    expect(istem).toContain('Sayfanın eski hâli');
-    expect(istem).toContain('Sayfanın yeni hâli');
-    expect(istem).toContain('silinen düğmeler: Cari Ekle');
-    expect(istem).toContain('eklenen düğmeler: Müşteri Ekle');
-    expect(PLAN_YENILEME_SISTEM_ISTEMI).toContain('Adım sayısını DEĞİŞTİRME');
+    expect(istem).toContain('## The page as it was');
+    expect(istem).toContain('## The page as it is now');
+    expect(istem).toContain('removed buttons: Cari Ekle');
+    expect(istem).toContain('added buttons: Müşteri Ekle');
+    expect(PLAN_YENILEME_SISTEM_ISTEMI).toContain('DO NOT change the number of steps');
+    expect(PLAN_YENILEME_SISTEM_ISTEMI).toContain('{"name":"...","steps":[{"type":"action","description":"..."}');
+    expect(PLAN_YENILEME_SISTEM_ISTEMI).toContain(
+      "Write names, descriptions and rationale in the language of the application's UI and docs;"
+      + ' if mixed or unclear, use English.',
+    );
+    expect(PLAN_YENILEME_SISTEM_ISTEMI).not.toMatch(/[çğıöşüÇĞİÖŞÜ]/);
   });
 
   it('eski sayfa ve fark yoksa eksikliği açıkça yazar', () => {
@@ -153,7 +159,7 @@ describe('planYenilemeKullaniciIstemiOlustur', () => {
       yeniSayfa,
     });
 
-    expect(istem).toContain('Eski özet yok.');
-    expect(istem).toContain('Fark bilgisi yok.');
+    expect(istem).toContain('No previous summary.');
+    expect(istem).toContain('No diff information.');
   });
 });

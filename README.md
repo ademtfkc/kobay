@@ -5,8 +5,8 @@
 **kobay is a local end-to-end test engine for coding agents.** Point it at a web
 app running on your machine. It explores the app in a headless Chromium, asks an
 LLM to propose user flows, turns the ones you accept into Playwright tests, runs
-them, and — when one fails — hands back an evidence bundle your agent can act on:
-a root-cause hypothesis, a `failureKind` classification, a recommended fix
+them, and — when one fails — hands back an evidence bundle your agent can act
+on: a root-cause hypothesis, a `failureKind` classification, a recommended fix
 target, the failing step's screenshot and DOM, and a Playwright trace.
 
 The last part is the point. A test that only says "failed" makes an agent guess;
@@ -29,17 +29,24 @@ click buttons, submit forms and create records.
 
 ## Status
 
-**0.1.0, early release.** Usable, not yet smooth. What has and has not been
+**0.2.0, early release.** Usable, not yet smooth. What has and has not been
 exercised, so you can decide before installing:
 
 | | |
 | --- | --- |
 | **Who it's for** | Developers running Claude Code (or Codex / Cursor) who want the agent to verify a local web app instead of claiming it works. |
-| **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP. Two real runs against a real app: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. |
+| **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. On 0.2 the same loop was re-run against the bundled demo app with the real brain — 14 proposals, 3 of 3 accepted tests passing, a deliberate product break classified `product_bug`, $0.28 for the round. |
 | **Untested in practice** | The `codex` and `openrouter` brains. Both adapters exist and have unit tests, but neither has been run against a real CLI or API. Treat them as unverified. |
-| **Platform** | Developed and run on macOS. CI runs the full suite plus a packaging smoke test on ubuntu-latest and macos-latest, Node 22 and 24. **Windows is untested.** |
-| **Language** | `--help`, flags, the agent skill and this README are English. Runtime messages — errors, `doctor`, `test list`, generated proposals — are still **Turkish** in 0.1. |
+| **Platform** | Developed on macOS. CI runs the full suite plus a packaging smoke test on ubuntu-latest and macos-latest, Node 22 and 24. **Windows is untested.** |
+| **Language** | Everything a machine reads is English: CLI and MCP messages, JSON field names, error codes, file names, prompts. The brain writes test names and descriptions in the language of the app it explored, so a non-English app gets non-English test titles — by design. |
 | **Scope** | Browser tests only. No API tests, no backend tests, no dashboard. |
+
+**0.2.0 is a breaking release.** Every JSON field name, error code and `.kobay`
+file name changed from Turkish to English; the full rename table is in
+[CHANGELOG.md](CHANGELOG.md). A 0.1 project migrates itself on the first 0.2
+command, but the installed agent skill does not: **run `kobay agent install`
+again in each project** so your agent learns the new names. 0.1 cannot read a
+0.2 project afterwards.
 
 If you want a hosted product with a dashboard and a support contract, kobay is
 not it — look at [TestSprite](https://www.testsprite.com/), which runs a similar
@@ -67,14 +74,14 @@ kobay install-browser        # Linux: kobay install-browser --with-deps
 kobay doctor
 ```
 
-`dist/` is not committed, so a git install has to build. The package has a
+`dist/` is not committed, so a git install has to build it. The package has a
 `prepare` script for that, and a **local** git install —
-`npm i github:ademtfkc/kobay` inside a project — does build `dist/` and work.
-A **global** one, `npm i -g github:ademtfkc/kobay`, still fails on npm 11.19:
-npm runs the git build step with its own global flag still set, so that step
-skips the devDependencies it needs and the build stops at `tsc: command not
-found`. Clone and build instead. Once kobay is published this becomes
-`npm i -g kobay`.
+`npm i github:ademtfkc/kobay` inside a project — does build and work. A
+**global** one, `npm i -g github:ademtfkc/kobay`, fails on npm 11.19: npm runs
+the git build step with its own global flag still set, so that step skips the
+devDependencies the build needs and stops at `tsc: command not found`. Until
+kobay is on npm, the way to a global install without cloning is a tarball —
+`npm pack` in a clone, then `npm i -g ./kobay-0.2.0.tgz` on the target machine.
 
 `install-browser` downloads the Chromium build matching kobay's own Playwright
 version — use it rather than `npx playwright install`, which may fetch a
@@ -90,27 +97,39 @@ exists the last two fail, as expected:
 ✓ claude CLI
 ✓ codex CLI
 ✓ Chromium
-✗ .kobay — `kobay project create --url <URL>` ile proje açın
-✗ hedef — proje yok; önce `kobay project create --url <URL>` çalıştırın
+✗ .kobay — create a project with `kobay project create --url <URL>`
+✗ target — no project; run `kobay project create --url <URL>` first
 ```
 
 To change the default brain (written to `~/.kobay/config.json`):
-`kobay setup --brain codex` (or `openrouter`). The Codex brain runs
+
+```sh
+kobay setup --brain claude
+#> Default brain set: claude
+#> Config file: ~/.kobay/config.json
+#> Chromium: installed
+#> Next: kobay project create --url <URL>
+```
+
+`--brain codex` and `--brain openrouter` are accepted too. The Codex brain runs
 `codex exec --ignore-user-config --ephemeral` in a read-only sandbox, so your
 `~/.codex/config.toml` is ignored; set model and effort with `--model` /
 `--effort`, and Codex login still comes from `CODEX_HOME`.
 
 ## Quick start
 
-kobay ships a small demo app — login page, list, form — so you can watch the
-whole loop before pointing it at your own project. Its UI text is Turkish
-(`Giriş` = login, `Kontrol Paneli` = dashboard), and so is kobay's own output in
-0.1 — the samples below are verbatim from a real run. kobay itself works with
-apps in any language.
+kobay ships a small demo app — login page, dashboard, record list, new-record
+form — so you can watch the whole loop before pointing it at your own project.
+The samples below are copied from a real run against it.
 
 **1. Start the demo** in its own terminal and leave it running:
-`kobay demo --port 3999` → `Kobay demo: http://127.0.0.1:3999`, login
-`demo / demo123`.
+
+```sh
+kobay demo --port 3999
+#> Kobay demo: http://127.0.0.1:3999
+#> Login: demo / demo123
+#> Press Ctrl+C to stop
+```
 
 **2. Create a project** in an empty directory. `--login` reads
 `KOBAY_LOGIN_USER` and `KOBAY_LOGIN_PASS`; without them it prompts (the password
@@ -121,67 +140,130 @@ answers into stdin is not supported. The login URL must share `--url`'s origin.
 mkdir kobay-demo && cd kobay-demo
 KOBAY_LOGIN_USER=demo KOBAY_LOGIN_PASS=demo123 \
   kobay project create --url http://127.0.0.1:3999 \
-                       --login --login-url http://127.0.0.1:3999/giris
-#> Proje oluşturuldu: ~/kobay-demo/.kobay
-#> Giriş bilgisi: kaydedildi
-#> Sonraki: kobay explore
+                       --login --login-url http://127.0.0.1:3999/login
+#> Project created: ~/kobay-demo/.kobay
+#> Target: http://127.0.0.1:3999
+#> Brain: claude
+#> Login page: http://127.0.0.1:3999/login
+#> Credentials: saved
+#> Next: kobay explore
 ```
 
 **3. Explore** — no LLM call. kobay logs in and follows same-origin `<a href>`
 links up to 40 pages, skipping links whose text looks like logout or delete, and
-never submitting forms. The result is the *map*, `.kobay/harita.json`.
+never submitting forms. The result is the *map*, `.kobay/map.json`.
 
 ```sh
 kobay explore
-#> 4 sayfa keşfedildi (giriş yapıldı)
-#> Sayfalar: /giris, /, /liste, /yeni
-#> Sonraki: kobay test plan generate
+#> 4 pages explored (logged in)
+#> Map: ~/kobay-demo/.kobay/map.json
+#> Pages: /login, /, /records, /new
+#> Next: kobay test plan generate
 ```
 
 **4. Generate a plan** — **LLM call.** The brain reads the map (plus a product
 document if you passed `--docs`) and proposes 8–25 flows; proposals pointing at
-URLs outside the map are dropped. Then accept a few — not everything, since each
-test costs LLM calls the first time it runs.
+URLs outside the map are dropped. The text output is the summary line plus the
+same JSON body `--output json` returns:
 
 ```sh
 kobay test plan generate
-#> 2 öneri üretildi
-#> {"oneriler":[{"id":"p_d8kun8","oncelik":"p0","baslik":"Kayıt listesi açılır","adimSayisi":2},
-#>              {"id":"p_dyrsax","oncelik":"p1","baslik":"Yeni kayıt formu kaydeder","adimSayisi":2}],
-#>  "dusurulen":[]}
-
-kobay test plan accept --ids p_d8kun8,p_dyrsax
-kobay test list
-#> t_bjkhfh2l	draft	p1	Yeni kayıt formu kaydeder
-#> t_ffcik12p	draft	p0	Kayıt listesi açılır
+#> 10 proposals generated
+#> {
+#>   "proposals": [
+#>     { "id": "p_xtj1ab", "priority": "p0", "title": "Log in with valid credentials",  "stepCount": 2 },
+#>     { "id": "p_q3w8wt", "priority": "p0", "title": "Record list shows saved records", "stepCount": 2 },
+#>     { "id": "p_gonrog", "priority": "p1", "title": "New record form saves a record",  "stepCount": 2 },
+#>     … six more …
+#>   ],
+#>   "dropped": []
+#> }
 ```
 
-**5. Run.** A test with no code gets Playwright code generated first (LLM call),
+Accept a few — not everything, since each test costs LLM calls the first time it
+runs.
+
+```sh
+kobay test plan accept --ids p_q3w8wt,p_gonrog
+#> 2 proposals accepted
+#> t_6a12wnx1  Record list shows saved records  frontend  plan  draft  2 steps  p0  /records  0  …
+#> t_v1h8tqsy  New record form saves a record   frontend  plan  draft  2 steps  p1  /new      0  …
+
+kobay test list
+#> t_6a12wnx1	draft	p0	Record list shows saved records
+#> t_v1h8tqsy	draft	p1	New record form saves a record
+```
+
+**5. Add a test of your own** (optional). `test create --plan` takes a
+hand-written plan file (the format is under [Commands](#commands)), so you can
+ask for a flow the brain did not propose — here, a monthly total that the demo
+app does not have:
+
+```sh
+kobay test create --plan monthly-total.plan.json
+#> Test created: t_sknz9qok
+#> Name: Record list shows a monthly total
+#> Steps: 2, priority: p0, status: draft
+#> Next: kobay test run t_sknz9qok
+```
+
+**6. Run.** A test with no code gets Playwright code generated first (LLM call),
 then runs; a failing test is then analysed (another LLM call). 120 s per test.
 
 ```sh
 kobay test run --all
-#> failed t_kvwmtb23 — product_bug
-#>   hata paketi: kobay test failure get t_kvwmtb23
+#> passed t_6a12wnx1
+#> failed t_sknz9qok — product_bug
+#>   failure bundle: kobay test failure get t_sknz9qok
+#> passed t_v1h8tqsy
 ```
 
-**6. Read the failure.** Without `--out` the bundle lands in
+Exit code `1`: one test failed. `test list` now shows the verdicts:
+
+```sh
+kobay test list
+#> t_6a12wnx1	passed	p0	Record list shows saved records
+#> t_sknz9qok	failed	p0	Record list shows a monthly total
+#> t_v1h8tqsy	passed	p1	New record form saves a record
+```
+
+**7. Read the failure.** Without `--out` the bundle lands in
 `.kobay/failure-out/<id>/`, refreshed in place on every call so nothing survives
 from the previous one. A folder you name yourself must not exist yet.
 
 ```sh
-kobay test failure get t_kvwmtb23
-#> Hata paketi kopyalandı: ~/kobay-demo/.kobay/failure-out/t_kvwmtb23
-#> failure.json code.ts steps.json meta.json adim-1.png adim-1.html trace.zip
+kobay test failure get t_sknz9qok
+#> Failure bundle copied: ~/kobay-demo/.kobay/failure-out/t_sknz9qok
+
+ls ~/kobay-demo/.kobay/failure-out/t_sknz9qok
+#> adim-1.html  adim-1.png  code.ts  failure.json  meta.json  steps.json  trace.zip
 ```
 
-`failure.json` carries `failure.failureKind`, `failure.rootCauseHypothesis`,
-`failure.recommendedFixTarget` and the evidence list, alongside the full run
-result and the generated code. `console.json` and `network.json` join the bundle
-only when the analysis cites them as evidence. Open the trace with
-`npx playwright show-trace trace.zip`.
+`failure.json` carries the analysis, the full run result, the step list and the
+generated code. The part an agent acts on is `failure`:
 
-**7. Fix the app, then `kobay test rerun t_kvwmtb23`** — runs the existing code
+```json
+"failure": {
+  "failureKind": "product_bug",
+  "rootCauseHypothesis": "The record list renders only the record rows; the table has no footer summing the Amount column, so the 'Monthly total' row the test waits for is never rendered.",
+  "recommendedFixTarget": {
+    "kind": "code",
+    "reference": "/records table",
+    "rationale": "The records table ends after the last record row; no total is computed or rendered. To find the source file, search the product code for the \"Received\" value or text from the error message."
+  },
+  "evidence": [
+    { "kind": "snapshot",   "stepIndex": 1, "summary": "The table body ends after the last record row; there is no tfoot and no cell containing 'Monthly total'.", "path": "adim-1.html" },
+    { "kind": "screenshot", "stepIndex": 1, "summary": "The record list is visible with three rows and no total line.", "path": "adim-1.png" }
+  ]
+}
+```
+
+Each evidence entry points at a file in the same folder (`adim-<step>.png` for
+the screenshot, `adim-<step>.html` for the DOM). `console.json` and
+`network.json` join the bundle only when the analysis cites them. Open the trace
+with `npx playwright show-trace trace.zip`.
+
+**8. Fix the app, then `kobay test rerun t_sknz9qok`** — runs the existing code
 again without regenerating it. Stop the demo with Ctrl+C when you are done.
 
 ## Use it from your coding agent
@@ -201,17 +283,19 @@ approve the server the first time you start it in that directory. For other
 agents kobay writes the skill and you register the server yourself:
 
 ```sh
-kobay agent install --target codex     # AGENTS.md, between <!-- kobay:BEGIN --> and <!-- kobay:END -->
-codex mcp add kobay -- kobay mcp
+kobay agent install --target codex
+#> Skill created: ~/my-app/AGENTS.md
+#> MCP registration: `codex mcp add kobay -- kobay mcp`
 
-kobay agent install --target cursor    # .cursor/rules/kobay.mdc
-# .cursor/mcp.json: { "mcpServers": { "kobay": { "command": "kobay", "args": ["mcp"] } } }
+kobay agent install --target cursor
+#> Skill created: ~/my-app/.cursor/rules/kobay.mdc
+#> MCP registration: add `{ "mcpServers": { "kobay": { "command": "kobay", "args": ["mcp"] } } }` to `.cursor/mcp.json`
 ```
 
-The Codex target replaces only the marked block and keeps the rest of
-`AGENTS.md`. All three write into the current project, never your home
-directory. To register the Claude Code server by hand:
-`claude mcp add -s project kobay -- kobay mcp`.
+The Codex target replaces only the block between `<!-- kobay:BEGIN -->` and
+`<!-- kobay:END -->` and keeps the rest of `AGENTS.md`. All three write into the
+current project, never your home directory. To register the Claude Code server
+by hand: `claude mcp add -s project kobay -- kobay mcp`.
 
 **The agent's loop** (source: [`beceri/SKILL.md`](beceri/SKILL.md)): check the
 project and that the app is up → pick or generate tests for the changed feature →
@@ -247,7 +331,7 @@ variables out of `.mcp.json`, which is usually committed.
 ## How it works
 
 ```
-explore ──> map (.kobay/harita.json)
+explore ──> map (.kobay/map.json)
               │
 plan generate ─┴─> proposals ──accept──> draft tests
                                             │
@@ -263,13 +347,14 @@ test run ──> generate Playwright code ──> run ──> passed
 **explore** uses no LLM; it records each page's title, headings, links, forms,
 buttons and menus. **plan generate** and **test run** call the brain, and
 generated code is checked before it is saved — `page.goto` may only target URLs
-in the map. **test refresh** re-explores just that test's page, updates the map
-in place, adapts the plan steps, regenerates the code and runs it under the same
-test ID; `--no-run` stops after the plan update.
+in the map, and every `test.step` title must match its plan step exactly.
+**test refresh** re-explores just that test's page, updates the map in place,
+adapts the plan steps, regenerates the code and runs it under the same test ID;
+`--no-run` stops after the plan update.
 
 ## Commands
 
-Verified against `kobay --help` and every subcommand's `--help` in 0.1.0.
+Verified against `kobay --help` and every subcommand's `--help` in 0.2.0.
 
 | Command | What it does |
 | --- | --- |
@@ -280,7 +365,7 @@ Verified against `kobay --help` and every subcommand's `--help` in 0.1.0.
 | `project create --url <url> [--docs <path>] [--login] [--login-url <url>] [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Creates `.kobay/` here. `--force` rewrites only an existing project's config, keeping its brain and limits unless you pass new ones. |
 | `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--brain <b>] [--model <m>] [--effort <e>]` | Changes only the fields you pass. |
 | `project get` | Settings, test count, whether a map exists. |
-| `explore` | Explores the app and rewrites `.kobay/harita.json`. |
+| `explore` | Explores the app and rewrites `.kobay/map.json`. |
 | `test plan generate [--hint <text>]` | Proposes tests from the map and docs. `--hint` is free text, e.g. "invoice flow only". |
 | `test plan accept [--all] [--ids <id,id>]` | Turns proposals into draft tests. |
 | `test create --plan <path>` | Creates a test from a hand-written plan file (below). |
@@ -305,15 +390,16 @@ A hand-written plan file for `test create --plan`
 `assertion` with a `description`:
 
 ```json
-{ "projectId": "demo", "type": "frontend", "name": "Log in with valid credentials",
+{ "projectId": "demo", "type": "frontend", "name": "Record list shows a monthly total",
   "priority": "p0",
   "planSteps": [
-    { "type": "action", "description": "Open /giris and log in as demo / demo123" },
-    { "type": "assertion", "description": "The 'Kontrol Paneli' heading is visible" } ] }
+    { "type": "action", "description": "Open the record list at /records" },
+    { "type": "assertion", "description": "A 'Monthly total' row shows the sum of the record amounts" } ] }
 ```
 
 There is no `url` field, so a hand-written test skips the map comparison during
-failure analysis and prints a note saying so.
+failure analysis and prints a warning saying so
+(`Test has no URL (<id>); map comparison skipped.`).
 
 ## Output and failures
 
@@ -322,8 +408,8 @@ the next command to run. Do not parse it. Every command also accepts
 `--output json` and then prints one envelope:
 
 ```
-{"ok":true,"exitCode":0,"data":[{"id":"t_ffcik12p","durum":"passed","oncelik":"p0","ad":"Kayıt listesi açılır"}]}
-{"ok":false,"exitCode":2,"hata":{"kod":"GecersizKimlik","mesaj":"Geçersiz testId: t_yok"}}
+{"ok":true,"exitCode":0,"data":[{"id":"t_6a12wnx1","name":"Record list shows saved records","verdict":"passed","runId":"r_20260923144622_dju9"}]}
+{"ok":false,"exitCode":2,"error":{"code":"InvalidId","message":"Invalid testId: t_yok"}}
 ```
 
 Read `ok` and `exitCode` from the JSON rather than `$?` after a pipe —
@@ -332,6 +418,16 @@ Read `ok` and `exitCode` from the JSON rather than `$?` after a pipe —
 **Exit codes:** `0` passed · `1` a test failed · `2` usage error · `3` target
 unreachable · `4` brain or engine error · `5` login or permission problem. With
 several tests, `test run` exits with the highest code.
+
+**Error codes** (`error.code`): `UsageError`, `PermissionError`,
+`TargetUnreachableError`, `InvalidId`, `FileNotFound`, `SchemaError`,
+`BundleIncomplete`, `UnsafeOutputPath`, `CredentialsTxnCorrupt`,
+`CredentialsTxnInProgress`, `CredentialsRollbackFailed`, `McpRegistryUnreadable`,
+`BrainError`, `BrainRuntimeError`, `CredentialOriginError`,
+`FixtureModuleMissing`, `InputClosedError`, `UnknownError`. A `BrainError`
+carries the reason in its message: `timeout`, `cli_missing`, `schema`,
+`empty_response`, `network`, `key_missing`, `cli_error`, `call_cap`, `cost_cap`,
+`cost_unknown`, `config_error`.
 
 **Verdicts:** `passed` · `failed` (a step did not find what it expected; a bundle
 exists) · `blocked` (the app was unreachable) · `inconclusive` (no code yet, or a
@@ -357,7 +453,7 @@ error, or zero tests executed — the result is `inconclusive` with
 
 Every brain call costs money or subscription quota. kobay caps it per process:
 
-| Limit | Default | Environment variable | `.kobay/config.json` (under `beyin`) |
+| Limit | Default | Environment variable | `.kobay/config.json` (under `brain`) |
 | --- | --- | --- | --- |
 | Per `claude` call (sent as `--max-budget-usd`) | $1 | `KOBAY_MAX_BUDGET_USD` | `maxBudgetUsd` |
 | Brain calls per process | 100 | `KOBAY_MAX_BRAIN_CALLS` | `maxCalls` |
@@ -395,7 +491,7 @@ OpenRouter and whatever it routes to):
 
 Before failure analysis kobay masks values that look like secrets — password and
 token JSON fields, `Bearer`/`Basic` headers, secret-looking URL parameters,
-`key=value` pairs — as `[maskelendi]`. That is pattern matching, not a list of
+`key=value` pairs — as `[redacted]`. That is pattern matching, not a list of
 your real secrets, so it will miss some. **The map and docs sent during planning
 are not masked.** Do not point kobay at pages showing real customer data.
 
@@ -409,20 +505,34 @@ All project state lives in `.kobay/` at your app's root:
 
 | Path | Contents |
 | --- | --- |
-| `config.json` | Base URL, login URL, docs path, brain settings and limits. |
-| `credentials.json` | Login credentials, mode 0600, git-ignored. |
+| `config.json` | Base URL, login URL, docs path, brain settings and limits (under `brain`). |
+| `credentials.json` | Login `username` and `password`, mode 0600, git-ignored. |
 | `storageState.json` | Playwright session state, mode 0600, git-ignored. |
-| `harita.json` | The map: pages, titles, headings, links, forms, menus. |
-| `plan/onerileri.json` | Proposals from the brain. |
+| `map.json` | The map: `pages` with `title`, `headings`, `links`, `forms`, `buttons`, `menu`. |
+| `plan/proposals.json` | Proposals from the brain. |
 | `tests/` | Test records (`t_*.json`), generated code (`t_*.spec.ts`), `_fixture.ts`. |
 | `runs/r_*/` | One folder per run: `result.json`, step `.png`/`.html`, `console.json`, `network.json`, `trace.zip`. |
 | `failure/<testId>/` | Latest failure bundle per test, written atomically. |
 | `failure-out/<testId>/` | Default destination of `test failure get`, refreshed in place (git-ignored). |
 | `logs/` | Brain call logs. |
-| `playwright.config.ts` | Generated runner config. |
+| `playwright.config.ts` | Generated runner config. Edit it by hand and kobay leaves it alone, with a warning. |
+| `.credentials-txn` | Marker of a running credential change; `.stale-*` holds the set-aside copies. Both git-ignored. |
 
 `.kobay/tests/_fixture.ts` is rewritten before every run to point at the active
 kobay installation; do not edit it by hand.
+
+**Upgrading a 0.1 project.** The first 0.2 command renames `harita.json` to
+`map.json` and `plan/onerileri.json` to `plan/proposals.json`, and rewrites
+`config.json`, `credentials.json`, `map.json` and `plan/proposals.json` with the
+English field names (`credentials.json` keeps mode 0600). No command to run, no
+flag. An existing `map.json` is never overwritten by a stale 0.1 file, and if
+`.kobay` cannot be written at all, kobay prints one warning per file and keeps
+reading the old names. A half-finished 0.1 credential transaction is still
+recognised and rolled back, and while that compatibility window lasts a 0.2
+transaction holds both marker names (`.credentials-txn` and the 0.1
+`.kimlik-islemi`) so an old command blocks instead of racing. The move is
+one-way: 0.1 cannot read a 0.2 project. **Run `kobay agent install` again** so
+the installed skill teaches your agent the new field names.
 
 **Run pruning.** `.kobay/runs/` is pruned once a run is fully handled — for a
 failed run, after its bundle is written — so analysis never loses the evidence it
@@ -433,10 +543,29 @@ minutes. A run directory with no `result.json` is left alone, so
 
 **Git.** kobay maintains `.kobay/.gitignore` between `# >>> kobay managed >>>`
 and `# <<< kobay managed <<<`; lines you add outside that block are kept. The
-managed block ignores `credentials.json`, `runs/`, `storageState.json`,
-`.eski-*`, `.kimlik-islemi*`, `*.log`, `failure/`, `failure-out/`, `logs/`,
-`tests/_fixture.ts`, `test-results/`, `playwright-report/` and `blob-report/`;
-commit the rest — config, map, tests — to share them with your team. The block is
+managed block is:
+
+```
+credentials.json
+runs/
+storageState.json
+.stale-*
+.eski-*
+.credentials-txn*
+.kimlik-islemi*
+*.log
+failure/
+failure-out/
+logs/
+tests/_fixture.ts
+test-results/
+playwright-report/
+blob-report/
+```
+
+`.eski-*` and `.kimlik-islemi*` are the 0.1 spellings, still listed so a
+leftover from an older version stays out of git. Commit the rest — config, map,
+tests — to share them with your team. The block is
 re-synced on every kobay command, so older projects pick up new rules
 automatically, and on a read-only filesystem kobay warns instead of failing.
 Because those folders are ignored, a fresh clone or CI checkout arrives without
@@ -479,7 +608,7 @@ Read this before pointing kobay at anything that matters.
   `.kobay/storageState.json` holds the session cookies (0600). Both are
   git-ignored. Moving the project to another origin with
   `project update --base-url` or `project create --force` deletes both and lists
-  them under `gecersizKilinan`. If the saved origin does not match, `explore` and
+  them under `invalidated`. If the saved origin does not match, `explore` and
   `test refresh` exit `5` before opening a browser; fix with
   `kobay project create --url <URL> --login --force`.
 - **Credentials stay on the target's origin — for HTML forms only.** The login
@@ -503,11 +632,6 @@ Read this before pointing kobay at anything that matters.
 
 ## Known limitations
 
-- **Runtime messages are Turkish.** In 0.1.0, error and status messages,
-  `doctor` rows, `test list` output and some JSON field names (`ad` = name,
-  `hata` = error, `mesaj` = message, `oneri` = suggestion, `durum` = status) are
-  Turkish, and generated proposals usually come back in Turkish too. `--help`,
-  flags, the agent skill and this README are English.
 - **Only the `claude` brain is proven.** `codex` and `openrouter` are
   unit-tested but have never run against a real CLI or API.
 - **Windows is untested**; macOS and Linux only.
@@ -520,21 +644,21 @@ Read this before pointing kobay at anything that matters.
 - **Exploration is shallow by design:** `<a href>` links only, no form submits or
   button clicks, stopping at 40 pages.
 - **Some commands still print raw JSON in text mode:** `project get`,
-  `test get`, `test result`, and the tail of `test plan generate`.
+  `test get`, `test result`, and the body of `test plan generate`.
 - **Pruning only touches the test that just ran.** Runs belonging to tests you
-  never re-run are kept indefinitely.
+  never re-run are kept indefinitely, and the `<id>-<n>` bundle folders left by
+  0.1 are not cleaned up.
 - **`test delete` leaves evidence behind.** It removes the test record and its
   generated code, but `failure/<id>/`, `failure-out/<id>/` and old run folders
   stay on disk.
 
 ## Roadmap
 
-1. **0.2 — English runtime messages:** errors, `doctor`, `test list`, JSON field
-   names and the planning prompt.
+1. **npm publish**, so install is one line.
 2. **Live test of the Codex brain**, then OpenRouter, against a real app.
-3. **Better housekeeping:** global pruning, cleanup on `test delete`.
+3. **A `prune` command** and cleanup on `test delete`.
 4. **Windows support**, once someone has actually run it there.
-5. **npm publish**, so install is one line.
+5. **JavaScript logins**, beyond the plain HTML form.
 
 Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
@@ -558,9 +682,8 @@ ubuntu-latest and macos-latest with Node 22 and 24.
 **Contributing.** Issues and pull requests welcome at
 [github.com/ademtfkc/kobay](https://github.com/ademtfkc/kobay). Run
 `npm run typecheck`, `npm run lint` and `npm run test:kati` before opening a PR,
-and say what you actually ran. The source is Turkish — identifiers, comments and
-runtime strings — while the public surface (CLI help, skill, docs) is English;
-keep that split until 0.2 moves the runtime strings over.
+and say what you actually ran. Everything a machine reads is English; the source
+identifiers and code comments are Turkish, and stay that way.
 
 ## License
 

@@ -12,6 +12,14 @@ const atomikDurum = vi.hoisted(() => ({
   renameKodu: undefined as string | undefined,
   /** Belirli bir `rm` çağrısını düşürmek için; `true` dönerse o çağrı EBUSY verir. */
   rmKosulu: undefined as ((yol: string) => boolean) | undefined,
+  /**
+   * Belirli bir `access` çağrısını "dosya yok" gibi göstermek için. Göç
+   * yarışını taklit eder: hedefi araya giren bir süreç kontrolden SONRA
+   * yazmışsa, kontrol onu göremez.
+   */
+  accessYokKosulu: undefined as ((yol: string) => boolean) | undefined,
+  /** `link` çağrısını düşüren kod; sert bağ desteklemeyen dosya sistemini taklit eder. */
+  linkKodu: undefined as string | undefined,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -33,27 +41,39 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       }
       await asil.rm(yol, secenekler);
     },
+    link: async (eski: string, yeni: string) => {
+      if (atomikDurum.linkKodu !== undefined) {
+        throw Object.assign(new Error('sert bağ simülasyonu'), { code: atomikDurum.linkKodu });
+      }
+      await asil.link(eski, yeni);
+    },
+    access: async (yol: Parameters<typeof asil.access>[0], mod?: number) => {
+      if (atomikDurum.accessYokKosulu?.(String(yol)) === true) {
+        throw Object.assign(new Error('erişim simülasyonu'), { code: 'ENOENT' });
+      }
+      await asil.access(yol, mod);
+    },
   };
 });
 
 import {
-  DosyaYok,
-  GecersizKimlik,
+  FileNotFound,
+  InvalidId,
   SAKLANAN_KOSU,
   hataPaketiCikisYolu,
   HataAnaliziSemasi,
   HataPaketiSemasi,
   HaritaSemasi,
-  KimlikGeriAlinamadi,
-  KimlikIslemiYurumede,
+  CredentialsRollbackFailed,
+  CredentialsTxnInProgress,
   KimlikSemasi,
   KobayConfigSemasi,
   KobayDizini,
   KosuSonucuSemasi,
   OneriSemasi,
-  PaketYarim,
+  BundleIncomplete,
   PlanDosyasiSemasi,
-  SemaHatasi,
+  SchemaError,
   TestKaydiSemasi,
   jsonOku,
   yazAtomik,
@@ -71,18 +91,22 @@ afterEach(() => {
   atomikDurum.renameKosulu = undefined;
   atomikDurum.renameKodu = undefined;
   atomikDurum.rmKosulu = undefined;
+  atomikDurum.accessYokKosulu = undefined;
+  atomikDurum.linkKodu = undefined;
 });
 
 const config: KobayConfig = {
   baseUrl: 'http://localhost:3000',
-  beyin: { adaptor: 'sahte' },
+  brain: { adaptor: 'sahte' },
 };
 
 const yonetilenGitignore = `# >>> kobay managed >>>
 credentials.json
 runs/
 storageState.json
+.stale-*
 .eski-*
+.credentials-txn*
 .kimlik-islemi*
 *.log
 failure/
@@ -151,12 +175,12 @@ describe('dosya', () => {
     await expect(readFile(yol, 'utf8')).resolves.toBe('eski');
   });
 
-  it('olmayan JSON için DosyaYok, geçersiz JSON için SemaHatasi fırlatır', async () => {
+  it('olmayan JSON için FileNotFound, geçersiz JSON için SchemaError fırlatır', async () => {
     const dizin = await geciciDizin();
-    await expect(jsonOku(join(dizin, 'yok.json'), KimlikSemasi)).rejects.toBeInstanceOf(DosyaYok);
+    await expect(jsonOku(join(dizin, 'yok.json'), KimlikSemasi)).rejects.toBeInstanceOf(FileNotFound);
     const yol = join(dizin, 'bozuk.json');
     await writeFile(yol, '{');
-    await expect(jsonOku(yol, KimlikSemasi)).rejects.toBeInstanceOf(SemaHatasi);
+    await expect(jsonOku(yol, KimlikSemasi)).rejects.toBeInstanceOf(SchemaError);
   });
 });
 
@@ -169,7 +193,7 @@ describe('şemalar', () => {
     ['HataAnalizi', HataAnaliziSemasi, { failureKind: 'yanlış' }],
     ['HataPaketi', HataPaketiSemasi, { snapshotId: 's' }],
     ['KobayConfig', KobayConfigSemasi, { baseUrl: 3, beyin: {} }],
-    ['Kimlik', KimlikSemasi, { kullanici: 'a' }],
+    ['Kimlik', KimlikSemasi, { username: 'a' }],
     ['PlanDosyasi', PlanDosyasiSemasi, { projectId: ' ', type: 'frontend', name: 'x', planSteps: [] }],
   ])('%s geçersiz örneği reddeder', (_ad, sema, gecersiz) => {
     expect(v.safeParse(sema, gecersiz).success).toBe(false);
@@ -180,7 +204,7 @@ describe('KobayDizini', () => {
   it('gitignore, credentials ve storage state izinlerini yazar', async () => {
     const proje = await geciciDizin();
     const dizin = await KobayDizini.ac(proje, config);
-    await dizin.kimlikYaz({ kullanici: 'demo', parola: 'gizli' });
+    await dizin.kimlikYaz({ username: 'demo', password: 'gizli' });
     await dizin.storageStateYaz('{"cookies":[]}');
 
     await expect(readFile(dizin.yol('.gitignore'), 'utf8')).resolves.toBe(
@@ -328,13 +352,13 @@ describe('KobayDizini', () => {
   it('.partial işaretli hata paketini reddeder', async () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     await yazAtomik(dizin.yol('failure', 't_yarim000', '.partial'), '');
-    await expect(dizin.hataPaketiOku('t_yarim000')).rejects.toBeInstanceOf(PaketYarim);
+    await expect(dizin.hataPaketiOku('t_yarim000')).rejects.toBeInstanceOf(BundleIncomplete);
   });
 
   it('hata paketinde meta.json dosyasını en son tamamlar ve geri okur', async () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     const yazilan = await dizin.hataPaketiYaz(paket(), []);
-    await expect(readFile(join(yazilan, 'meta.json'), 'utf8')).resolves.toContain('"yazildi"');
+    await expect(readFile(join(yazilan, 'meta.json'), 'utf8')).resolves.toContain('"writtenAt"');
     await expect(dizin.hataPaketiOku('t_abc12345')).resolves.toEqual(paket());
   });
 
@@ -342,9 +366,9 @@ describe('KobayDizini', () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     const oncekiConfig = await readFile(dizin.yol('config.json'), 'utf8');
 
-    expect(() => dizin.testOku('../config')).toThrow(GecersizKimlik);
-    await expect(dizin.testYaz({ id: '../config' } as TestKaydi)).rejects.toBeInstanceOf(GecersizKimlik);
-    await expect(dizin.testSil('../config')).rejects.toBeInstanceOf(GecersizKimlik);
+    expect(() => dizin.testOku('../config')).toThrow(InvalidId);
+    await expect(dizin.testYaz({ id: '../config' } as TestKaydi)).rejects.toBeInstanceOf(InvalidId);
+    await expect(dizin.testSil('../config')).rejects.toBeInstanceOf(InvalidId);
 
     await expect(readFile(dizin.yol('config.json'), 'utf8')).resolves.toBe(oncekiConfig);
   });
@@ -353,16 +377,16 @@ describe('KobayDizini', () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     const sonuc = paket().result;
 
-    expect(() => dizin.kodYolu('../config')).toThrow(GecersizKimlik);
-    await expect(dizin.kodOku('../config')).rejects.toBeInstanceOf(GecersizKimlik);
-    await expect(dizin.kodYaz('../config', 'x')).rejects.toBeInstanceOf(GecersizKimlik);
-    await expect(dizin.kosuDizini('../config')).rejects.toBeInstanceOf(GecersizKimlik);
-    expect(() => dizin.kosuSonucuOku('../config')).toThrow(GecersizKimlik);
-    await expect(dizin.kosuListele('../config')).rejects.toBeInstanceOf(GecersizKimlik);
-    await expect(dizin.kosuSonucuYaz({ ...sonuc, runId: '../config' })).rejects.toBeInstanceOf(GecersizKimlik);
-    await expect(dizin.hataPaketiYaz({ ...paket(), testId: '../config' }, [])).rejects.toBeInstanceOf(GecersizKimlik);
-    await expect(dizin.hataPaketiOku('../config')).rejects.toBeInstanceOf(GecersizKimlik);
-    await expect(dizin.hataPaketiKopyala('../config', join(await geciciDizin(), 'kopya'))).rejects.toBeInstanceOf(GecersizKimlik);
+    expect(() => dizin.kodYolu('../config')).toThrow(InvalidId);
+    await expect(dizin.kodOku('../config')).rejects.toBeInstanceOf(InvalidId);
+    await expect(dizin.kodYaz('../config', 'x')).rejects.toBeInstanceOf(InvalidId);
+    await expect(dizin.kosuDizini('../config')).rejects.toBeInstanceOf(InvalidId);
+    expect(() => dizin.kosuSonucuOku('../config')).toThrow(InvalidId);
+    await expect(dizin.kosuListele('../config')).rejects.toBeInstanceOf(InvalidId);
+    await expect(dizin.kosuSonucuYaz({ ...sonuc, runId: '../config' })).rejects.toBeInstanceOf(InvalidId);
+    await expect(dizin.hataPaketiYaz({ ...paket(), testId: '../config' }, [])).rejects.toBeInstanceOf(InvalidId);
+    await expect(dizin.hataPaketiOku('../config')).rejects.toBeInstanceOf(InvalidId);
+    await expect(dizin.hataPaketiKopyala('../config', join(await geciciDizin(), 'kopya'))).rejects.toBeInstanceOf(InvalidId);
   });
 
   it('eşzamanlı hata paketi yazımlarından birini eksiksiz yayımlar', async () => {
@@ -449,7 +473,7 @@ describe('KobayDizini', () => {
     await symlink(disari, dizin.yol('failure-out'));
 
     await expect(dizin.hataPaketiKopyala('t_abc12345', hataPaketiCikisYolu(kok, 't_abc12345')))
-      .rejects.toThrow('Güvenli olmayan hata paketi çıkışı');
+      .rejects.toThrow('Unsafe failure bundle output path');
 
     // Dışarıdaki klasöre hiç dokunulmamalı: ne silinmiş ne de paket yazılmış.
     expect((await readdir(disari)).sort()).toEqual(['degerli.txt', 't_abc12345']);
@@ -465,7 +489,7 @@ describe('KobayDizini', () => {
     await symlink(disari, dizin.yol('failure-out', 't_abc12345'));
 
     await expect(dizin.hataPaketiKopyala('t_abc12345', hataPaketiCikisYolu(kok, 't_abc12345')))
-      .rejects.toThrow('Güvenli olmayan hata paketi çıkışı');
+      .rejects.toThrow('Unsafe failure bundle output path');
 
     expect(await readdir(disari)).toEqual(['degerli.txt']);
     // Reddedilen yol geçici klasör de bırakmamalı.
@@ -479,7 +503,7 @@ describe('KobayDizini', () => {
     const hedef = join(kok, 'elle-verilen');
     await mkdir(hedef);
 
-    await expect(dizin.hataPaketiKopyala('t_abc12345', hedef)).rejects.toThrow('Hedef klasör zaten var');
+    await expect(dizin.hataPaketiKopyala('t_abc12345', hedef)).rejects.toThrow('Destination directory already exists');
   });
 
   it('koşu dizinleri test başına son beşe budanır; başka testin koşusu kalır', async () => {
@@ -561,7 +585,7 @@ describe('KobayDizini', () => {
 });
 
 describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
-  const kimlik = { kullanici: 'ali', parola: 'gizli-1', origin: 'http://mesru.test' };
+  const kimlik = { username: 'ali', password: 'gizli-1', origin: 'http://mesru.test' };
 
   async function kimlikliDizin(): Promise<KobayDizini> {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
@@ -572,7 +596,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
 
   /** `.kobay/` kökündeki kenara alınmış kopyalar. */
   async function kalintilar(dizin: KobayDizini): Promise<string[]> {
-    return (await readdir(dizin.kok)).filter((ad) => ad.startsWith('.eski-'));
+    return (await readdir(dizin.kok)).filter((ad) => ad.startsWith('.stale-'));
   }
 
   /**
@@ -581,14 +605,14 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
    */
   /** İşlem işaretinin ham içeriği. */
   async function isaretiOku(dizin: KobayDizini): Promise<Record<string, unknown>> {
-    return JSON.parse(await readFile(join(dizin.kok, '.kimlik-islemi'), 'utf8')) as Record<string, unknown>;
+    return JSON.parse(await readFile(join(dizin.kok, '.credentials-txn'), 'utf8')) as Record<string, unknown>;
   }
 
   async function isaretiBayatlat(dizin: KobayDizini): Promise<void> {
-    const ham = JSON.parse(await readFile(join(dizin.kok, '.kimlik-islemi'), 'utf8')) as Record<string, unknown>;
+    const ham = JSON.parse(await readFile(join(dizin.kok, '.credentials-txn'), 'utf8')) as Record<string, unknown>;
     await writeFile(
-      join(dizin.kok, '.kimlik-islemi'),
-      JSON.stringify({ ...ham, baslatildi: new Date(Date.now() - 60 * 60 * 1000).toISOString() }),
+      join(dizin.kok, '.credentials-txn'),
+      JSON.stringify({ ...ham, startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() }),
     );
   }
 
@@ -637,7 +661,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
 
     expect(await kalintilar(dizin)).toEqual([]);
     // Bayat işaret de temizlenir; sonraki komutlar aynı kararı yeniden vermez.
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(sonraki?.kimlikOku()).resolves.toEqual(kimlik);
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
   });
@@ -648,7 +672,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     // (--login). İşlem hiç olmamış sayılır: yeni kimlik ezilir.
     await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     await isaretiBayatlat(dizin);
-    await dizin.kimlikYaz({ kullanici: 'veli', parola: 'gizli-2', origin: 'http://kotu.test' });
+    await dizin.kimlikYaz({ username: 'veli', password: 'gizli-2', origin: 'http://kotu.test' });
 
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     await KobayDizini.bul(dizin.projeKoku);
@@ -676,8 +700,8 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await expect(sonraki?.kimlikOku()).resolves.toEqual(kimlik);
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
     expect(await kalintilar(dizin)).toEqual([]);
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(basilan).toContain('yarım kalmış bir hedef değişikliği geri alındı');
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(basilan).toContain('an unfinished target change was rolled back');
     expect(basilan).toContain(config.baseUrl);
   });
 
@@ -689,7 +713,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config, yeniKimlikYazilacak: true });
     expect(islem.adlar).toEqual(['storageState.json']);
     await dizin.configYaz({ ...config, baseUrl: 'http://kotu.test:8080' });
-    await dizin.kimlikYaz({ kullanici: 'veli', parola: 'gizli-2', origin: 'http://kotu.test:8080' });
+    await dizin.kimlikYaz({ username: 'veli', password: 'gizli-2', origin: 'http://kotu.test:8080' });
     await isaretiBayatlat(dizin);
 
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
@@ -708,9 +732,9 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     // `--force --login`: eskisi kenara alındı, yeni hedef ve yeni parola yazıldı,
     // sonra kesinleşme düştü.
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config, yeniKimlikYazilacak: true });
-    expect((await isaretiOku(dizin)).kenaraAlinanlar).toEqual(['credentials.json', 'storageState.json']);
+    expect((await isaretiOku(dizin)).setAside).toEqual(['credentials.json', 'storageState.json']);
     await dizin.configYaz({ ...config, baseUrl: 'http://kotu.test:8080' });
-    await dizin.kimlikYaz({ kullanici: 'veli', parola: 'gizli-2', origin: 'http://kotu.test:8080' });
+    await dizin.kimlikYaz({ username: 'veli', password: 'gizli-2', origin: 'http://kotu.test:8080' });
 
     // İlk geri alma denemesi: credentials kopyası geri kondu, storageState düştü.
     atomikDurum.renameKosulu = (eski) => eski.includes('-storageState.json');
@@ -721,7 +745,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     atomikDurum.renameKosulu = undefined;
     atomikDurum.renameKodu = undefined;
 
-    expect(ilkHata).toBeInstanceOf(KimlikGeriAlinamadi);
+    expect(ilkHata).toBeInstanceOf(CredentialsRollbackFailed);
     // Orijinal kimlik yerine kondu; geriye yalnız oturum kopyası ve işaret kaldı.
     await expect(dizin.kimlikOku()).resolves.toEqual(kimlik);
     expect(await kalintilar(dizin)).toHaveLength(1);
@@ -737,7 +761,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await expect(sonraki?.configOku()).resolves.toEqual(config);
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
     expect(await kalintilar(dizin)).toEqual([]);
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('aynı işaretle kurtarma iki kez koşarsa sonuç değişmez; orijinal kimlik durur', async () => {
@@ -745,7 +769,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config, yeniKimlikYazilacak: true });
     const isaretYedegi = await isaretiOku(dizin);
     await dizin.configYaz({ ...config, baseUrl: 'http://kotu.test:8080' });
-    await dizin.kimlikYaz({ kullanici: 'veli', parola: 'gizli-2', origin: 'http://kotu.test:8080' });
+    await dizin.kimlikYaz({ username: 'veli', password: 'gizli-2', origin: 'http://kotu.test:8080' });
 
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     await islem.geriAl({ configYazildi: true, yeniKimlikYazildi: true });
@@ -755,9 +779,9 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     // İşaret (örneğin silinemediği için) yerinde kalsaydı kurtarma aynı kayıtla
     // bir kez daha koşardı: kopya kalmadığı için eski kural "eski kimlik yoktu"
     // sonucuna varıp geri konmuş orijinali silerdi. Kalıcı olgu bunu keser.
-    await writeFile(join(dizin.kok, '.kimlik-islemi'), JSON.stringify({
+    await writeFile(join(dizin.kok, '.credentials-txn'), JSON.stringify({
       ...isaretYedegi,
-      baslatildi: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     }));
     await KobayDizini.bul(dizin.projeKoku);
     uyari.mockRestore();
@@ -773,14 +797,14 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     const ham = await isaretiOku(dizin);
     // Kimlik kopyası önceki bir denemede geri konmuş; geriye yalnız oturum kopyası kaldı.
     await rename(
-      join(dizin.kok, `.eski-${String(ham.islemId)}-credentials.json`),
+      join(dizin.kok, `.stale-${String(ham.txnId)}-credentials.json`),
       dizin.yol('credentials.json'),
     );
     // Eski bir kobay sürümünün işareti: kalıcı olgu hiç yazılmamış.
-    delete ham.kenaraAlinanlar;
-    await writeFile(join(dizin.kok, '.kimlik-islemi'), JSON.stringify({
+    delete ham.setAside;
+    await writeFile(join(dizin.kok, '.credentials-txn'), JSON.stringify({
       ...ham,
-      baslatildi: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     }));
 
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
@@ -790,7 +814,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
 
     // Güvenli taraf: silinmedi, kullanıcıya ne yapacağı söylendi.
     await expect(dizin.kimlikOku()).resolves.toEqual(kimlik);
-    expect(basilan).toContain('kenara alınan dosya listesi yok');
+    expect(basilan).toContain('has no set-aside file list');
     expect(basilan).toContain('kobay project get');
   });
 
@@ -799,10 +823,10 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     // Eski kobay sürümünün yazdığı işaret: geri alma kaydı yok.
     const ham = await isaretiOku(dizin);
-    delete ham.eskiConfig;
-    await writeFile(join(dizin.kok, '.kimlik-islemi'), JSON.stringify({
+    delete ham.previousConfig;
+    await writeFile(join(dizin.kok, '.credentials-txn'), JSON.stringify({
       ...ham,
-      baslatildi: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      startedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
     }));
 
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
@@ -814,10 +838,10 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     expect(await kalintilar(dizin)).toHaveLength(2);
     await expect(dizin.kimlikOku()).resolves.toBeNull();
     await expect(stat(dizin.storageStateYolu())).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(basilan).toContain('işlem öncesi config yok');
-    expect(basilan).toContain('elle credentials.json adına taşıyın');
+    expect(basilan).toContain('has no pre-transaction config');
+    expect(basilan).toContain('move it to credentials.json by hand');
     // İşaret gider; yoksa kilit sonsuza dek durur.
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('işlem sürerken (taze işaret) ikinci sürecin bul() çağrısı kalıntıya dokunmaz', async () => {
@@ -838,7 +862,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     // Birinci süreç işini bitirince hem kalıntı hem işaret gider.
     await islem.kesinlestir();
     expect(await kalintilar(dizin)).toEqual([]);
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('kesinleştirme anında dosya geri konmuşsa başarı dönmez, açık hata verir', async () => {
@@ -846,14 +870,14 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     // Başka bir süreç (eski sürüm ya da yarış) kalıntıyı asıl adına geri koydu.
     for (const ad of await kalintilar(dizin)) {
-      await rename(join(dizin.kok, ad), join(dizin.kok, ad.slice('.eski-'.length + 36 + 1)));
+      await rename(join(dizin.kok, ad), join(dizin.kok, ad.slice('.stale-'.length + 36 + 1)));
     }
 
-    await expect(islem.kesinlestir()).rejects.toThrow('Kimlik işlemi bozuldu');
+    await expect(islem.kesinlestir()).rejects.toThrow('Credentials transaction broke');
 
     // Kullanıcının verisi duruyor ve işaret bırakılmıyor.
     await expect(dizin.kimlikOku()).resolves.toEqual(kimlik);
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('kesinleşmeden sonra silme düşerse işlem düşmez: uyarılır, kalıntı yerinde kalır', async () => {
@@ -870,12 +894,12 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     const basilan = uyari.mock.calls.map(([metin]) => String(metin)).join('');
     uyari.mockRestore();
     atomikDurum.rmKosulu = undefined;
-    expect(basilan).toContain('storageState.json kopyası silinemedi');
+    expect(basilan).toContain('the set-aside copy of storageState.json could not be deleted');
     expect(basilan).toContain('EBUSY');
     // Silinebilen gitti (temizlik ilk hatada durmuyor), silinemeyen duruyor.
     const kalan = await kalintilar(dizin);
     expect(kalan).toHaveLength(1);
-    expect(kalan[0]).toMatch(/^\.eski-[0-9a-f-]{36}-storageState\.json$/);
+    expect(kalan[0]).toMatch(/^\.stale-[0-9a-f-]{36}-storageState\.json$/);
     // Kalıntı kaldığı için işaret yerinde bırakılır ve kesinleşmeyi taşır:
     // kurtarma bu kalıntıyı geri koymayacağını ancak buradan bilir.
     await expect(isaretiOku(dizin)).resolves.toMatchObject({ committed: true });
@@ -903,14 +927,14 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     // hedefin yanında `test run` tarafından Playwright'a verilmezdi.
     await expect(stat(dizin.storageStateYolu())).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await kalintilar(dizin)).toEqual([]);
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('kesinleşme işareti yazılamazsa işlem doğrulama hatasıyla düşer; hiçbir yedek silinmez', async () => {
     const dizin = await kimlikliDizin();
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     // İşaretin atomik yazımı (geçici dosya + rename) düşüyor.
-    atomikDurum.renameKosulu = (_eski, yeni) => yeni.endsWith('.kimlik-islemi');
+    atomikDurum.renameKosulu = (_eski, yeni) => yeni.endsWith('.credentials-txn');
 
     await expect(islem.kesinlestir()).rejects.toThrow('yeniden adlandırma simülasyonu');
 
@@ -921,7 +945,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await expect(dizin.kimlikOku()).resolves.toEqual(kimlik);
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
     // Geri koyma tamamlandı: kalıntı kalmadığı için işaret de kaldırılır.
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('taze kesinleşmiş işaret ikinci işlemi hâlâ reddeder; sahibi devralıp temizler', async () => {
@@ -936,12 +960,12 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
 
     // Başka bir sürece ait taze kesinleşmiş işaret: o süreç hâlâ temizlik
     // yapıyor olabilir, ikinci komut reddedilir.
-    await writeFile(join(dizin.kok, '.kimlik-islemi'), JSON.stringify({ ...isaret, pid: process.ppid }));
-    await expect(dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config })).rejects.toBeInstanceOf(KimlikIslemiYurumede);
+    await writeFile(join(dizin.kok, '.credentials-txn'), JSON.stringify({ ...isaret, pid: process.ppid }));
+    await expect(dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config })).rejects.toBeInstanceOf(CredentialsTxnInProgress);
     expect(await kalintilar(dizin)).toHaveLength(1);
 
     // Kendi sürecimizin bıraktığı iz kilit sayılmaz: kalıntı temizlenip devralınır.
-    await writeFile(join(dizin.kok, '.kimlik-islemi'), JSON.stringify(isaret));
+    await writeFile(join(dizin.kok, '.credentials-txn'), JSON.stringify(isaret));
     const ikinci = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     uyari.mockRestore();
     expect(await kalintilar(dizin)).toEqual([]);
@@ -954,7 +978,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     // sayılır; işaret dosyasının atomik yazımı bu sayıyı kaydırmasın.
     let cagri = 0;
     atomikDurum.renameKosulu = (_eski, yeni) => {
-      if (!yeni.includes('/.eski-')) return false;
+      if (!yeni.includes('/.stale-')) return false;
       cagri += 1;
       return cagri === 2;
     };
@@ -971,16 +995,16 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     const dizin = await kimlikliDizin();
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     const oncekiKalintilar = await kalintilar(dizin);
-    const oncekiIsaret = await readFile(join(dizin.kok, '.kimlik-islemi'), 'utf8');
+    const oncekiIsaret = await readFile(join(dizin.kok, '.credentials-txn'), 'utf8');
     expect(oncekiKalintilar).toHaveLength(2);
 
     // İkinci komut beklemez; açık kullanım hatasıyla düşer (CLI'da çıkış 2).
-    await expect(dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config })).rejects.toBeInstanceOf(KimlikIslemiYurumede);
-    await expect(dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config })).rejects.toThrow('bitmesini bekleyip');
+    await expect(dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config })).rejects.toBeInstanceOf(CredentialsTxnInProgress);
+    await expect(dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config })).rejects.toThrow('wait for it to finish');
 
     // Reddedilen komut ne kalıntıya ne de işarete dokunur: kilit ilk işlemin.
     expect(await kalintilar(dizin)).toEqual(oncekiKalintilar);
-    await expect(readFile(join(dizin.kok, '.kimlik-islemi'), 'utf8')).resolves.toBe(oncekiIsaret);
+    await expect(readFile(join(dizin.kok, '.credentials-txn'), 'utf8')).resolves.toBe(oncekiIsaret);
 
     await islem.kesinlestir();
   });
@@ -991,7 +1015,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     await dizin.configYaz(yeniConfig);
     // Kesinleştirme doğrulama aşamasında düşüyor (işaret yazımı tutmuyor).
-    atomikDurum.renameKosulu = (_eski, yeni) => yeni.endsWith('.kimlik-islemi');
+    atomikDurum.renameKosulu = (_eski, yeni) => yeni.endsWith('.credentials-txn');
     const kesinlestirmeHatasi = await islem.kesinlestir().catch((hata: unknown) => hata);
     expect(kesinlestirmeHatasi).toBeInstanceOf(Error);
     atomikDurum.renameKosulu = undefined;
@@ -1004,16 +1028,16 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
       .catch((hata: unknown) => hata);
     casus.mockRestore();
 
-    expect(geriAlmaHatasi).toBeInstanceOf(KimlikGeriAlinamadi);
+    expect(geriAlmaHatasi).toBeInstanceOf(CredentialsRollbackFailed);
     expect((geriAlmaHatasi as Error).message).toContain('ENOSPC');
-    expect((geriAlmaHatasi as Error).message).toContain('yeniden çalıştırın');
+    expect((geriAlmaHatasi as Error).message).toContain('run the command again');
     // Asıl bulgu: config geri yazılamadığı için yedekler geri konmadı ve
     // düzeltmeyi taşıyan işaret silinmedi.
     expect(await kalintilar(dizin)).toHaveLength(2);
     await expect(dizin.configOku()).resolves.toEqual(yeniConfig);
     const kalanIsaret = await isaretiOku(dizin);
     expect(kalanIsaret.committed ?? false).toBe(false);
-    expect(kalanIsaret.eskiConfig).toEqual(config);
+    expect(kalanIsaret.previousConfig).toEqual(config);
 
     // Sonraki komut: configYaz artık çalışıyor, kurtarma aynı sırayla tamamlıyor.
     // İşaret bu sürecin pid'iyle taze görünse de "geri alınamadı" diye bilindiği
@@ -1026,7 +1050,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await expect(sonraki?.kimlikOku()).resolves.toEqual(kimlik);
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
     expect(await kalintilar(dizin)).toEqual([]);
-    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('bayat kesinleşmemiş kurtarmada yedek geri konamazsa bul() fırlatır; kilit devralınmaz', async () => {
@@ -1034,26 +1058,26 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     await isaretiBayatlat(dizin);
     // Kurtarma yedeği asıl adına koyamıyor (izin yok).
-    atomikDurum.renameKosulu = (eski) => eski.includes('/.eski-');
+    atomikDurum.renameKosulu = (eski) => eski.includes('/.stale-');
     atomikDurum.renameKodu = 'EACCES';
 
     const hata = await KobayDizini.bul(dizin.projeKoku).catch((h: unknown) => h);
 
-    expect(hata).toBeInstanceOf(KimlikGeriAlinamadi);
+    expect(hata).toBeInstanceOf(CredentialsRollbackFailed);
     // Kullanıcı hangi dosyanın neden geri konamadığını ve ne yapacağını görür.
-    expect((hata as Error).message).toMatch(/\.eski-[0-9a-f-]{36}-credentials\.json/);
+    expect((hata as Error).message).toMatch(/\.stale-[0-9a-f-]{36}-credentials\.json/);
     expect((hata as Error).message).toContain('EACCES');
-    expect((hata as Error).message).toContain('yeniden çalıştırın');
+    expect((hata as Error).message).toContain('run the command again');
     // İşaret ve yedek yerinde: sonraki komut aynı sırayla yeniden deneyebilir.
     expect(await kalintilar(dizin)).toHaveLength(2);
-    expect((await isaretiOku(dizin)).eskiConfig).toEqual(config);
+    expect((await isaretiOku(dizin)).previousConfig).toEqual(config);
 
     // Aynı süreçte kimliği değiştiren yeni bir işlem kilidi devralamaz; devralsaydı
     // işlem kaydını siler ve geri konamayan yedek sahipsiz kalırdı.
     await expect(dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config }))
-      .rejects.toBeInstanceOf(KimlikGeriAlinamadi);
+      .rejects.toBeInstanceOf(CredentialsRollbackFailed);
     expect(await kalintilar(dizin)).toHaveLength(2);
-    expect((await isaretiOku(dizin)).eskiConfig).toEqual(config);
+    expect((await isaretiOku(dizin)).previousConfig).toEqual(config);
 
     // Sorun giderilince sonraki komut geri almayı tamamlar.
     atomikDurum.renameKosulu = undefined;
@@ -1079,7 +1103,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     atomikDurum.rmKosulu = undefined;
     await expect(isaretiOku(dizin)).resolves.toMatchObject({ committed: true });
     await isaretiBayatlat(dizin);
-    const bayatIsaret = await readFile(join(dizin.kok, '.kimlik-islemi'), 'utf8');
+    const bayatIsaret = await readFile(join(dizin.kok, '.credentials-txn'), 'utf8');
 
     const sonuclar = await Promise.allSettled([
       dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config }),
@@ -1089,21 +1113,21 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     // Devralmayı rename kazananı belirler: tek sahip.
     expect(sonuclar.filter((sonuc) => sonuc.status === 'fulfilled')).toHaveLength(1);
     const kaybeden = sonuclar.find((sonuc) => sonuc.status === 'rejected') as PromiseRejectedResult;
-    expect(kaybeden.reason).toBeInstanceOf(KimlikIslemiYurumede);
+    expect(kaybeden.reason).toBeInstanceOf(CredentialsTxnInProgress);
     // Red taze işaret kontrolünden değil, devralma rename'inin düşmesinden geldi:
     // sahibi bilinmediği için mesajda pid ayrıntısı yok.
     expect((kaybeden.reason as Error).message).not.toContain('pid');
     // Kilit gerçekten devralındı ve devralma kopyası ortalıkta bırakılmadı.
-    await expect(readFile(join(dizin.kok, '.kimlik-islemi'), 'utf8')).resolves.not.toBe(bayatIsaret);
-    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.kimlik-islemi-devir-'))).toEqual([]);
+    await expect(readFile(join(dizin.kok, '.credentials-txn'), 'utf8')).resolves.not.toBe(bayatIsaret);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.credentials-txn-takeover-'))).toEqual([]);
   });
 
-  it('kurtarma yalnız bayat işaretteki islemId’nin kalıntısını toparlar', async () => {
+  it('kurtarma yalnız bayat işaretteki txnId’nin kalıntısını toparlar', async () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     await dizin.storageStateYaz('{"cookies":[],"origins":[]}');
-    // Yabancı işlemin (başka islemId) kalıntısı; bu işaret onu kapsamıyor.
+    // Yabancı işlemin (başka txnId) kalıntısı; bu işaret onu kapsamıyor.
     const yabanciId = '11111111-1111-4111-8111-111111111111';
-    await writeFile(join(dizin.kok, `.eski-${yabanciId}-credentials.json`), '{"kullanici":"veli","parola":"gizli-9"}');
+    await writeFile(join(dizin.kok, `.stale-${yabanciId}-credentials.json`), '{"kullanici":"veli","parola":"gizli-9"}');
 
     // Bu işlem yalnız storageState.json'u kenara aldı, sonra süreci öldü.
     await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
@@ -1115,7 +1139,7 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
 
     // Kendi kalıntısı geri kondu, yabancıya dokunulmadı.
     await expect(readFile(dizin.storageStateYolu(), 'utf8')).resolves.toBe('{"cookies":[],"origins":[]}');
-    expect(await kalintilar(dizin)).toEqual([`.eski-${yabanciId}-credentials.json`]);
+    expect(await kalintilar(dizin)).toEqual([`.stale-${yabanciId}-credentials.json`]);
 
     // Yabancı kalıntı sahipsizdir: geri konmaz (hangi hedefe ait olduğu
     // bilinmiyor), silinmez de (içinde parola olabilir); uyarılıp bırakılır.
@@ -1123,8 +1147,8 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await KobayDizini.bul(dizin.projeKoku);
     const basilan = uyari.mock.calls.map(([metin]) => String(metin)).join('');
     uyari.mockRestore();
-    expect(basilan).toContain(`sahipsiz giriş bilgisi kopyası .eski-${yabanciId}-credentials.json`);
-    expect(await kalintilar(dizin)).toEqual([`.eski-${yabanciId}-credentials.json`]);
+    expect(basilan).toContain(`an orphaned credentials copy .stale-${yabanciId}-credentials.json`);
+    expect(await kalintilar(dizin)).toEqual([`.stale-${yabanciId}-credentials.json`]);
     await expect(dizin.kimlikOku()).resolves.toBeNull();
   });
 
@@ -1132,22 +1156,391 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     const birinci = '11111111-1111-4111-8111-111111111111';
     const ikinci = '22222222-2222-4222-8222-222222222222';
-    await writeFile(join(dizin.kok, `.eski-${birinci}-credentials.json`), '{"kullanici":"ali"}');
-    await writeFile(join(dizin.kok, `.eski-${ikinci}-credentials.json`), '{"kullanici":"veli"}');
+    await writeFile(join(dizin.kok, `.stale-${birinci}-credentials.json`), '{"kullanici":"ali"}');
+    await writeFile(join(dizin.kok, `.stale-${ikinci}-credentials.json`), '{"kullanici":"veli"}');
     const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
 
     await KobayDizini.bul(dizin.projeKoku);
 
     const basilan = uyari.mock.calls.map(([metin]) => String(metin)).join('');
     uyari.mockRestore();
-    expect(basilan).toContain(`sahipsiz giriş bilgisi kopyası .eski-${birinci}-credentials.json`);
-    expect(basilan).toContain(`sahipsiz giriş bilgisi kopyası .eski-${ikinci}-credentials.json`);
-    expect(basilan).toContain('elle credentials.json adına taşıyın');
+    expect(basilan).toContain(`an orphaned credentials copy .stale-${birinci}-credentials.json`);
+    expect(basilan).toContain(`an orphaned credentials copy .stale-${ikinci}-credentials.json`);
+    expect(basilan).toContain('move it to credentials.json by hand');
     // Hiçbiri seçilmez; kullanıcı elle karar verir.
     expect((await kalintilar(dizin)).sort()).toEqual([
-      `.eski-${birinci}-credentials.json`,
-      `.eski-${ikinci}-credentials.json`,
+      `.stale-${birinci}-credentials.json`,
+      `.stale-${ikinci}-credentials.json`,
     ]);
     await expect(dizin.kimlikOku()).resolves.toBeNull();
+  });
+
+  // --- 0.1 ile 0.2 aynı projede: kilit iki adla birden tutulur ---------------
+
+  it('kilit iki işareti birden alır: .credentials-txn ve .kimlik-islemi aynı işlem, ayrı şema', async () => {
+    const dizin = await kimlikliDizin();
+
+    const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
+
+    // Asıl bulgu: yalnız yeni adı yaratmak yetmiyordu. 0.1 süreci yalnız
+    // `.kimlik-islemi`ni tanır; eski ad da `O_EXCL` ile alınmazsa iki sürüm
+    // aynı anda sahip olabiliyordu.
+    const yeni = JSON.parse(await readFile(join(dizin.kok, '.credentials-txn'), 'utf8')) as { txnId: string };
+    // Eski ad 0.1'in Türkçe şemasıyla yazılır: aynı işlem, eski alan adları.
+    // İngilizce gövde yazılsaydı 0.1 dosyayı geçersiz sayıp siler ve kilidi
+    // ezerdi — kilit iki adla tutulsa bile iki sahip doğardı.
+    const eski = JSON.parse(await readFile(join(dizin.kok, '.kimlik-islemi'), 'utf8')) as {
+      islemId: string;
+      txnId?: string;
+    };
+    expect(eski.islemId).toBe(yeni.txnId);
+    expect(eski.txnId).toBeUndefined();
+
+    await islem.kesinlestir();
+    // Kapanışta iki ad da gider; yoksa eski ad kilidi sonsuza dek tutardı.
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(dizin.kok, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('taze 0.1 işareti kilittir: yeni işlem reddedilir ve yeni adı geride bırakmaz', async () => {
+    const dizin = await kimlikliDizin();
+    // Yürüyen bir 0.1 komutunun işareti: yalnız eski ad, Türkçe alanlar.
+    await writeFile(join(dizin.kok, '.kimlik-islemi'), JSON.stringify({
+      pid: process.pid,
+      islemId: '22222222-3333-4444-5555-666666666666',
+      baslatildi: new Date().toISOString(),
+    }));
+
+    await expect(dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config }))
+      .rejects.toBeInstanceOf(CredentialsTxnInProgress);
+
+    // Reddedilen işlem `.credentials-txn`'i geride bırakmamalı: bıraksaydı
+    // kilit iki sahipli görünür, sonraki komut da boş yere reddedilirdi.
+    await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(dizin.kimlikOku()).resolves.toEqual(kimlik);
+  });
+
+  it('bayat 0.1 işareti devralınırken eski ad da yenilenir; devir kopyası kalmaz', async () => {
+    const dizin = await kimlikliDizin();
+    const bayatId = '33333333-4444-5555-6666-777777777777';
+    // Süreci ölmüş 0.1 işlemi; geri alma kaydı taşımadığı için devralınabilir.
+    await writeFile(join(dizin.kok, '.kimlik-islemi'), JSON.stringify({
+      pid: process.pid,
+      islemId: bayatId,
+      baslatildi: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    }));
+
+    const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
+
+    const yeni = JSON.parse(await readFile(join(dizin.kok, '.credentials-txn'), 'utf8')) as { txnId: string };
+    const eski = JSON.parse(await readFile(join(dizin.kok, '.kimlik-islemi'), 'utf8')) as { islemId: string };
+    expect(yeni.txnId).not.toBe(bayatId);
+    expect(eski.islemId).toBe(yeni.txnId);
+    expect((await readdir(dizin.kok)).filter((ad) => ad.startsWith('.credentials-txn-takeover-'))).toEqual([]);
+    await islem.kesinlestir();
+  });
+
+  it('iki işaret ayrı txnId taşıyorsa taze olanı esas alınır ve uyarı basılır', async () => {
+    const dizin = await kimlikliDizin();
+    const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
+    const yeni = await isaretiOku(dizin);
+    // 0.1 süreci araya girip kendi (daha taze) işaretini eski ada yazmış.
+    const yabanciId = '44444444-5555-6666-7777-888888888888';
+    await writeFile(join(dizin.kok, '.kimlik-islemi'), JSON.stringify({
+      ...yeni,
+      txnId: yabanciId,
+      startedAt: new Date(Date.now() + 1000).toISOString(),
+    }));
+    const uyari = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    // Kalıntılar taze görünen yabancı işleme ait sayılır: dokunulmaz.
+    await KobayDizini.bul(dizin.projeKoku);
+
+    const basilan = uyari.mock.calls.map(([metin]) => String(metin)).join('');
+    expect(basilan).toContain('the two credentials transaction markers disagree');
+    expect(basilan).toContain(yabanciId);
+    expect(await kalintilar(dizin)).toHaveLength(2);
+    await islem.geriAl();
+    uyari.mockRestore();
+  });
+});
+
+describe('0.1 → 0.2 göçü (Türkçe alan ve dosya adları)', () => {
+  /** 0.1 sürümünün bıraktığı bir `.kobay` dizinini elle kurar. */
+  async function eskiProje(ekle: {
+    harita?: boolean;
+    kimlik?: boolean;
+    oneriler?: boolean;
+  } = {}): Promise<string> {
+    const kok = await geciciDizin();
+    const kobay = join(kok, '.kobay');
+    await mkdir(join(kobay, 'plan'), { recursive: true });
+    await writeFile(join(kobay, 'config.json'), JSON.stringify({
+      baseUrl: 'http://uygulama.test',
+      loginUrl: 'http://uygulama.test/giris',
+      beyin: { adaptor: 'sahte', model: 'm1' },
+    }, null, 2));
+    if (ekle.harita !== false) {
+      await writeFile(join(kobay, 'harita.json'), JSON.stringify({
+        baseUrl: 'http://uygulama.test',
+        girisYapildi: true,
+        sayfalar: [{
+          url: 'http://uygulama.test/cariler',
+          baslik: 'Cariler',
+          basliklar: ['Cariler'],
+          linkler: ['http://uygulama.test/'],
+          formlar: [{ action: '/ara', alanlar: [{ ad: 'q', tip: 'text', etiket: 'Ara' }] }],
+          dugmeler: ['Yeni cari'],
+          menu: ['Cariler'],
+        }],
+        kesifTarihi: '2026-09-17T00:00:00.000Z',
+      }, null, 2));
+    }
+    if (ekle.kimlik === true) {
+      await writeFile(
+        join(kobay, 'credentials.json'),
+        JSON.stringify({ kullanici: 'ali', parola: 'gizli-1', origin: 'http://uygulama.test' }),
+        { mode: 0o600 },
+      );
+    }
+    if (ekle.oneriler === true) {
+      await writeFile(join(kobay, 'plan', 'onerileri.json'), JSON.stringify([{
+        proposalId: 'p_abc123',
+        title: 'Cari listesi',
+        description: 'Listeyi görüntüler',
+        priority: 'p1',
+        category: 'gezinti',
+        feature: 'cariler',
+        type: 'frontend',
+        url: '/cariler',
+        steps: [{ type: 'action', description: 'Aç' }],
+      }], null, 2));
+    }
+    return kok;
+  }
+
+  it('harita.json → map.json: ad göçer, Türkçe alanlar İngilizceye eşlenir', async () => {
+    const kok = await eskiProje();
+    const dizin = (await KobayDizini.bul(kok))!;
+
+    expect(dizin).not.toBeNull();
+    await expect(access(dizin.yol('map.json'))).resolves.toBeUndefined();
+    await expect(access(dizin.yol('harita.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const harita = await dizin.haritaOku();
+    expect(harita).toMatchObject({
+      loggedIn: true,
+      exploredAt: '2026-09-17T00:00:00.000Z',
+      pages: [{
+        title: 'Cariler',
+        headings: ['Cariler'],
+        links: ['http://uygulama.test/'],
+        buttons: ['Yeni cari'],
+        forms: [{ action: '/ara', fields: [{ name: 'q', type: 'text', label: 'Ara' }] }],
+      }],
+    });
+
+    // İlk komut dosyanın içeriğini de yeni adlara çevirir: tek sözleşme kalır.
+    const ham = await readFile(dizin.yol('map.json'), 'utf8');
+    expect(ham).toContain('"pages"');
+    expect(ham).not.toContain('"sayfalar"');
+    expect(ham).not.toContain('"baslik"');
+  });
+
+  it('plan/onerileri.json → plan/proposals.json yeniden adlandırılır', async () => {
+    const kok = await eskiProje({ oneriler: true });
+    const dizin = (await KobayDizini.bul(kok))!;
+
+    await expect(access(dizin.yol('plan', 'proposals.json'))).resolves.toBeUndefined();
+    await expect(access(dizin.yol('plan', 'onerileri.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(dizin.onerileriOku()).resolves.toMatchObject([{ proposalId: 'p_abc123' }]);
+  });
+
+  it('config.json `beyin` ile açılır, ilk komutta `brain` ile yeniden yazılır', async () => {
+    const kok = await eskiProje();
+    const dizin = (await KobayDizini.bul(kok))!;
+
+    await expect(dizin.configOku()).resolves.toEqual({
+      baseUrl: 'http://uygulama.test',
+      loginUrl: 'http://uygulama.test/giris',
+      brain: { adaptor: 'sahte', model: 'm1' },
+    });
+    const ham = await readFile(dizin.yol('config.json'), 'utf8');
+    expect(ham).toContain('"brain"');
+    expect(ham).not.toContain('"beyin"');
+  });
+
+  it('credentials.json yeni adlarla ve 0600 ile yeniden yazılır', async () => {
+    const kok = await eskiProje({ kimlik: true });
+    const dizin = (await KobayDizini.bul(kok))!;
+
+    await expect(dizin.kimlikOku()).resolves.toEqual({
+      username: 'ali',
+      password: 'gizli-1',
+      origin: 'http://uygulama.test',
+    });
+    const ham = await readFile(dizin.yol('credentials.json'), 'utf8');
+    expect(ham).toContain('"username"');
+    expect(ham).not.toContain('"kullanici"');
+    expect((await stat(dizin.yol('credentials.json'))).mode & 0o777).toBe(0o600);
+  });
+
+  it('hedef adı doluysa yeniden adlandırma yapılmaz; yeni dosya kazanır', async () => {
+    const kok = await eskiProje();
+    const dizin = (await KobayDizini.bul(kok))!;
+    // İlk açılış map.json üretti; ikinci bir eski ad bırakılırsa üstüne yazılmaz.
+    await writeFile(dizin.yol('harita.json'), '{"baseUrl":"x"}');
+    const ikinci = (await KobayDizini.bul(kok))!;
+
+    await expect(readFile(ikinci.yol('harita.json'), 'utf8')).resolves.toBe('{"baseUrl":"x"}');
+    await expect(ikinci.haritaOku()).resolves.toMatchObject({ baseUrl: 'http://uygulama.test' });
+  });
+
+  it('eski alan adlı failure.json okunur (haritaFarki → mapDiff)', async () => {
+    const dizin = await KobayDizini.ac(await geciciDizin(), config);
+    const eskiPaket = {
+      ...paket(),
+      haritaFarki: {
+        url: 'http://uygulama.test/cariler',
+        eklenenBasliklar: ['Müşteriler'],
+        silinenBasliklar: ['Cariler'],
+        eklenenDugmeler: [],
+        silinenDugmeler: [],
+        eklenenFormAlanlari: [],
+        silinenFormAlanlari: [],
+        sayfaKimligiUyusuyor: true,
+        degisti: true,
+      },
+    };
+    await mkdir(dizin.yol('failure', 't_abc12345'), { recursive: true });
+    await writeFile(dizin.yol('failure', 't_abc12345', 'failure.json'), JSON.stringify(eskiPaket));
+
+    await expect(dizin.hataPaketiOku('t_abc12345')).resolves.toMatchObject({
+      mapDiff: { addedHeadings: ['Müşteriler'], removedHeadings: ['Cariler'], pageIdentityMatches: true, changed: true },
+    });
+  });
+
+  it('eski adlı işaret ve `.eski-` kalıntısı kurtarmada tanınır', async () => {
+    const kok = await eskiProje({ kimlik: true });
+    const kobay = join(kok, '.kobay');
+    const txnId = '11111111-2222-3333-4444-555555555555';
+    // 0.1 biçiminde yarım kalmış işlem: Türkçe alan adları, eski işaret ve önek.
+    await rename(join(kobay, 'credentials.json'), join(kobay, `.eski-${txnId}-credentials.json`));
+    await writeFile(join(kobay, '.kimlik-islemi'), JSON.stringify({
+      pid: process.pid,
+      islemId: txnId,
+      baslatildi: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      eskiConfig: {
+        baseUrl: 'http://eski.test',
+        beyin: { adaptor: 'sahte' },
+      },
+      kenaraAlinanlar: ['credentials.json'],
+    }));
+
+    const dizin = (await KobayDizini.bul(kok))!;
+
+    // Geri alma yürüdü: config işlem öncesine döndü, kimlik geri kondu.
+    await expect(dizin.configOku()).resolves.toEqual({
+      baseUrl: 'http://eski.test',
+      brain: { adaptor: 'sahte' },
+    });
+    await expect(dizin.kimlikOku()).resolves.toEqual({
+      username: 'ali',
+      password: 'gizli-1',
+      origin: 'http://uygulama.test',
+    });
+    expect((await readdir(kobay)).filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
+    await expect(access(join(kobay, '.kimlik-islemi'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('göç hedefi kontrolden SONRA doğarsa yeni dosya ezilmez', async () => {
+    const kok = await eskiProje();
+    const dizin = (await KobayDizini.bul(kok))!;
+    // Yarışı kur: bayat 0.1 dosyası geri konur, hedefte yeni içerik vardır.
+    await writeFile(dizin.yol('harita.json'), JSON.stringify({ baseUrl: 'http://bayat.test' }));
+    await writeFile(dizin.yol('map.json'), JSON.stringify({ baseUrl: 'http://yeni.test' }));
+    // "Hedef var mı" kontrolü hedefi göremiyor: araya giren süreç onu
+    // kontrolden sonra yazmış gibi. Kontrole güvenip `rename` eden eski kod
+    // bayat dosyayı yeninin üstüne taşırdı; `link` EEXIST verip durur.
+    atomikDurum.accessYokKosulu = (yol) => yol.endsWith('/map.json');
+
+    const ikinci = (await KobayDizini.bul(kok))!;
+
+    atomikDurum.accessYokKosulu = undefined;
+    await expect(readFile(ikinci.yol('map.json'), 'utf8')).resolves.toContain('yeni.test');
+    // Kaynak silinmez: hedef doluyken 0.1 dosyasına hiç dokunulmaz.
+    await expect(readFile(ikinci.yol('harita.json'), 'utf8')).resolves.toContain('bayat.test');
+  });
+
+  it('sert bağ desteklenmeyen dosya sisteminde göç yine yürür (hedef yoksa taşı)', async () => {
+    const kok = await eskiProje();
+    // `link` yok (EXDEV): körlemesine değil, yalnız hedef boşken taşınır.
+    atomikDurum.linkKodu = 'EXDEV';
+
+    const dizin = (await KobayDizini.bul(kok))!;
+
+    atomikDurum.linkKodu = undefined;
+    await expect(dizin.haritaOku()).resolves.toMatchObject({ baseUrl: 'http://uygulama.test' });
+    await expect(access(dizin.yol('map.json'))).resolves.toBeUndefined();
+    await expect(access(dizin.yol('harita.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('sert bağ yoksa ve hedef doluysa 0.1 dosyası yeniyi ezmez', async () => {
+    const kok = await eskiProje();
+    const dizin = (await KobayDizini.bul(kok))!;
+    await writeFile(dizin.yol('harita.json'), JSON.stringify({ baseUrl: 'http://bayat.test' }));
+    await writeFile(dizin.yol('map.json'), JSON.stringify({ baseUrl: 'http://yeni.test' }));
+    atomikDurum.linkKodu = 'EXDEV';
+
+    const ikinci = (await KobayDizini.bul(kok))!;
+
+    atomikDurum.linkKodu = undefined;
+    await expect(readFile(ikinci.yol('map.json'), 'utf8')).resolves.toContain('yeni.test');
+  });
+
+  it('yazılamayan .kobay: göç uyarı verir, harita ve öneriler eski adından okunur', async () => {
+    if (process.getuid?.() === 0) return;
+    const kok = await eskiProje({ oneriler: true });
+    const kobay = join(kok, '.kobay');
+    await chmod(join(kobay, 'plan'), 0o500);
+    await chmod(kobay, 0o500);
+    const uyarilar: string[] = [];
+    const casus = vi.spyOn(process.stderr, 'write').mockImplementation((parca: unknown) => {
+      uyarilar.push(String(parca));
+      return true;
+    });
+
+    try {
+      const dizin = (await KobayDizini.bul(kok))!;
+      // Asıl bulgu: göç düştüğü hâlde veri görünmez olmamalı.
+      await expect(dizin.haritaOku()).resolves.toMatchObject({
+        baseUrl: 'http://uygulama.test',
+        loggedIn: true,
+      });
+      await expect(dizin.onerileriOku()).resolves.toMatchObject([{ proposalId: 'p_abc123' }]);
+    } finally {
+      casus.mockRestore();
+      await chmod(kobay, 0o700);
+      await chmod(join(kobay, 'plan'), 0o700);
+    }
+
+    const basilan = uyarilar.join('');
+    expect(basilan).toContain('could not migrate harita.json to map.json');
+    expect(basilan).toContain('could not migrate plan/onerileri.json to plan/proposals.json');
+    expect(basilan).toContain('reading the old file');
+  });
+
+  it('yeni işlem yeni adları yazar: .credentials-txn ve .stale- öneki', async () => {
+    const dizin = await KobayDizini.ac(await geciciDizin(), config);
+    await dizin.kimlikYaz({ username: 'ali', password: 'gizli-1' });
+
+    await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
+
+    const girdiler = await readdir(dizin.kok);
+    expect(girdiler).toContain('.credentials-txn');
+    expect(girdiler.filter((ad) => ad.startsWith('.stale-'))).toEqual([`.stale-${
+      String((JSON.parse(await readFile(dizin.yol('.credentials-txn'), 'utf8')) as { txnId: string }).txnId)
+    }-credentials.json`]);
+    expect(girdiler.filter((ad) => ad.startsWith('.eski-'))).toEqual([]);
   });
 });

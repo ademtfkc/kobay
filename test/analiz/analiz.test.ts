@@ -2,8 +2,8 @@ import { access, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
-import { beforeAll, describe, expect, it, type TestContext } from 'vitest';
-import { BeyinHatasi, beyinOlustur } from '../../src/beyin/index.js';
+import { beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
+import { BrainError, beyinOlustur } from '../../src/beyin/index.js';
 import { KobayDizini, yazAtomik, type KosuSonucu, type Sayfa, type TestKaydi } from '../../src/depo/index.js';
 import { analizKullaniciIstemiOlustur, analizSistemIstemiOlustur, domTemizle, dusenAdimKodunuBul, hataAnalizEt, hataMesajiniTemizle } from '../../src/analiz/index.js';
 
@@ -83,15 +83,15 @@ async function carilerHazirla(yanit: unknown, s: { dom: string; kod?: string; sa
     yazAtomik(join(kosuDizini, 'adim-1.html'), s.dom),
     dizin.haritaYaz({
       baseUrl: 'http://uygulama.test',
-      girisYapildi: true,
-      kesifTarihi: '2026-09-17T00:00:00.000Z',
-      sayfalar: [{
+      loggedIn: true,
+      exploredAt: '2026-09-17T00:00:00.000Z',
+      pages: [{
         url: 'http://uygulama.test/cariler',
-        baslik: 'Cariler',
-        basliklar: ['Cariler'],
-        linkler: [],
-        formlar: [],
-        dugmeler: [],
+        title: 'Cariler',
+        headings: ['Cariler'],
+        links: [],
+        forms: [],
+        buttons: [],
         menu: [],
         ...s.sayfa,
       }],
@@ -135,7 +135,7 @@ describe('domTemizle', () => {
   it('script, style, svg, yorum, class ve data gürültüsünü siler; sınırı belirtir', () => {
     expect(domTemizle('<style>x</style><!-- y --><p class="a" data-x="b"> Merhaba </p><svg>x</svg><script>x</script>')).toBe('<p> Merhaba </p>');
     expect(domTemizle('a'.repeat(30_000))).toBe('a'.repeat(30_000));
-    expect(domTemizle('a'.repeat(30_001))).toBe(`${'a'.repeat(30_000)}…[kesildi]`);
+    expect(domTemizle('a'.repeat(30_001))).toBe(`${'a'.repeat(30_000)}…[truncated]`);
   });
 });
 
@@ -176,36 +176,41 @@ describe('hataAnalizEt', () => {
 
   it('harita yokken eski sınıflandırmayı ve paket biçimini korur', async () => {
     const { dizin, beyin } = await hazirDizin();
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const paket = await hataAnalizEt(beyin, dizin, test, sonuc, [
       { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
     ]);
 
     expect(paket.failure.failureKind).toBe('product_bug');
     expect(paket.result.failureKind).toBe('product_bug');
-    expect(paket).not.toHaveProperty('haritaFarki');
-    expect(paket.failure.recommendedFixTarget.rationale).toContain('ürün kodunda');
+    expect(paket).not.toHaveProperty('mapDiff');
+    expect(paket.failure.recommendedFixTarget.rationale).toContain('search the product code');
     expect(paket.failure.recommendedFixTarget.rationale).toContain('Received');
+    expect(stderr.mock.calls.map((cagri) => String(cagri[0]))).toContainEqual(
+      expect.stringContaining('[kobay analysis] No explore map; map comparison skipped.'),
+    );
+    stderr.mockRestore();
   });
 
   it('model metinlerinden iç harita alan adlarını ayıklar', async () => {
     const { dizin, beyin } = await hazirDizin({
       ...beyinYanit,
-      rootCauseHypothesis: 'Keşif haritasında sayfaKimligiUyusuyor=false ve degisti=false görünüyor.',
+      rootCauseHypothesis: 'Keşif haritasında pageIdentityMatches=false ve changed=false görünüyor.',
       recommendedFixTarget: {
         ...beyinYanit.recommendedFixTarget,
-        rationale: 'silinenBasliklar alanına göre ürün kodu bozuk.',
+        rationale: 'removedHeadings alanına göre ürün kodu bozuk.',
       },
-      evidence: [{ kind: 'snapshot', stepIndex: 1, summary: 'eklenenDugmeler boş.' }],
+      evidence: [{ kind: 'snapshot', stepIndex: 1, summary: 'addedButtons boş.' }],
     });
     const paket = await hataAnalizEt(beyin, dizin, test, sonuc, [
       { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
     ]);
 
     const metin = JSON.stringify(paket.failure);
-    for (const alan of ['sayfaKimligiUyusuyor', 'degisti', 'silinenBasliklar', 'eklenenDugmeler']) {
+    for (const alan of ['pageIdentityMatches', 'changed', 'removedHeadings', 'addedButtons']) {
       expect(metin).not.toContain(alan);
     }
-    expect(paket.failure.rootCauseHypothesis).toContain('sayfa kimliğiyle uyuşmuyor');
+    expect(paket.failure.rootCauseHypothesis).toContain('does not match the page identity from explore');
   });
 
   it('paket errorMessage alanlarında iç stack satırlarını çıkarır, kullanıcı satırını bırakır', async () => {
@@ -232,7 +237,7 @@ describe('hataAnalizEt', () => {
       { stepIndex: 1, description: 'Durumu doğrula', status: 'failed', errorMessage: hata, durationMs: 10 },
     ]);
 
-    expect(paket.failure.recommendedFixTarget.rationale).toContain('ürün kodunda');
+    expect(paket.failure.recommendedFixTarget.rationale).toContain('search the product code');
     expect(paket.failure.recommendedFixTarget.rationale).toContain('Ödeme reddedildi');
   });
 
@@ -258,11 +263,11 @@ describe('hataAnalizEt', () => {
       yazAtomik(join(kosuDizini, 'adim-1.html'), '<html><head><title>Müşteriler</title></head><body><h1>Müşteriler</h1></body></html>'),
       dizin.haritaYaz({
         baseUrl: 'http://uygulama.test',
-        girisYapildi: true,
-        kesifTarihi: '2026-09-17T00:00:00.000Z',
-        sayfalar: [{
-          url: 'http://uygulama.test/cariler', baslik: 'Cariler', basliklar: ['Cariler'],
-          linkler: [], formlar: [], dugmeler: [], menu: [],
+        loggedIn: true,
+        exploredAt: '2026-09-17T00:00:00.000Z',
+        pages: [{
+          url: 'http://uygulama.test/cariler', title: 'Cariler', headings: ['Cariler'],
+          links: [], forms: [], buttons: [], menu: [],
         }],
       }),
     ]);
@@ -273,19 +278,19 @@ describe('hataAnalizEt', () => {
 
     expect(paket.failure.failureKind).toBe('product_changed');
     expect(paket.result.failureKind).toBe('product_changed');
-    expect(paket.failure.rootCauseHypothesis).toContain('"Cariler" keşifte vardı, şimdi yok');
+    expect(paket.failure.rootCauseHypothesis).toContain('"Cariler" was present during explore and is gone now');
     expect(paket.failure.rootCauseHypothesis).toContain(testBugYanit.rootCauseHypothesis);
     expect(paket.failure.recommendedFixTarget).toEqual({
       kind: 'code',
       reference: 'http://uygulama.test/cariler: "Cariler" → "Müşteriler"',
-      rationale: 'Keşif haritası bayatlamış; keşif yenilenip test yeniden üretilmeli.',
+      rationale: 'The explore map is stale; re-run explore and regenerate the test.',
     });
-    expect(paket.haritaFarki).toMatchObject({
+    expect(paket.mapDiff).toMatchObject({
       url: 'http://uygulama.test/cariler',
-      silinenBasliklar: ['Cariler'],
-      eklenenBasliklar: ['Müşteriler'],
-      sayfaKimligiUyusuyor: true,
-      degisti: true,
+      removedHeadings: ['Cariler'],
+      addedHeadings: ['Müşteriler'],
+      pageIdentityMatches: true,
+      changed: true,
     });
   });
 
@@ -293,16 +298,16 @@ describe('hataAnalizEt', () => {
     if (!tarayiciMumkun(context)) return;
     const { dizin, beyin, carilerTesti } = await carilerHazirla(beyinYanit, {
       dom: '<html><head><title>Cariler</title></head><body><h1>Cariler</h1></body></html>',
-      sayfa: { dugmeler: ['Kaydet'] },
+      sayfa: { buttons: ['Kaydet'] },
     });
 
     const paket = await hataAnalizEt(beyin, dizin, carilerTesti, sonuc, [
       { stepIndex: 1, description: 'Kaydet düğmesine bas', status: 'failed', errorMessage: 'Kaydet düğmesi bulunamadı', durationMs: 10 },
     ]);
 
-    expect(paket.haritaFarki).toMatchObject({ silinenDugmeler: ['Kaydet'], eklenenDugmeler: [] });
+    expect(paket.mapDiff).toMatchObject({ removedButtons: ['Kaydet'], addedButtons: [] });
     expect(paket.failure.failureKind).toBe('product_bug');
-    expect(paket.failure.rootCauseHypothesis).not.toContain('Yerel harita kıyası');
+    expect(paket.failure.rootCauseHypothesis).not.toContain('Local map comparison');
   }, 60_000);
 
   it('sayfa kimliği tutmuyorsa (giriş ekranına yönlenme) emniyet çalışmaz', async (context) => {
@@ -316,10 +321,10 @@ describe('hataAnalizEt', () => {
       { stepIndex: 1, description: 'Cariler başlığını doğrula', status: 'failed', errorMessage: 'Cariler bulunamadı', durationMs: 10 },
     ]);
 
-    expect(paket.haritaFarki).toMatchObject({
-      silinenBasliklar: ['Cariler'],
-      eklenenBasliklar: ['Giriş Yap'],
-      sayfaKimligiUyusuyor: false,
+    expect(paket.mapDiff).toMatchObject({
+      removedHeadings: ['Cariler'],
+      addedHeadings: ['Giriş Yap'],
+      pageIdentityMatches: false,
     });
     expect(paket.failure.failureKind).toBe('test_bug');
   }, 60_000);
@@ -334,7 +339,7 @@ describe('hataAnalizEt', () => {
       { stepIndex: 1, description: 'Cariler başlığını doğrula', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
     ]);
 
-    expect(paket.haritaFarki?.eklenenBasliklar).toEqual(['Token: [maskelendi]']);
+    expect(paket.mapDiff?.addedHeadings).toEqual(['Token: [redacted]']);
     expect(JSON.stringify(paket)).not.toContain('abc123XYZ');
     const gunluk = await readFile(join(kosuDizini, `beyin-analiz-${test.id}-1.log`), 'utf8');
     expect(gunluk).not.toContain('abc123XYZ');
@@ -371,8 +376,8 @@ describe('hataAnalizEt', () => {
     ]);
 
     expect(paket.failure.evidence).toEqual([
-      { kind: 'screenshot', stepIndex: 1, path: 'adim-1.png', summary: 'düşen adımın ekran görüntüsü' },
-      { kind: 'snapshot', stepIndex: 1, path: 'adim-1.html', summary: 'düşen adımın DOM kopyası' },
+      { kind: 'screenshot', stepIndex: 1, path: 'adim-1.png', summary: 'screenshot of the failing step' },
+      { kind: 'snapshot', stepIndex: 1, path: 'adim-1.html', summary: 'DOM snapshot of the failing step' },
     ]);
     await Promise.all(paket.failure.evidence.map((kanit) => access(join(dizin.yol('failure', test.id), kanit.path))));
   });
@@ -444,7 +449,7 @@ describe('hataAnalizEt', () => {
   it('beyin hatasını yutmaz', async () => {
     const { dizin } = await hazirDizin();
     const bosBeyin = beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: await mkdtemp(join(tmpdir(), 'kobay-analiz-bos-')) });
-    await expect(hataAnalizEt(bosBeyin, dizin, test, sonuc, [])).rejects.toBeInstanceOf(BeyinHatasi);
+    await expect(hataAnalizEt(bosBeyin, dizin, test, sonuc, [])).rejects.toBeInstanceOf(BrainError);
   });
 
   it('JSON, yetkilendirme ve URL sorgu sırlarını maskeler', async () => {
@@ -469,7 +474,7 @@ describe('hataAnalizEt', () => {
     for (const sir of ['json-secret', 'duz-secret', 'abc.DEF-123', 'QWxhZGRpbjpvcGVuIHNlc2FtZQ', 'url-secret', 'key-secret', 'hata-secret', 'hata.token', 'Zm9vOmJhcg']) {
       expect(gunluk).not.toContain(sir);
     }
-    expect(gunluk).toContain('[maskelendi]');
+    expect(gunluk).toContain('[redacted]');
   });
 });
 
@@ -478,10 +483,16 @@ describe('analiz istemi', () => {
     const istem = analizSistemIstemiOlustur();
 
     expect(istem).toContain('"rootCauseHypothesis":"..."');
-    expect(istem).toContain('anahtarları İngilizce ve değişmezdir; bunları çevirme');
+    expect(istem).toContain('{"rootCauseHypothesis":"...","failureKind":"test_bug","recommendedFixTarget"');
+    expect(istem).toContain('are English and fixed; do not translate them');
     expect(istem).toContain('product_changed');
-    expect(istem).toContain("iç JSON alan adlarını");
+    expect(istem).toContain("Kobay's internal JSON field names");
     expect(istem).toContain('Received');
+    expect(istem).toContain(
+      "Write names, descriptions and rationale in the language of the application's UI and docs;"
+      + ' if mixed or unclear, use English.',
+    );
+    expect(istem).not.toMatch(/[çğıöşüÇĞİÖŞÜ]/);
   });
 
   it('konsol kayıtlarını 20 ile sınırlar', () => {
@@ -493,6 +504,8 @@ describe('analiz istemi', () => {
     });
     expect(istem).toContain('k-20');
     expect(istem).not.toContain('k-21');
-    expect(istem).toContain('## Keşif haritasıyla fark\n[harita farkı yok]');
+    expect(istem).toContain('"text": "k-1"');
+    expect(istem).toContain('## Diff against the exploration map\n[no map diff]');
+    expect(istem).toContain('"name": "Ürün başlığı görünür"');
   });
 });

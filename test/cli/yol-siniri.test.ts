@@ -60,7 +60,7 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
     for (const planPath of ['../../disarisi.json', '../disarisi.json', disBelge]) {
       const sonuc = await testCreate({ cwd, planPath });
       expect(sonuc.exitCode, planPath).toBe(2);
-      expect(sonuc.mesaj, planPath).toContain('planPath proje kökü dışında olamaz');
+      expect(sonuc.mesaj, planPath).toContain('planPath cannot be outside the project root');
     }
   });
 
@@ -70,11 +70,11 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
     for (const docs of ['../disarisi.md', disBelge]) {
       const guncelle = await projectUpdate({ cwd, docs });
       expect(guncelle.exitCode, docs).toBe(2);
-      expect(guncelle.mesaj, docs).toContain('docsPath proje kökü dışında olamaz');
+      expect(guncelle.mesaj, docs).toContain('docsPath cannot be outside the project root');
 
       const olustur = await projectCreate({ cwd, url: 'http://mesru.test', force: true, docs });
       expect(olustur.exitCode, docs).toBe(2);
-      expect(olustur.mesaj, docs).toContain('docs proje kökü dışında olamaz');
+      expect(olustur.mesaj, docs).toContain('docs cannot be outside the project root');
     }
     // Reddedilen belge config'e yazılmaz.
     const dizin = await KobayDizini.bul(cwd);
@@ -88,11 +88,11 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
 
     const guncelle = await projectUpdate({ cwd, docs: 'belge/kacak.md' });
     expect(guncelle.exitCode).toBe(2);
-    expect(guncelle.mesaj).toContain('docsPath proje kökü dışında olamaz');
+    expect(guncelle.mesaj).toContain('docsPath cannot be outside the project root');
 
     const planla = await testCreate({ cwd, planPath: 'belge/kacak.md' });
     expect(planla.exitCode).toBe(2);
-    expect(planla.mesaj).toContain('planPath proje kökü dışında olamaz');
+    expect(planla.mesaj).toContain('planPath cannot be outside the project root');
   });
 
   it('kayıtlı docsPath sonradan dışarı çevrilirse okuma anında reddedilir', async () => {
@@ -108,7 +108,7 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
     // Tarayıcı hiç açılmadan, belge okunmadan reddedilmeli.
     const plan = await planGenerate({ cwd });
     expect(plan.exitCode).toBe(2);
-    expect(plan.mesaj).toContain('docsPath proje kökü dışında');
+    expect(plan.mesaj).toContain('docsPath cannot be outside the project root');
   });
 
   it('kök içindeki normal yol geçer', async () => {
@@ -129,7 +129,7 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
 
     expect((await projectUpdate({ cwd, docs: 'belge/alt/urun.md' })).exitCode).toBe(0);
     const olustur = await testCreate({ cwd, planPath: 'belge/plan.json' });
-    expect(olustur.mesaj ?? '').not.toContain('proje kökü dışında');
+    expect(olustur.mesaj ?? '').not.toContain('cannot be outside the project root');
     expect(olustur.exitCode).toBe(0);
   });
 
@@ -148,7 +148,7 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
     const sonuc = await failureGet({ cwd, id: 't_abc12345' });
 
     expect(sonuc.exitCode).toBe(2);
-    expect(sonuc.mesaj).toContain('Güvenli olmayan hata paketi çıkışı');
+    expect(sonuc.mesaj).toContain('Unsafe failure bundle output path');
     // Kök dışındaki klasör el değmemiş olmalı.
     expect((await readdir(disari)).sort()).toEqual(['degerli.txt', 't_abc12345']);
     await expect(readFile(join(disari, 't_abc12345', 'icerik.txt'), 'utf8')).resolves.toBe('bu da silinmemeli');
@@ -165,7 +165,7 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
     const sonuc = await failureGet({ cwd, id: 't_abc12345' });
 
     expect(sonuc.exitCode).toBe(2);
-    expect(sonuc.mesaj).toContain('Güvenli olmayan hata paketi çıkışı');
+    expect(sonuc.mesaj).toContain('Unsafe failure bundle output path');
     expect(await readdir(disari)).toEqual(['degerli.txt']);
   });
 
@@ -191,7 +191,7 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
 
     const hedef = join(disari, 'paket');
     const sonuc = await failureGet({ cwd, id: 't_abc12345', out: hedef });
-    expect(sonuc.mesaj ?? '').not.toContain('proje kökü dışında');
+    expect(sonuc.mesaj ?? '').not.toContain('cannot be outside the project root');
     expect(sonuc.exitCode).toBe(0);
     await access(join(hedef, 'failure.json'));
   });

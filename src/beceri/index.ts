@@ -42,14 +42,14 @@ async function mevcutOku(yol: string): Promise<string> {
   }
 }
 
-/** Bir dosyaya yazmanın sonucu; JSON çıktısındaki `islem` alanının değeri. */
-export type Islem = 'olusturuldu' | 'guncellendi' | 'degismedi';
+/** Bir dosyaya yazmanın sonucu; JSON çıktısındaki `action` alanının değeri. */
+export type Islem = 'created' | 'updated' | 'unchanged';
 
 async function kur(yol: string, icerik: string): Promise<Islem> {
   const mevcut = await mevcutOku(yol);
-  if (mevcut === icerik) return 'degismedi';
+  if (mevcut === icerik) return 'unchanged';
   await yazAtomik(yol, icerik);
-  return mevcut === '' ? 'olusturuldu' : 'guncellendi';
+  return mevcut === '' ? 'created' : 'updated';
 }
 
 /**
@@ -64,14 +64,14 @@ export function mcpKayitTalimati(hedef: 'codex' | 'cursor'): string {
 }
 
 /** `.mcp.json` var ama JSON olarak okunamıyor ya da beklenen biçimde değil. */
-export class McpKaydiOkunamadi extends Error {
+export class McpRegistryUnreadable extends Error {
   constructor(yol: string, sebep: string) {
     super(
-      `MCP kaydı yazılamadı: ${yol} ${sebep}.`
-      + ' Dosya olduğu gibi bırakıldı; elle düzeltip `kobay agent install --target claude`'
-      + ' komutunu yeniden çalıştırın.',
+      `Could not write the MCP registration: ${yol} ${sebep}.`
+      + ' The file was left untouched; fix it by hand and run'
+      + ' `kobay agent install --target claude` again.',
     );
-    this.name = 'McpKaydiOkunamadi';
+    this.name = 'McpRegistryUnreadable';
   }
 }
 
@@ -133,13 +133,13 @@ function duzNesneMi(deger: unknown): deger is Record<string, unknown> {
  * Birleştirme kuralı: dosya yoksa oluşturulur; varsa köküyle birlikte bütün
  * alanları ve `mcpServers` altındaki diğer sunucular korunur, yalnız `kobay`
  * anahtarı üzerine yazılır. Geçerli JSON değilse (ya da kök/`mcpServers` bir
- * nesne değilse) dosyaya hiç dokunulmaz, `McpKaydiOkunamadi` atılır: burada
+ * nesne değilse) dosyaya hiç dokunulmaz, `McpRegistryUnreadable` atılır: burada
  * sessizce üzerine yazmak kullanıcının başka sunucularını silerdi.
  */
 export async function mcpKaydiYaz(
   projeKoku: string,
   girdi: McpSunucuGirdisi,
-): Promise<{ yol: string; islem: Islem; komut: string[] }> {
+): Promise<{ path: string; action: Islem; command: string[] }> {
   const yol = resolve(projeKoku, '.mcp.json');
   const mevcut = await mevcutOku(yol);
   let kok: Record<string, unknown> = {};
@@ -148,52 +148,52 @@ export async function mcpKaydiYaz(
     try {
       cozulen = JSON.parse(mevcut);
     } catch {
-      throw new McpKaydiOkunamadi(yol, 'geçerli JSON değil');
+      throw new McpRegistryUnreadable(yol, 'is not valid JSON');
     }
-    if (!duzNesneMi(cozulen)) throw new McpKaydiOkunamadi(yol, 'kökünde bir JSON nesnesi taşımıyor');
+    if (!duzNesneMi(cozulen)) throw new McpRegistryUnreadable(yol, 'does not hold a JSON object at its root');
     kok = cozulen;
   }
   const sunucular = kok.mcpServers;
   if (sunucular !== undefined && !duzNesneMi(sunucular)) {
-    throw new McpKaydiOkunamadi(yol, 'içindeki `mcpServers` bir JSON nesnesi değil');
+    throw new McpRegistryUnreadable(yol, 'has an `mcpServers` field that is not a JSON object');
   }
   const yeni = {
     ...kok,
     mcpServers: { ...(sunucular ?? {}), kobay: { command: girdi.command, args: girdi.args } },
   };
   return {
-    yol,
-    islem: await kur(yol, `${JSON.stringify(yeni, null, 2)}\n`),
-    komut: [girdi.command, ...girdi.args],
+    path: yol,
+    action: await kur(yol, `${JSON.stringify(yeni, null, 2)}\n`),
+    command: [girdi.command, ...girdi.args],
   };
 }
 
 const ISLEM_METNI = {
-  olusturuldu: 'created',
-  guncellendi: 'updated',
-  degismedi: 'unchanged (already up to date)',
+  created: 'created',
+  updated: 'updated',
+  unchanged: 'unchanged (already up to date)',
 } as const;
 
 const MCP_ISLEM_METNI = {
-  olusturuldu: 'MCP registered in .mcp.json',
-  guncellendi: 'MCP registration updated in .mcp.json',
-  degismedi: 'MCP already registered in .mcp.json',
+  created: 'MCP registered in .mcp.json',
+  updated: 'MCP registration updated in .mcp.json',
+  unchanged: 'MCP already registered in .mcp.json',
 } as const;
 
 /** `agent install` sonucu; `mcp` yalnız `.mcp.json` yazılan hedeflerde (claude) doludur. */
 export interface BeceriKurulumu {
-  yol: string;
-  islem: Islem;
-  mcp?: { yol: string; islem: Islem; komut: string[] };
+  path: string;
+  action: Islem;
+  mcp?: { path: string; action: Islem; command: string[] };
 }
 
-/** Kurulumdan sonra insana gösterilen metin; JSON'daki `islem` değeri Türkçe anahtar olarak kalır. */
+/** Kurulumdan sonra insana gösterilen metin; JSON gövdesi aynı bilgiyi verir. */
 export function kurulumMesaji(hedef: 'claude' | 'codex' | 'cursor', sonuc: BeceriKurulumu): string {
-  const bas = `Skill ${ISLEM_METNI[sonuc.islem]}: ${sonuc.yol}`;
+  const bas = `Skill ${ISLEM_METNI[sonuc.action]}: ${sonuc.path}`;
   if (hedef === 'claude') {
     if (sonuc.mcp === undefined) return bas;
-    const komut = sonuc.mcp.komut.join(' ');
-    return `${bas}\n${MCP_ISLEM_METNI[sonuc.mcp.islem]} (kobay → \`${komut}\`): ${sonuc.mcp.yol}`;
+    const komut = sonuc.mcp.command.join(' ');
+    return `${bas}\n${MCP_ISLEM_METNI[sonuc.mcp.action]} (kobay → \`${komut}\`): ${sonuc.mcp.path}`;
   }
   return `${bas}\n${mcpKayitTalimati(hedef)}`;
 }
@@ -209,17 +209,17 @@ export async function beceriKur(
     // Beceri yazıldıktan sonra kayıt: `.mcp.json` geçersizse komut düşer ama
     // beceri yerinde kalır; düzeltip komutu yeniden çalıştırmak yeterlidir.
     const mcp = await mcpKaydiYaz(s.projeKoku, await mcpSunucuGirdisi(s.ortam ?? process.env));
-    return { yol, islem, mcp };
+    return { path: yol, action: islem, mcp };
   }
 
   if (hedef === 'codex') {
     const yol = resolve(s.projeKoku, 'AGENTS.md');
     const mevcut = await mevcutOku(yol);
     const icerik = codexIcerigi(mevcut, isaretliIcerik(metin));
-    return { yol, islem: await kur(yol, icerik) };
+    return { path: yol, action: await kur(yol, icerik) };
   }
 
   const yol = resolve(s.projeKoku, '.cursor', 'rules', 'kobay.mdc');
   const icerik = `---\ndescription: Verify web app features with kobay\nalwaysApply: false\n---\n\n${govde(metin).trim()}\n`;
-  return { yol, islem: await kur(yol, icerik) };
+  return { path: yol, action: await kur(yol, icerik) };
 }

@@ -1,4 +1,4 @@
-import { basariliMetin, komutCalistir, KullanimHatasi, type KomutSonucu } from '../komut.js';
+import { basariliMetin, komutCalistir, UsageError, type KomutSonucu } from '../komut.js';
 
 interface DemoSunucusu {
   url: string;
@@ -20,7 +20,7 @@ async function paketDemoBaslat(port: number): Promise<DemoSunucusu> {
 export function demoPortu(deger: string): number {
   const port = Number(deger);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-    throw new KullanimHatasi('--port 0 ile 65535 arasında bir tam sayı olmalı');
+    throw new UsageError('--port must be an integer between 0 and 65535');
   }
   return port;
 }
@@ -29,12 +29,12 @@ export async function demo(a: { port?: number; baslat?: DemoBaslat } = {}): Prom
   return komutCalistir(async () => {
     const port = a.port ?? 3000;
     if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-      throw new KullanimHatasi('--port 0 ile 65535 arasında bir tam sayı olmalı');
+      throw new UsageError('--port must be an integer between 0 and 65535');
     }
     const sunucu = await (a.baslat ?? paketDemoBaslat)(port);
     return basariliMetin(
-      { url: sunucu.url, kullanici: 'demo', parola: 'demo123' },
-      `Kobay demo: ${sunucu.url}\nGiriş: demo / demo123\nDurdurmak için Ctrl+C`,
+      { url: sunucu.url, username: 'demo', password: 'demo123' },
+      `Kobay demo: ${sunucu.url}\nLogin: demo / demo123\nPress Ctrl+C to stop`,
     );
   });
 }

@@ -2,7 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { yazAtomik, type BeyinAyari } from '../depo/index.js';
-import { BeyinCalismaHatasi, BeyinHatasi, type BeyinIstegi } from './index.js';
+import { BrainRuntimeError, BrainError, type BeyinIstegi } from './index.js';
 
 export const VARSAYILAN_ZAMAN_ASIMI_SN = 180;
 export const VARSAYILAN_CLAUDE_BUTCESI_USD = 1;
@@ -35,9 +35,9 @@ function pozitifAyar(
   const ham = env[ortamAdi];
   const deger = ham === undefined || ham === '' ? (ayarDegeri ?? varsayilan) : Number(ham);
   if (!Number.isFinite(deger) || deger <= 0 || (tamSayi && !Number.isInteger(deger))) {
-    throw new BeyinCalismaHatasi(
-      'ayar_hatasi',
-      `${ortamAdi} pozitif${tamSayi ? ' bir tam sayı' : ' bir sayı'} olmalı.`,
+    throw new BrainRuntimeError(
+      'config_error',
+      `${ortamAdi} must be a positive ${tamSayi ? 'integer' : 'number'}.`,
     );
   }
   return deger;
@@ -69,9 +69,9 @@ function politikaOku(ayar: BeyinAyari, env: NodeJS.ProcessEnv): ButcePolitikasi 
 
 /** Tavana takılan ajana kararı insana bıraktıran ortak not. */
 export function insanOnayiNotu(ayarlar: string): string {
-  return 'Devam etmek için kullanıcıdan onay isteyin; ayarı kendiniz değiştirmeyin. '
-    + `Tavanı yalnız kullanıcı yükseltebilir (${ayarlar}); aynı kobay sürecinde tavan yalnız düşer, `
-    + 'yükseltme yeni bir kobay sürecinde (ör. MCP sunucusu yeniden başlatılınca) geçerli olur.';
+  return 'Ask the user for approval before continuing; do not change the setting yourself. '
+    + `Only the user can raise the limit (${ayarlar}); inside the same kobay process a limit can only go down, `
+    + 'a raise takes effect in a new kobay process (for example once the MCP server restarts).';
 }
 
 /**
@@ -121,22 +121,22 @@ export class BeyinButcesi {
 
   cagriBaslat(azamiMaliyetUsd = 0): BeyinRezervasyonu {
     if (!Number.isFinite(azamiMaliyetUsd) || azamiMaliyetUsd < 0) {
-      throw new BeyinCalismaHatasi('ayar_hatasi', 'Çağrı maliyet rezervasyonu negatif olmayan sonlu bir sayı olmalı.');
+      throw new BrainRuntimeError('config_error', 'The call cost reservation must be a finite, non-negative number.');
     }
     if (this.cagriSayisi >= this.azamiCagri) {
-      throw new BeyinCalismaHatasi(
-        'cagri_tavani',
-        `Beyin çağrısı tavanına (${this.azamiCagri}) ulaşıldı. `
-          + insanOnayiNotu('KOBAY_MAX_BRAIN_CALLS veya beyin.maxCalls'),
+      throw new BrainRuntimeError(
+        'call_cap',
+        `Brain call limit reached (${this.azamiCagri}). `
+          + insanOnayiNotu('KOBAY_MAX_BRAIN_CALLS or brain.maxCalls'),
       );
     }
     const kalan = this.kalanMaliyetUsd();
     if (azamiMaliyetUsd > kalan || kalan <= 0) {
-      throw new BeyinCalismaHatasi(
-        'maliyet_tavani',
-        `Maliyet tavanına ulaşıldı: bilinen ve rezerve toplam için kalan ${Math.max(0, kalan).toFixed(4)} USD; `
-          + `çağrı en çok ${azamiMaliyetUsd.toFixed(4)} USD gerektiriyor. Tavan ${this.azamiMaliyetUsd.toFixed(4)} USD. `
-          + insanOnayiNotu('KOBAY_MAX_TOTAL_COST_USD veya beyin.maxTotalCostUsd'),
+      throw new BrainRuntimeError(
+        'cost_cap',
+        `Cost limit reached: ${Math.max(0, kalan).toFixed(4)} USD left for the known and reserved total; `
+          + `the call needs up to ${azamiMaliyetUsd.toFixed(4)} USD. Limit ${this.azamiMaliyetUsd.toFixed(4)} USD. `
+          + insanOnayiNotu('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd'),
       );
     }
     this.cagriSayisi += 1;
@@ -156,19 +156,19 @@ export class BeyinButcesi {
     this.rezervasyonlar.delete(rezervasyon.kimlik);
     if (maliyetUsd === undefined || !Number.isFinite(maliyetUsd) || maliyetUsd < 0) {
       this.toplamMaliyetUsd += ayrilan;
-      throw new BeyinCalismaHatasi(
-        'maliyet_bilinmiyor',
-        `Sağlayıcı gerçek maliyeti bildirmedi; ${ayrilan.toFixed(4)} USD rezervasyon harcanmış sayıldı. `
-          + 'Yeni çağrı yapılmadı. Sağlayıcı kullanım kaydını denetleyin.',
+      throw new BrainRuntimeError(
+        'cost_unknown',
+        `The provider did not report the actual cost; the ${ayrilan.toFixed(4)} USD reservation was counted as spent. `
+          + 'No new call was made. Check the provider usage records.',
       );
     }
     this.toplamMaliyetUsd += maliyetUsd;
     if (maliyetUsd > ayrilan + Number.EPSILON || this.toplamMaliyetUsd > this.azamiMaliyetUsd + Number.EPSILON) {
-      throw new BeyinCalismaHatasi(
-        'maliyet_tavani',
-        `Maliyet tavanına ulaşıldı: gerçek maliyet ${maliyetUsd.toFixed(4)} USD, ${ayrilan.toFixed(4)} USD rezervasyonu aştı; `
-          + `bilinen toplam ${this.toplamMaliyetUsd.toFixed(4)} USD. `
-          + insanOnayiNotu('KOBAY_MAX_TOTAL_COST_USD veya beyin.maxTotalCostUsd'),
+      throw new BrainRuntimeError(
+        'cost_cap',
+        `Cost limit reached: the actual cost ${maliyetUsd.toFixed(4)} USD exceeded the ${ayrilan.toFixed(4)} USD reservation; `
+          + `known total ${this.toplamMaliyetUsd.toFixed(4)} USD. `
+          + insanOnayiNotu('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd'),
       );
     }
   }
@@ -195,8 +195,8 @@ export class BeyinButcesi {
 export function istemOlustur(istek: BeyinIstegi, semaHatasi?: string): string {
   const tekrar = semaHatasi === undefined
     ? ''
-    : `\n\nÖnceki yanıt şemaya uymadı: ${semaHatasi}. Yanıtı düzelt.`;
-  return `${istek.sistem}\n\n${istek.kullanici}\n\nYalnız JSON döndür, açıklama yok.${tekrar}`;
+    : `\n\nThe previous answer did not match the schema: ${semaHatasi}. Fix the answer.`;
+  return `${istek.sistem}\n\n${istek.kullanici}\n\nReturn JSON only, no commentary.${tekrar}`;
 }
 
 /** Metin içindeki ilk dengeli JSON nesnesini veya dizisini bulur. */
@@ -274,17 +274,17 @@ function issueYolu(issue: v.BaseIssue<unknown>): string {
 
 function semaSorununuVer(ham: string, sema: v.GenericSchema): { ok: true; veri: unknown } | { ok: false; hata: string } {
   const blok = ilkJsonBlogu(ham) ?? eksikKapanislariTamamla(ham);
-  if (blok === null) return { ok: false, hata: 'Yanıtta JSON bloğu bulunamadı.' };
+  if (blok === null) return { ok: false, hata: 'No JSON block was found in the answer.' };
   let ayrisilmis: unknown;
   try {
     ayrisilmis = JSON.parse(blok) as unknown;
   } catch {
-    return { ok: false, hata: 'JSON ayrıştırılamadı.' };
+    return { ok: false, hata: 'The JSON could not be parsed.' };
   }
   const sonuc = v.safeParse(sema, ayrisilmis);
   if (sonuc.success) return { ok: true, veri: sonuc.output };
   const hata = sonuc.issues.slice(0, 5).map((issue) => `${issueYolu(issue)}: ${issue.message}`).join('; ');
-  return { ok: false, hata: hata || 'Şema doğrulaması başarısız.' };
+  return { ok: false, hata: hata || 'Schema validation failed.' };
 }
 
 export async function semaylaSor<T>(
@@ -316,7 +316,7 @@ export async function semaylaSor<T>(
     semaHatasi = sonuc.hata;
     if (deneme === 0) await beyinGunluguYaz(istek.logDizini, istek.gorev, istem, sonHam, yanit);
   }
-  throw new BeyinHatasi('sema', sonHam);
+  throw new BrainError('schema', sonHam);
 }
 
 export async function beyinGunluguYaz(
@@ -352,11 +352,11 @@ const URL_GIZLI_PARAMETRE_DESENI = /([?&](?:token|api[_-]?key|password|parola|se
 
 export function gizliDegerleriMaskele(metin: string): string {
   return metin
-    .replace(TIRNAKLI_JSON_DESENI, '$1[maskelendi]$2')
-    .replace(BEARER_DESENI, '$1[maskelendi]')
-    .replace(BASIC_DESENI, '$1[maskelendi]')
-    .replace(URL_GIZLI_PARAMETRE_DESENI, '$1[maskelendi]')
-    .replace(ANAHTAR_DEGER_DESENI, '$1[maskelendi]$3');
+    .replace(TIRNAKLI_JSON_DESENI, '$1[redacted]$2')
+    .replace(BEARER_DESENI, '$1[redacted]')
+    .replace(BASIC_DESENI, '$1[redacted]')
+    .replace(URL_GIZLI_PARAMETRE_DESENI, '$1[redacted]')
+    .replace(ANAHTAR_DEGER_DESENI, '$1[redacted]$3');
 }
 
 const baslamayanSurecHatalari = new WeakSet<object>();
@@ -373,11 +373,11 @@ export interface KomutSonucu {
   zamanAsimi: boolean;
 }
 
-export function cliCikisHatasi(kod: number | null, stderr: string): BeyinCalismaHatasi {
+export function cliCikisHatasi(kod: number | null, stderr: string): BrainRuntimeError {
   const guvenliStderr = gizliDegerleriMaskele(stderr).slice(0, 500).trim();
-  return new BeyinCalismaHatasi(
-    'cli_hatasi',
-    `CLI ${kod ?? 'bilinmeyen'} koduyla kapandı${guvenliStderr === '' ? '.' : `: ${guvenliStderr}`}`,
+  return new BrainRuntimeError(
+    'cli_error',
+    `CLI exited with code ${kod ?? 'unknown'}${guvenliStderr === '' ? '.' : `: ${guvenliStderr}`}`,
   );
 }
 
@@ -414,7 +414,7 @@ export async function komutSonucu(
     surec.stdin.on('error', () => { /* süreç erken kapandıysa EPIPE; sonuç close ile gelir */ });
     surec.once('error', (hata: NodeJS.ErrnoException) => {
       clearTimeout(zamanlayici);
-      const hataNesnesi: Error = hata.code === 'ENOENT' ? new BeyinHatasi('cli_yok') : hata;
+      const hataNesnesi: Error = hata.code === 'ENOENT' ? new BrainError('cli_missing') : hata;
       if (!basladi) baslamayanSurecHatalari.add(hataNesnesi);
       red(hataNesnesi);
     });
@@ -433,7 +433,7 @@ export async function komutCalistir(
   secenekler: { girdi?: string; env: NodeJS.ProcessEnv; cwd?: string; zamanAsimiSn?: number },
 ): Promise<{ stdout: string; stderr: string }> {
   const sonuc = await komutSonucu(komut, argumanlar, secenekler);
-  if (sonuc.zamanAsimi) throw new BeyinHatasi('zaman_asimi');
+  if (sonuc.zamanAsimi) throw new BrainError('timeout');
   if (sonuc.kod !== 0) throw cliCikisHatasi(sonuc.kod, sonuc.stderr);
   return { stdout: sonuc.stdout, stderr: sonuc.stderr };
 }

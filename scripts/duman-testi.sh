@@ -99,21 +99,53 @@ adim "Kurulu paketten kobay demo (geçici port)"
 SUNUCU_PID=$!
 URL=""
 for _ in $(seq 1 50); do
-  URL="$(sed -n 's/^Kobay demo: //p' "$GECICI/sunucu.log" 2>/dev/null | head -n 1)"
+  # Satır önekinden bağımsız: günlükteki ilk loopback adresini al.
+  # `|| true`: eşleşme yoksa grep 1 döner, `set -e` betiği sessizce öldürürdü.
+  URL="$(grep -oE 'https?://127\.0\.0\.1:[0-9]+' "$GECICI/sunucu.log" 2>/dev/null | head -n 1 || true)"
   case "$URL" in http*) break ;; *) URL=""; sleep 0.2 ;; esac
 done
 [ -n "$URL" ] || hata "demo sunucusu açılmadı: $(cat "$GECICI/sunucu.log")"
 printf 'demo: %s\n' "$URL"
 
+adim "Demo sayfaları İngilizce mi (4 sayfa, ASCII dışı karakter yok)"
+CEREZ="$GECICI/cerez.txt"
+curl -fsS -c "$CEREZ" -o "$GECICI/sayfa-1-login.html" "$URL/login" || hata "/login alınamadı"
+curl -fsS -c "$CEREZ" -b "$CEREZ" -o /dev/null --data 'username=demo&password=demo123' "$URL/login" \
+  || hata "demo girişi başarısız"
+curl -fsS -b "$CEREZ" -o "$GECICI/sayfa-2-panel.html" "$URL/" || hata "/ alınamadı"
+curl -fsS -b "$CEREZ" -o "$GECICI/sayfa-3-records.html" "$URL/records" || hata "/records alınamadı"
+curl -fsS -b "$CEREZ" -o "$GECICI/sayfa-4-new.html" "$URL/new" || hata "/new alınamadı"
+python3 - "$GECICI" <<'PY' || hata "demo sayfaları tümüyle İngilizce değil"
+import glob, re, sys
+dizin = sys.argv[1]
+yollar = sorted(glob.glob(dizin + '/sayfa-*.html'))
+if len(yollar) != 4:
+    print('beklenen 4 sayfa, bulunan %d' % len(yollar)); sys.exit(1)
+basliklar, kotu = [], []
+for yol in yollar:
+    metin = open(yol, encoding='utf-8').read()
+    disi = sorted({k for k in metin if ord(k) > 127})
+    if disi:
+        kotu.append('%s: %s' % (yol.rsplit('/', 1)[-1], ''.join(disi)))
+    esles = re.search(r'<title>(.*?)</title>', metin)
+    basliklar.append(esles.group(1) if esles else '(başlıksız)')
+if kotu:
+    print('ASCII dışı karakter: ' + ' | '.join(kotu)); sys.exit(1)
+beklenen = ['Login', 'Dashboard', 'Record List', 'New Record']
+if basliklar != beklenen:
+    print('başlıklar %s, beklenen %s' % (basliklar, beklenen)); sys.exit(1)
+print('başlıklar: ' + ', '.join(basliklar) + ' (ASCII dışı karakter: 0)')
+PY
+
 adim "kobay project create (beyin: sahte)"
 PROJE="$GECICI/proje"
 mkdir -p "$PROJE"
 ( cd "$KURULUM" && KOBAY_LOGIN_USER=demo KOBAY_LOGIN_PASS=demo123 npx kobay project create \
-    --cwd "$PROJE" --url "$URL" --login --login-url "$URL/giris" --beyin sahte )
+    --cwd "$PROJE" --url "$URL" --login --login-url "$URL/login" --beyin sahte )
 
 adim "kobay explore"
 KESIF="$( cd "$KURULUM" && npx kobay explore --cwd "$PROJE" --output json )"
-SAYFA="$(printf '%s' "$KESIF" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["sayfalar"]))')"
+SAYFA="$(printf '%s' "$KESIF" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["pages"]))')"
 printf 'keşfedilen sayfa: %s (beklenen %s)\n' "$SAYFA" "$BEKLENEN_SAYFA"
 [ "$SAYFA" = "$BEKLENEN_SAYFA" ] || hata "sayfa sayısı $BEKLENEN_SAYFA değil: $SAYFA"
 

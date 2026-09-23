@@ -67,7 +67,7 @@ async function izlenebilirLinkler(sayfa: Page, koken: string): Promise<string[]>
 /** Aynı kökende, yalnızca güvenli bağlantıları genişlik öncelikli gezer. */
 export async function gez(sayfa: Page, secenekler: GezginSecenekleri): Promise<Sayfa[]> {
   const baslangic = normalUrl(secenekler.baseUrl);
-  if (!baslangic) throw new Error('baseUrl geçerli bir http(s) adresi olmalı');
+  if (!baslangic) throw new Error('baseUrl must be a valid http(s) address');
   const koken = new URL(baslangic).origin;
   const sayfalar = [...(secenekler.ilkSayfalar ?? [])].slice(0, secenekler.maxSayfa);
   const gorulen = new Set(sayfalar.map(({ url }) => url));

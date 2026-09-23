@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { kalicidanEsle } from './anahtar-gocu.js';
 import type {
   AdimSonucu,
   BeyinAyari,
@@ -40,44 +41,49 @@ export const PlanAdimiSemasi: v.GenericSchema<unknown, PlanAdimi> = v.object({
 });
 
 export const FormAlaniSemasi: v.GenericSchema<unknown, FormAlani> = v.object({
-  ad: v.string(),
-  tip: v.string(),
-  etiket: v.exactOptional(v.string()),
+  name: v.string(),
+  type: v.string(),
+  label: v.exactOptional(v.string()),
   placeholder: v.exactOptional(v.string()),
 });
 
 export const FormSemasi: v.GenericSchema<unknown, Form> = v.object({
   action: v.exactOptional(v.string()),
-  alanlar: v.array(FormAlaniSemasi),
+  fields: v.array(FormAlaniSemasi),
 });
 
 export const SayfaSemasi: v.GenericSchema<unknown, Sayfa> = v.object({
   url: v.string(),
-  baslik: v.string(),
-  basliklar: v.array(v.string()),
-  linkler: v.array(v.string()),
-  formlar: v.array(FormSemasi),
-  dugmeler: v.array(v.string()),
+  title: v.string(),
+  headings: v.array(v.string()),
+  links: v.array(v.string()),
+  forms: v.array(FormSemasi),
+  buttons: v.array(v.string()),
   menu: v.array(v.string()),
 });
 
-export const HaritaSemasi: v.GenericSchema<unknown, Harita> = v.object({
-  baseUrl: v.string(),
-  girisYapildi: v.boolean(),
-  sayfalar: v.array(SayfaSemasi),
-  kesifTarihi: v.string(),
-});
+/** Diskteki harita; 0.1'in Türkçe alan adları okunurken yenisine eşlenir. */
+export const HaritaSemasi: v.GenericSchema<unknown, Harita> = v.pipe(
+  v.unknown(),
+  v.transform(kalicidanEsle),
+  v.object({
+    baseUrl: v.string(),
+    loggedIn: v.boolean(),
+    pages: v.array(SayfaSemasi),
+    exploredAt: v.string(),
+  }),
+);
 
 export const HaritaFarkiSemasi: v.GenericSchema<unknown, HaritaFarki> = v.object({
   url: v.string(),
-  eklenenBasliklar: v.array(v.string()),
-  silinenBasliklar: v.array(v.string()),
-  eklenenDugmeler: v.array(v.string()),
-  silinenDugmeler: v.array(v.string()),
-  eklenenFormAlanlari: v.array(v.string()),
-  silinenFormAlanlari: v.array(v.string()),
-  sayfaKimligiUyusuyor: v.boolean(),
-  degisti: v.boolean(),
+  addedHeadings: v.array(v.string()),
+  removedHeadings: v.array(v.string()),
+  addedButtons: v.array(v.string()),
+  removedButtons: v.array(v.string()),
+  addedFormFields: v.array(v.string()),
+  removedFormFields: v.array(v.string()),
+  pageIdentityMatches: v.boolean(),
+  changed: v.boolean(),
 });
 
 export const OneriSemasi: v.GenericSchema<unknown, Oneri> = v.object({
@@ -149,16 +155,21 @@ export const HataAnaliziSemasi: v.GenericSchema<unknown, HataAnalizi> = v.object
   evidence: v.array(KanitSemasi),
 });
 
-export const HataPaketiSemasi: v.GenericSchema<unknown, HataPaketi> = v.object({
-  snapshotId: v.string(),
-  testId: v.string(),
-  runId: v.string(),
-  result: KosuSonucuSemasi,
-  steps: v.array(AdimSonucuSemasi),
-  code: v.string(),
-  failure: HataAnaliziSemasi,
-  haritaFarki: v.exactOptional(HaritaFarkiSemasi),
-});
+/** Diskteki hata paketi; 0.1'in Türkçe alan adları okunurken yenisine eşlenir. */
+export const HataPaketiSemasi: v.GenericSchema<unknown, HataPaketi> = v.pipe(
+  v.unknown(),
+  v.transform(kalicidanEsle),
+  v.object({
+    snapshotId: v.string(),
+    testId: v.string(),
+    runId: v.string(),
+    result: KosuSonucuSemasi,
+    steps: v.array(AdimSonucuSemasi),
+    code: v.string(),
+    failure: HataAnaliziSemasi,
+    mapDiff: v.exactOptional(HaritaFarkiSemasi),
+  }),
+);
 
 export const BeyinAyariSemasi: v.GenericSchema<unknown, BeyinAyari> = v.object({
   adaptor: v.picklist(['claude', 'codex', 'openrouter', 'sahte']),
@@ -170,18 +181,28 @@ export const BeyinAyariSemasi: v.GenericSchema<unknown, BeyinAyari> = v.object({
   maxTokens: v.exactOptional(v.pipe(v.number(), v.integer(), v.minValue(1))),
 });
 
-export const KobayConfigSemasi: v.GenericSchema<unknown, KobayConfig> = v.object({
-  baseUrl: v.string(),
-  docsPath: v.exactOptional(v.string()),
-  loginUrl: v.exactOptional(v.string()),
-  beyin: BeyinAyariSemasi,
-});
+/** Diskteki proje ayarı; 0.1'in `beyin` alanı okunurken `brain`'e eşlenir. */
+export const KobayConfigSemasi: v.GenericSchema<unknown, KobayConfig> = v.pipe(
+  v.unknown(),
+  v.transform(kalicidanEsle),
+  v.object({
+    baseUrl: v.string(),
+    docsPath: v.exactOptional(v.string()),
+    loginUrl: v.exactOptional(v.string()),
+    brain: BeyinAyariSemasi,
+  }),
+);
 
-export const KimlikSemasi: v.GenericSchema<unknown, Kimlik> = v.object({
-  kullanici: v.string(),
-  parola: v.string(),
-  origin: v.exactOptional(v.string()),
-});
+/** Diskteki giriş bilgisi; 0.1'in `kullanici`/`parola` alanları okunurken eşlenir. */
+export const KimlikSemasi: v.GenericSchema<unknown, Kimlik> = v.pipe(
+  v.unknown(),
+  v.transform(kalicidanEsle),
+  v.object({
+    username: v.string(),
+    password: v.string(),
+    origin: v.exactOptional(v.string()),
+  }),
+);
 
 /** schemas/plan.schema.json ile aynı zorunlu alanlar ve sınırlar. */
 export const PlanDosyasiSemasi: v.GenericSchema<unknown, PlanDosyasi> = v.looseObject({

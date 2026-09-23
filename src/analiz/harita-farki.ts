@@ -20,10 +20,10 @@ function benzersiz(metinler: string[]): string[] {
 }
 
 function formAlanlari(sayfa: Sayfa): string[] {
-  return benzersiz(sayfa.formlar.flatMap((form) => form.alanlar.map((alan) => {
-    const ad = metniNormallestir(alan.ad);
+  return benzersiz(sayfa.forms.flatMap((form) => form.fields.map((alan) => {
+    const ad = metniNormallestir(alan.name);
     if (ad) return ad;
-    const etiket = metniNormallestir(alan.etiket ?? '');
+    const etiket = metniNormallestir(alan.label ?? '');
     return etiket || metniNormallestir(alan.placeholder ?? '');
   })));
 }
@@ -34,7 +34,7 @@ function diziFarki(sol: string[], sag: string[]): string[] {
 }
 
 function girisEkraniGibiMi(sayfa: Sayfa, basliklar: string[]): boolean {
-  const metin = [sayfa.baslik, ...basliklar].map(kimlikNormallestir).join(' ');
+  const metin = [sayfa.title, ...basliklar].map(kimlikNormallestir).join(' ');
   return /(?:^|\s)(?:giriş(?: yap)?|oturum aç|log[ -]?in|sign[ -]?in)(?:\s|$)/i.test(metin);
 }
 
@@ -50,28 +50,28 @@ function sayfaKimliginiDogrula(
   kesifBasliklari: string[],
   simdikiBasliklar: string[],
   gorunurFarklar: {
-    eklenenBasliklar: string[];
-    silinenBasliklar: string[];
-    eklenenDugmeler: string[];
-    silinenDugmeler: string[];
-    eklenenFormAlanlari: string[];
-    silinenFormAlanlari: string[];
+    addedHeadings: string[];
+    removedHeadings: string[];
+    addedButtons: string[];
+    removedButtons: string[];
+    addedFormFields: string[];
+    removedFormFields: string[];
   },
 ): boolean {
-  const kesifBaslik = kimlikNormallestir(kesif.baslik);
-  const simdikiBaslik = kimlikNormallestir(simdi.baslik);
+  const kesifBaslik = kimlikNormallestir(kesif.title);
+  const simdikiBaslik = kimlikNormallestir(simdi.title);
   if (kesifBaslik !== '' && simdikiBaslik !== '') {
     if (kesifBaslik === simdikiBaslik) return true;
     // <title> ile tek görünür başlık birlikte yeniden adlandırılmışsa sayfa aynı
     // kabul edilir. Düğme/form değişimi de varsa giriş ekranı gibi başka bir
     // sayfaya geçilmiş olabileceğinden bu istisna uygulanmaz.
     return !girisEkraniGibiMi(simdi, simdikiBasliklar)
-      && gorunurFarklar.silinenBasliklar.length === 1
-      && gorunurFarklar.eklenenBasliklar.length === 1
-      && gorunurFarklar.silinenDugmeler.length === 0
-      && gorunurFarklar.eklenenDugmeler.length === 0
-      && gorunurFarklar.silinenFormAlanlari.length === 0
-      && gorunurFarklar.eklenenFormAlanlari.length === 0;
+      && gorunurFarklar.removedHeadings.length === 1
+      && gorunurFarklar.addedHeadings.length === 1
+      && gorunurFarklar.removedButtons.length === 0
+      && gorunurFarklar.addedButtons.length === 0
+      && gorunurFarklar.removedFormFields.length === 0
+      && gorunurFarklar.addedFormFields.length === 0;
   }
   if (kesifBasliklari.length === 0) return true;
   const simdikiKumesi = new Set(simdikiBasliklar.map(kimlikNormallestir));
@@ -80,24 +80,24 @@ function sayfaKimliginiDogrula(
 
 /** Keşif özetiyle güncel özeti, kararsız link ve menü verilerini dışarıda bırakarak karşılaştırır. */
 export function haritaFarkiHesapla(kesif: Sayfa, simdi: Sayfa): HaritaFarki {
-  const kesifBasliklari = benzersiz(kesif.basliklar);
-  const simdikiBasliklar = benzersiz(simdi.basliklar);
-  const kesifDugmeleri = benzersiz(kesif.dugmeler);
-  const simdikiDugmeler = benzersiz(simdi.dugmeler);
+  const kesifBasliklari = benzersiz(kesif.headings);
+  const simdikiBasliklar = benzersiz(simdi.headings);
+  const kesifDugmeleri = benzersiz(kesif.buttons);
+  const simdikiDugmeler = benzersiz(simdi.buttons);
   const kesifFormAlanlari = formAlanlari(kesif);
   const simdikiFormAlanlari = formAlanlari(simdi);
   const gorunurFarklar = {
-    eklenenBasliklar: diziFarki(simdikiBasliklar, kesifBasliklari),
-    silinenBasliklar: diziFarki(kesifBasliklari, simdikiBasliklar),
-    eklenenDugmeler: diziFarki(simdikiDugmeler, kesifDugmeleri),
-    silinenDugmeler: diziFarki(kesifDugmeleri, simdikiDugmeler),
-    eklenenFormAlanlari: diziFarki(simdikiFormAlanlari, kesifFormAlanlari),
-    silinenFormAlanlari: diziFarki(kesifFormAlanlari, simdikiFormAlanlari),
+    addedHeadings: diziFarki(simdikiBasliklar, kesifBasliklari),
+    removedHeadings: diziFarki(kesifBasliklari, simdikiBasliklar),
+    addedButtons: diziFarki(simdikiDugmeler, kesifDugmeleri),
+    removedButtons: diziFarki(kesifDugmeleri, simdikiDugmeler),
+    addedFormFields: diziFarki(simdikiFormAlanlari, kesifFormAlanlari),
+    removedFormFields: diziFarki(kesifFormAlanlari, simdikiFormAlanlari),
   };
-  const fark: Omit<HaritaFarki, 'degisti'> = {
+  const fark: Omit<HaritaFarki, 'changed'> = {
     url: kesif.url,
     ...gorunurFarklar,
-    sayfaKimligiUyusuyor: sayfaKimliginiDogrula(
+    pageIdentityMatches: sayfaKimliginiDogrula(
       kesif,
       simdi,
       kesifBasliklari,
@@ -105,11 +105,11 @@ export function haritaFarkiHesapla(kesif: Sayfa, simdi: Sayfa): HaritaFarki {
       gorunurFarklar,
     ),
   };
-  const sayfaBasligiDegisti = kimlikNormallestir(kesif.baslik) !== kimlikNormallestir(simdi.baslik);
+  const sayfaBasligiDegisti = kimlikNormallestir(kesif.title) !== kimlikNormallestir(simdi.title);
 
   return {
     ...fark,
-    degisti: sayfaBasligiDegisti
+    changed: sayfaBasligiDegisti
       || Object.values(gorunurFarklar).some((deger) => deger.length > 0),
   };
 }
