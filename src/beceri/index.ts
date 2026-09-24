@@ -83,7 +83,7 @@ export class McpRegistryUnreadable extends Error {
  *
  * Boş bileşen (`:/usr/bin`, `/usr/bin:`, `a::b`) atılmaz: POSIX'te sıfır
  * uzunluklu ön ek çalışma dizini demektir, kabuk orada da arar. Atsaydık
- * kabuğun `kobay`ı bulduğu bir kurulumda `npx -y kobay` yazardık. PATH hiç
+ * kabuğun `kobay`ı bulduğu bir kurulumda `npx -y @ademtfkc/kobay` yazardık. PATH hiç
  * tanımlı değilse arama yapılmaz (boş PATH ile karıştırılmaz).
  */
 async function kobayKomutuVarMi(ortam: NodeJS.ProcessEnv): Promise<boolean> {
@@ -114,13 +114,14 @@ export interface McpSunucuGirdisi {
 }
 
 /**
- * Küresel kurulum varsa `kobay mcp`, yoksa `npx -y kobay mcp`. İkincisi
- * `npx kobay` ile denenen projelerde de çalışan tek biçim.
+ * Küresel kurulum varsa `kobay mcp`, yoksa `npx -y @ademtfkc/kobay mcp`. npm
+ * paketi kapsamlı (`@ademtfkc/kobay`); paket adı `kobay` tek başına npx'e
+ * verilirse registry'de bizim paketimiz bulunmaz.
  */
 export async function mcpSunucuGirdisi(ortam: NodeJS.ProcessEnv = process.env): Promise<McpSunucuGirdisi> {
   return await kobayKomutuVarMi(ortam)
     ? { command: 'kobay', args: ['mcp'] }
-    : { command: 'npx', args: ['-y', 'kobay', 'mcp'] };
+    : { command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] };
 }
 
 function duzNesneMi(deger: unknown): deger is Record<string, unknown> {

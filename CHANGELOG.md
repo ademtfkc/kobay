@@ -95,6 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The package publishes to npm as `@ademtfkc/kobay` (npm rejected the
+  unscoped name `kobay` as confusingly similar to existing packages); the CLI
+  command stays `kobay`.
 - `prepare` script, so a git install builds `dist/`. A local git install
   (`npm i github:ademtfkc/kobay`) now works; a global one still fails on npm
   11.19, which runs the git build step in global mode and skips the
@@ -127,7 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or merges `.mcp.json` in the project root instead of printing a
   `claude mcp add` command. Other servers and top-level keys in an existing
   `.mcp.json` are preserved; only the `kobay` entry is replaced. The command is
-  `kobay mcp` when `kobay` is on `PATH`, `npx -y kobay mcp` otherwise.
+  `kobay mcp` when `kobay` is on `PATH`, `npx -y @ademtfkc/kobay mcp` otherwise.
   `--output json` reports the file under `mcp`. `--target codex` and
   `--target cursor` still print the registration line and touch nothing. An
   invalid `.mcp.json` is left untouched and reported with exit code 2.

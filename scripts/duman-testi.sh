@@ -63,7 +63,7 @@ adim "npx kobay --version"
 SURUM="$( cd "$KURULUM" && npx kobay --version )"
 printf '%s\n' "$SURUM"
 if [ -z "$SURUM" ]; then
-  DOGRUDAN="$( cd "$KURULUM" && node node_modules/kobay/dist/cli/index.js --version || true )"
+  DOGRUDAN="$( cd "$KURULUM" && node node_modules/@ademtfkc/kobay/dist/cli/index.js --version || true )"
   if [ -n "$DOGRUDAN" ]; then
     hata "kurulu 'kobay' komutu sessiz: doğrudan node çağrısı $DOGRUDAN veriyor ama bin symlink'i hiçbir şey yapmıyor. src/cli/index.ts içindeki dogrudanCalisiyor kontrolü process.argv[1]'i realpath'e çevirmiyor."
   fi
@@ -73,7 +73,7 @@ fi
 adim "Kurulu paketin Playwright sürümü için Chromium (kobay install-browser)"
 # Temiz kurulum ^semver aralığından depodakinden farklı bir Playwright çözebilir; tarayıcıyı
 # depo kopyasıyla değil, kurulu paketin kendi komutuyla kur ve denetimi o kuruluma göre yap.
-PW_KURULU="$(cd "$KURULUM" && node -p 'require(require.resolve("@playwright/test/package.json", { paths: [require.resolve("kobay/package.json")] })).version')"
+PW_KURULU="$(cd "$KURULUM" && node -p 'require(require.resolve("@playwright/test/package.json", { paths: [require.resolve("@ademtfkc/kobay/package.json")] })).version')"
 PW_DEPO="$(cd "$KOK" && node -p 'require("@playwright/test/package.json").version')"
 printf 'Playwright: kurulu %s, depo %s\n' "$PW_KURULU" "$PW_DEPO"
 ( cd "$KURULUM" && npx kobay install-browser ) > "$GECICI/tarayici.log" 2>&1 \
@@ -81,7 +81,7 @@ printf 'Playwright: kurulu %s, depo %s\n' "$PW_KURULU" "$PW_DEPO"
 ( cd "$KURULUM" && node --input-type=module -e '
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
-const kobay = createRequire(import.meta.url).resolve("kobay/package.json");
+const kobay = createRequire(import.meta.url).resolve("@ademtfkc/kobay/package.json");
 const pw = createRequire(kobay)("@playwright/test");
 const yol = pw.chromium.executablePath();
 if (!existsSync(yol)) { console.error("Chromium yok: " + yol); process.exit(1); }

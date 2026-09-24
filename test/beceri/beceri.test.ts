@@ -9,7 +9,7 @@ import {
 } from '../../src/beceri/index.js';
 import { yazAtomik } from '../../src/depo/index.js';
 
-/** `kobay` bulunmayan PATH: tespit `npx -y kobay mcp` biçimine düşmeli. */
+/** `kobay` bulunmayan PATH: tespit `npx -y @ademtfkc/kobay mcp` biçimine düşmeli. */
 const KOBAYSIZ_PATH = { PATH: join(tmpdir(), 'kobay-yok-bir-dizin') };
 
 async function mcpOku(proje: string): Promise<Record<string, unknown>> {
@@ -89,7 +89,7 @@ describe('beceri kurulumu', () => {
     expect(ilk.metin).not.toContain('claude mcp add');
     expect(ilk.metin).toContain('Skill created:');
     expect(ilk.json).toMatchObject({
-      mcp: { path: join(proje, '.mcp.json'), action: 'created', command: ['npx', '-y', 'kobay', 'mcp'] },
+      mcp: { path: join(proje, '.mcp.json'), action: 'created', command: ['npx', '-y', '@ademtfkc/kobay', 'mcp'] },
     });
 
     const ikinci = await agentInstall({ cwd: proje, target: 'claude', home, ortam: KOBAYSIZ_PATH });
@@ -113,11 +113,11 @@ describe('beceri kurulumu', () => {
 
   it('kobay PATH\'te yoksa npx biçimine düşer', async () => {
     const proje = await geciciDizin();
-    await expect(mcpSunucuGirdisi(KOBAYSIZ_PATH)).resolves.toEqual({ command: 'npx', args: ['-y', 'kobay', 'mcp'] });
+    await expect(mcpSunucuGirdisi(KOBAYSIZ_PATH)).resolves.toEqual({ command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] });
 
     await beceriKur('claude', { projeKoku: proje, ortam: KOBAYSIZ_PATH });
     expect(await mcpOku(proje)).toEqual({
-      mcpServers: { kobay: { command: 'npx', args: ['-y', 'kobay', 'mcp'] } },
+      mcpServers: { kobay: { command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] } },
     });
   });
 
@@ -141,7 +141,7 @@ describe('beceri kurulumu', () => {
     await writeFile(join(calismaDizini, 'kobay'), '#!/bin/sh\n', { mode: 0o755 });
     const casus = vi.spyOn(process, 'cwd').mockReturnValue(calismaDizini);
     try {
-      await expect(mcpSunucuGirdisi({})).resolves.toEqual({ command: 'npx', args: ['-y', 'kobay', 'mcp'] });
+      await expect(mcpSunucuGirdisi({})).resolves.toEqual({ command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] });
     } finally {
       casus.mockRestore();
     }
@@ -159,7 +159,7 @@ describe('beceri kurulumu', () => {
     expect(await mcpOku(proje)).toEqual({
       mcpServers: {
         baska: { command: 'node', args: ['sunucu.js'] },
-        kobay: { command: 'npx', args: ['-y', 'kobay', 'mcp'] },
+        kobay: { command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] },
       },
       inputs: [{ id: 'token' }],
     });

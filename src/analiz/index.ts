@@ -20,7 +20,7 @@ import { BeyindenGelenHataAnaliziSemasi, type BeyindenGelenHataAnalizi } from '.
 type KonsolKaydi = { tip: 'error' | 'warning'; metin: string; stepIndex?: number };
 type AgKaydi = { url: string; method: string; status?: number; hata?: string; stepIndex?: number };
 
-const KOBAY_IC_YOL_DESENI = /(?:^|[/\\])(?:node_modules[/\\])?kobay[/\\](?:src|dist)[/\\]/i;
+const KOBAY_IC_YOL_DESENI = /(?:^|[/\\])(?:node_modules[/\\](?:@[\w.-]+[/\\])?)?kobay[/\\](?:src|dist)[/\\]/i;
 const KOBAY_FIXTURE_YOL_DESENI = /(?:^|[/\\])(?:src|dist)[/\\]kos[/\\](?:fixture|fixture-sablonu)\.[cm]?[jt]s/i;
 
 /** Playwright hata metninden Kobay'ın kendi stack frame'lerini çıkarır; kullanıcı test satırlarını korur. */

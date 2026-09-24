@@ -153,6 +153,18 @@ describe('hataMesajiniTemizle', () => {
     expect(temiz).not.toContain('kobay/src/kos/fixture');
     expect(temiz).toContain('/urun/tests/siparis.spec.ts:27:11');
   });
+
+  it('kapsamlı (scoped) npm paketi yolundaki Kobay stack satırlarını da çıkarır', () => {
+    const hata = [
+      'Error: Beklenen metin bulunamadı',
+      '    at fixture (/repo/node_modules/@ademtfkc/kobay/dist/kos/fixture.js:42:7)',
+      '    at /urun/tests/siparis.spec.ts:27:11',
+    ].join('\n');
+
+    const temiz = hataMesajiniTemizle(hata);
+    expect(temiz).not.toContain('kobay/dist/kos/fixture');
+    expect(temiz).toContain('/urun/tests/siparis.spec.ts:27:11');
+  });
 });
 
 describe('hataAnalizEt', () => {

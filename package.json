@@ -1,5 +1,5 @@
 {
-  "name": "kobay",
+  "name": "@ademtfkc/kobay",
   "version": "0.2.0",
   "description": "Local-first AI test engine that explores apps, generates and runs tests, and returns evidence-backed failures.",
   "type": "module",
@@ -7,11 +7,14 @@
   "author": "Gökhan",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ademtfkc/kobay"
+    "url": "git+https://github.com/ademtfkc/kobay.git"
   },
   "homepage": "https://github.com/ademtfkc/kobay",
   "bugs": {
     "url": "https://github.com/ademtfkc/kobay/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "ai",

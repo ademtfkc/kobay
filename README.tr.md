@@ -58,7 +58,17 @@ ve kendi LLM'ini getirdiğin hâli.
 
 ## Kurulum
 
-kobay **henüz npm'de yayında değil**. Bugün kaynaktan kurulur:
+```sh
+npm install -g @ademtfkc/kobay
+kobay install-browser        # Linux: kobay install-browser --with-deps
+kobay doctor
+```
+
+Kurmadan tek seferlik komut için `npx @ademtfkc/kobay <komut>` de çalışır (ör.
+`npx @ademtfkc/kobay doctor`), ama paketi her seferinde yeniden indirir; birden
+çok kez kullanacaksan global kurulum daha pratik.
+
+**Kaynaktan** (geliştirme ya da henüz yayınlanmamış bir değişiklik için):
 
 ```sh
 git clone https://github.com/ademtfkc/kobay.git
@@ -68,13 +78,9 @@ kobay install-browser        # Linux: kobay install-browser --with-deps
 kobay doctor
 ```
 
-`dist/` git'e girmiyor; pakette `prepare` script'i var ve **yerel** git kurulumu
-(bir projenin içinde `npm i github:ademtfkc/kobay`) derleyip çalışıyor.
-**Global** olanı (`npm i -g github:ademtfkc/kobay`) npm 11.19'da düşüyor: npm
-derleme adımını kendi global bayrağı açıkken koşturuyor, gereken
-devDependencies kurulmuyor, derleme `tsc: command not found` ile duruyor. npm
-yayınına kadar klonlamadan global kurulumun yolu tarball: bir klonda `npm pack`,
-hedef makinede `npm i -g ./kobay-0.2.0.tgz`.
+Doğrudan git'ten global kurulum (`npm i -g github:ademtfkc/kobay`) bir derleme
+adımı gerektirir ve npm 11.19'da düşer (`tsc: command not found`); yayınlanan
+paketi ya da yerel klonu kullan.
 
 `install-browser`, kobay'ın kendi Playwright sürümüne uyan Chromium'u indirir
 (`npx playwright install` farklı revizyon çekebilir); Linux'ta `--with-deps`
@@ -275,18 +281,22 @@ Tamamı: [README.md#security-model](README.md#security-model).
 
 ## Yol haritası
 
-npm'de yayın; ardından Codex beyninin canlı denenmesi ve OpenRouter; sonra
-`prune` komutu ve `test delete` sonrası temizlik, Windows desteği, JavaScript ile
-yapılan girişler. Ayrıntı: [CHANGELOG.md](CHANGELOG.md).
+Codex beyninin canlı denenmesi, ardından OpenRouter; sonra `prune` komutu ve
+`test delete` sonrası temizlik, Windows desteği, JavaScript ile yapılan
+girişler. Ayrıntı: [CHANGELOG.md](CHANGELOG.md).
 
 ## Geliştirme
 
 `npm run typecheck` (tsc --noEmit) · `npm run lint` · `npm test` (vitest) ·
-`npm run test:kati` (katı koşu: gerçek Chromium) · `npm run duman` (duman testi:
-npm pack, temiz dizine kurulum, gerçek keşif). CI bu adımları ubuntu-latest ve
-macos-latest üzerinde Node 22 ve 24 ile koşturuyor. PR açmadan önce ilk üçünü
-çalıştır ve neyi gerçekten koşturduğunu yaz. Makinenin okuduğu her şey
-İngilizce; kaynaktaki tanımlayıcılar ve kod yorumları Türkçe kalıyor.
+`KOBAY_01_DIST=skip npm run test:kati` (katı koşu: gerçek Chromium, sürümler
+arası test seti atlanır) · `npm run duman` (duman testi: npm pack, temiz
+dizine kurulum, gerçek keşif). `test:kati` çalışması için `KOBAY_01_DIST`
+şart: `skip` sürümler arası test setini atlar (CI'ın yaptığı budur); gerçek
+bir 0.1 kurulumunun yolunu verirsen o test seti gerçek alt süreçlerle koşar.
+CI bu adımları ubuntu-latest ve macos-latest üzerinde Node 22 ve 24 ile
+koşturuyor. PR açmadan önce ilk üçünü çalıştır ve neyi gerçekten
+koşturduğunu yaz. Makinenin okuduğu her şey İngilizce; kaynaktaki
+tanımlayıcılar ve kod yorumları Türkçe kalıyor.
 
 ## Lisans
 

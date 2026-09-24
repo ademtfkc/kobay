@@ -63,7 +63,17 @@ narrower, bring-your-own-LLM version of that idea.
 
 ## Install
 
-kobay is **not on npm yet**. Today, build it from source:
+```sh
+npm install -g @ademtfkc/kobay
+kobay install-browser        # Linux: kobay install-browser --with-deps
+kobay doctor
+```
+
+For a one-off command without installing, `npx @ademtfkc/kobay <command>` works
+too — `npx @ademtfkc/kobay doctor`, say — but it re-fetches the package each
+time, so a global install is worth it if you'll run kobay more than once.
+
+**From source**, for development or to run an unreleased change:
 
 ```sh
 git clone https://github.com/ademtfkc/kobay.git
@@ -74,14 +84,9 @@ kobay install-browser        # Linux: kobay install-browser --with-deps
 kobay doctor
 ```
 
-`dist/` is not committed, so a git install has to build it. The package has a
-`prepare` script for that, and a **local** git install —
-`npm i github:ademtfkc/kobay` inside a project — does build and work. A
-**global** one, `npm i -g github:ademtfkc/kobay`, fails on npm 11.19: npm runs
-the git build step with its own global flag still set, so that step skips the
-devDependencies the build needs and stops at `tsc: command not found`. Until
-kobay is on npm, the way to a global install without cloning is a tarball —
-`npm pack` in a clone, then `npm i -g ./kobay-0.2.0.tgz` on the target machine.
+Installing straight from git (`npm i -g github:ademtfkc/kobay`) needs a build
+step it doesn't get and fails on npm 11.19 (`tsc: command not found`) — use the
+published package or a local clone instead.
 
 `install-browser` downloads the Chromium build matching kobay's own Playwright
 version — use it rather than `npx playwright install`, which may fetch a
@@ -654,11 +659,10 @@ Read this before pointing kobay at anything that matters.
 
 ## Roadmap
 
-1. **npm publish**, so install is one line.
-2. **Live test of the Codex brain**, then OpenRouter, against a real app.
-3. **A `prune` command** and cleanup on `test delete`.
-4. **Windows support**, once someone has actually run it there.
-5. **JavaScript logins**, beyond the plain HTML form.
+1. **Live test of the Codex brain**, then OpenRouter, against a real app.
+2. **A `prune` command** and cleanup on `test delete`.
+3. **Windows support**, once someone has actually run it there.
+4. **JavaScript logins**, beyond the plain HTML form.
 
 Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
@@ -671,19 +675,23 @@ cd kobay && npm install && npm run build
 npm run typecheck         # tsc --noEmit
 npm run lint              # eslint
 npm test                  # vitest
-npm run test:kati         # strict run: real Chromium, no skipped suites
+KOBAY_01_DIST=skip npm run test:kati   # strict run: real Chromium, cross-version suite skipped
 npm run duman             # smoke test: npm pack, install into a clean dir, real explore
 npm run kobay -- doctor   # run the CLI from source via tsx
 ```
+
+`test:kati` requires `KOBAY_01_DIST`: `skip` skips the cross-version suite
+(what CI does); point it at a real 0.1 install instead to run that suite for real.
 
 CI (`.github/workflows/ci.yml`) runs build, `test:kati` and `duman` on
 ubuntu-latest and macos-latest with Node 22 and 24.
 
 **Contributing.** Issues and pull requests welcome at
 [github.com/ademtfkc/kobay](https://github.com/ademtfkc/kobay). Run
-`npm run typecheck`, `npm run lint` and `npm run test:kati` before opening a PR,
-and say what you actually ran. Everything a machine reads is English; the source
-identifiers and code comments are Turkish, and stay that way.
+`npm run typecheck`, `npm run lint` and `KOBAY_01_DIST=skip npm run test:kati`
+before opening a PR, and say what you actually ran. Everything a machine reads
+is English; the source identifiers and code comments are Turkish, and stay
+that way.
 
 ## License
 
