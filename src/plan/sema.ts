@@ -11,6 +11,11 @@ export interface OneriTaslagi {
   type: 'frontend';
   url: string;
   steps: PlanAdimi[];
+  /**
+   * Beynin beyanı: bir adım gerçek kullanıcı adı/parolayı gerektiriyor mu. `true` ise öneri
+   * (giriş yapılandırılmış projede) düşer; `false` ya da yoksa sözcük filtresi karar verir.
+   */
+  requiresRealCredentials?: boolean | undefined;
 }
 
 export interface PlanYaniti {
@@ -26,6 +31,8 @@ const TURKCE_ANAHTARLAR: Readonly<Record<string, string>> = {
   ozellik: 'feature',
   tur: 'type',
   adimlar: 'steps',
+  gercekKimlikGerekir: 'requiresRealCredentials',
+  gercekKimlikGerekli: 'requiresRealCredentials',
 };
 
 function anahtarlariNormallestir(deger: unknown): unknown {
@@ -59,6 +66,16 @@ const PlanAdimiTaslagiSemasi: v.GenericSchema<unknown, PlanAdimi> = v.object({
 });
 
 /**
+ * `requiresRealCredentials` yapısal beyandır ama biçim hatası bütün planı düşürmesin: model "true"/"false"
+ * dizesi ya da null gönderebilir. Boolean ve bu dizeler kabul edilir; null/yok beyansız sayılır (sözcük
+ * filtresi karar verir). Başka bir değer şema hatasıdır.
+ */
+const RealCredentialsSemasi = v.pipe(
+  v.nullish(v.union([v.boolean(), v.picklist(['true', 'false'])])),
+  v.transform((deger): boolean | undefined => (deger === null || deger === undefined ? undefined : deger === true || deger === 'true')),
+);
+
+/**
  * Beyin yanıtının şeması. Adım sınırı burada değil, tek tek öneri düşürülürken
  * uygulanır; böylece bozuk bir öneri geçerli olanları engellemez.
  */
@@ -71,6 +88,7 @@ const OneriTaslagiSemasi: v.GenericSchema<unknown, OneriTaslagi> = v.object({
   type: v.literal('frontend'),
   url: v.pipe(v.string(), v.minLength(1)),
   steps: v.array(PlanAdimiTaslagiSemasi),
+  requiresRealCredentials: RealCredentialsSemasi,
 });
 
 export const PlanYanitiSemasi: v.GenericSchema<unknown, PlanYaniti> = v.pipe(

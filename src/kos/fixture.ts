@@ -5,7 +5,7 @@ import { adimSar } from './fixture-sablonu.js';
 type Kayit = Record<string, unknown>;
 
 function kosuDizini(): string | undefined {
-  const dizin = process.env.KOBAY_KOSU_DIZINI;
+  const dizin = process.env.KOBAY_RUN_DIR;
   return dizin === undefined || dizin === '' ? undefined : dizin;
 }
 

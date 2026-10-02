@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from 'node:fs';
-import { realpath, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { delimiter, isAbsolute, relative, resolve, sep } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -15,6 +15,7 @@ import {
   projectCreate,
   projectGet,
   projectUpdate,
+  prune,
   testCreate,
   testDelete,
   testGet,
@@ -42,7 +43,12 @@ const require = createRequire(import.meta.url);
 const { version: KOBAY_SURUMU } = require('../../package.json') as { version: string };
 const PROJE_DIZINI_SEMASI = { projectDir: z.string().min(1).optional() };
 
-export const MCP_INSTRUCTIONS = 'Use project_create once to initialize a target, then explore, plan_generate, and plan_accept. Use test_run to generate and run tests; inspect failures with failure_get, fix product code for product_bug, use test_refresh only for product_changed, and confirm with test_rerun. Pass projectDir when the server is not started inside the target Kobay project.';
+export const MCP_INSTRUCTIONS = 'Use project_create once to initialize a target, then explore, plan_generate, and plan_accept. Use test_run to generate and run tests; inspect failures with failure_get, fix product code for product_bug, use test_refresh only for product_changed, and confirm with test_rerun. The prune tool previews by default; pass confirm true only after reviewing the preview. Pass projectDir when the server is not started inside the target Kobay project.';
+
+/** MCP kökleri ve adayları aynı native realpath uygulamasıyla kanonikleştirilir. */
+export function mcpGercekYol(yol: string): string {
+  return realpathSync.native(yol);
+}
 
 /**
  * MCP'de `isError` aracın yürütülemediğini söyler, sonucun kötü olduğunu değil.
@@ -88,8 +94,9 @@ async function projeIciYol(projeKoku: string, giris: string, alan: string): Prom
   const hedef = isAbsolute(giris) ? resolve(giris) : resolve(cozulmusKok, giris);
   if (!yolKokIcindeMi(cozulmusKok, hedef)) throw new Error(`${alan} cannot be outside the project root`);
 
-  const [gercekKok, varolan] = await Promise.all([realpath(cozulmusKok), enYakinVarolanYol(hedef)]);
-  const gercekVarolan = await realpath(varolan);
+  const varolan = await enYakinVarolanYol(hedef);
+  const gercekKok = mcpGercekYol(cozulmusKok);
+  const gercekVarolan = mcpGercekYol(varolan);
   if (!yolKokIcindeMi(gercekKok, gercekVarolan)) throw new Error(`${alan} cannot be outside the project root`);
   return hedef;
 }
@@ -97,7 +104,7 @@ async function projeIciYol(projeKoku: string, giris: string, alan: string): Prom
 function mcpKokleriniDondur(cwd: string, env: NodeJS.ProcessEnv): string[] {
   const girdiler = [cwd, ...(env.KOBAY_MCP_ROOTS ?? '').split(delimiter).filter((yol) => yol !== '')];
   return girdiler.map((girdi) => {
-    const kok = realpathSync(resolve(cwd, girdi));
+    const kok = mcpGercekYol(resolve(cwd, girdi));
     if (!statSync(kok).isDirectory()) throw new Error(`MCP root is not a directory: ${girdi}`);
     return kok;
   });
@@ -118,7 +125,7 @@ async function projeKokuSec(
   const aday = resolve(cwd, projectDir ?? '.');
   const bilgi = await stat(aday).catch(() => null);
   if (bilgi === null || !bilgi.isDirectory()) throw new Error(`Project directory not found: ${aday}`);
-  const gercekAday = await realpath(aday);
+  const gercekAday = mcpGercekYol(aday);
   mcpKokundeDogrula(izinliKokler, gercekAday);
   if (olusturulacak) return gercekAday;
 
@@ -265,6 +272,22 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     description: 'Returns the configuration and status summary of the current Kobay project.',
     inputSchema: PROJE_DIZINI_SEMASI,
   }, async ({ projectDir }) => aracCalistir(async () => projectGet({ cwd: await projeSec(projectDir) })));
+
+  sunucu.registerTool('prune', {
+    description: 'Previews removal of old runs, brain logs, and legacy artifacts by default. Pass confirm: true to delete; dryRun: true always forces a preview, even with confirmation.',
+    inputSchema: z.strictObject({
+      ...PROJE_DIZINI_SEMASI,
+      dryRun: z.boolean().optional(),
+      confirm: z.boolean().optional(),
+      maxMb: z.number().positive().optional(),
+      olderThanDays: z.number().positive().optional(),
+    }),
+  }, async ({ projectDir, dryRun, confirm, maxMb, olderThanDays }) => aracCalistir(async () => prune({
+    cwd: await projeSec(projectDir),
+    dryRun: dryRun === true || confirm !== true,
+    ...(maxMb === undefined ? {} : { maxMb }),
+    ...(olderThanDays === undefined ? {} : { olderThanDays }),
+  })));
 
   sunucu.registerTool('explore', {
     description: 'Explores the target app and updates the page map.',

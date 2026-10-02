@@ -1,6 +1,6 @@
 import { access, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { chromium, type Browser } from '@playwright/test';
@@ -288,8 +288,8 @@ test('listeyi doğrular', async ({ page }) => {
     const tehlikeliKod = `${dogruKod('http://ornek.test')}\nprocess.exit(1);`;
 
     await expect(kodUret(sahteBeyin([tehlikeliKod, tehlikeliKod], istemler), testKaydi(), basitHarita, {
-      projeKoku: '/tmp/kobay-uret-guvenlik',
-      kobayKoku: '/tmp/kobay-uret-guvenlik',
+      projeKoku: join(tmpdir(), 'kobay-uret-guvenlik'),
+      kobayKoku: join(tmpdir(), 'kobay-uret-guvenlik'),
     })).rejects.toThrow('rejected by the speed bump');
 
     expect(istemler[1]).toContain('not a security boundary');
@@ -397,14 +397,18 @@ test('boş', async () => {});
   });
 });
 
-async function playwrightCalistir(kok: string, specYolu: string, env: NodeJS.ProcessEnv): Promise<{ kod: number | null; stderr: string }> {
+async function playwrightCalistir(kok: string, specYolu: string, env: NodeJS.ProcessEnv): Promise<{ kod: number | null; stderr: string; stdout: string }> {
   return new Promise((coz, red) => {
-    const surec = spawn(process.execPath, [PLAYWRIGHT_CLI, 'test', '--config', join(kok, 'playwright.config.ts'), specYolu], { cwd: kok, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const specArgumani = relative(kok, specYolu).split(sep).join('/');
+    const surec = spawn(process.execPath, [PLAYWRIGHT_CLI, 'test', '--config', join(kok, 'playwright.config.ts'), specArgumani], { cwd: kok, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
     let stderr = '';
+    surec.stdout.setEncoding('utf8');
     surec.stderr.setEncoding('utf8');
+    surec.stdout.on('data', (parca: string) => { stdout += parca; });
     surec.stderr.on('data', (parca: string) => { stderr += parca; });
     surec.once('error', red);
-    surec.once('close', (kod) => { coz({ kod, stderr }); });
+    surec.once('close', (kod) => { coz({ kod, stderr, stdout }); });
   });
 }
 
@@ -445,7 +449,7 @@ describe('geçici Playwright config', () => {
     await expect(readFile(configYolu, 'utf8')).resolves.not.toContain('son-liste.json');
 
     // Koşunun yazdığı kalıcı config'e dokunulmaz.
-    const kalici = "export default {\n  reporter: [['json', { outputFile: process.env.KOBAY_RAPOR_DOSYASI }]],\n};\n";
+    const kalici = "export default {\n  reporter: [['json', { outputFile: process.env.KOBAY_REPORT_FILE }]],\n};\n";
     await yazAtomik(configYolu, kalici);
     await calismaAlaniHazirla(kok);
     await expect(readFile(configYolu, 'utf8')).resolves.toBe(kalici);
@@ -510,15 +514,19 @@ test('fixture evidence', async ({ page }) => {
 `);
     const sonuc = await playwrightCalistir(kok, specYolu, {
       ...process.env,
-      KOBAY_KOSU_DIZINI: kanitDizini,
+      KOBAY_RUN_DIR: kanitDizini,
       KOBAY_STORAGE_STATE: stateYolu,
     });
-    expect(sonuc.kod, sonuc.stderr).toBe(0);
+    if (sonuc.kod !== 0) {
+      console.error(`[kobay test] Playwright fixture failed\nstdout:\n${sonuc.stdout}\nstderr:\n${sonuc.stderr}`);
+      throw new Error(`Playwright fixture failed (exit ${sonuc.kod})\n${sonuc.stderr}`);
+    }
+    expect(sonuc.kod).toBe(0);
     await Promise.all([
-      access(join(kanitDizini, 'adim-0.png')),
-      access(join(kanitDizini, 'adim-0.html')),
-      access(join(kanitDizini, 'adim-1.png')),
-      access(join(kanitDizini, 'adim-1.html')),
+      access(join(kanitDizini, 'step-0.png')),
+      access(join(kanitDizini, 'step-0.html')),
+      access(join(kanitDizini, 'step-1.png')),
+      access(join(kanitDizini, 'step-1.html')),
       access(join(kanitDizini, 'console.json')),
       access(join(kanitDizini, 'network.json')),
     ]);

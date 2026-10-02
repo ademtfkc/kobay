@@ -4,13 +4,13 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { projectCreate, explore } from '../../src/cli/komutlar/index.js';
 
-/** KOBAY_TEST_KATI=1 verildiğinde atlama yasak: eksik ortam hata sayılır. */
-const kati = process.env.KOBAY_TEST_KATI === '1';
+/** KOBAY_TEST_STRICT=1 verildiğinde atlama yasak: eksik ortam hata sayılır. */
+const kati = process.env.KOBAY_TEST_STRICT === '1';
 
 it('gerçek Chromium ile demo uygulamasını keşfeder', async (context) => {
-  if (process.env.KOBAY_CHROMIUM_TESTI !== '1') {
+  if (process.env.KOBAY_CHROMIUM_TEST !== '1') {
     if (kati) {
-      throw new Error('KOBAY_TEST_KATI=1: bu test atlanamaz, KOBAY_CHROMIUM_TESTI=1 verilmeli');
+      throw new Error('KOBAY_TEST_STRICT=1: bu test atlanamaz, KOBAY_CHROMIUM_TEST=1 verilmeli');
     }
     context.skip();
     return;

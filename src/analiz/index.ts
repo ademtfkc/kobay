@@ -1,8 +1,8 @@
 import { access, readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { basename, join, type PlatformPath } from 'node:path';
 import type { Beyin } from '../beyin/index.js';
-import { gizliDegerleriMaskele } from '../beyin/ortak.js';
+import { gizliDegerleriMaskele, jsonGizliDegerleriMaskele } from '../beyin/ortak.js';
 import type {
   AdimSonucu,
   HaritaFarki,
@@ -14,6 +14,7 @@ import type {
   TestKaydi,
 } from '../depo/index.js';
 import { domHaritaFarkiOlustur } from './harita-farki.js';
+import { hataPaketiYolunuDenetle } from './paket-yolu.js';
 import { analizKullaniciIstemiOlustur, analizSistemIstemiOlustur } from './istem.js';
 import { BeyindenGelenHataAnaliziSemasi, type BeyindenGelenHataAnalizi } from './sema.js';
 
@@ -22,6 +23,11 @@ type AgKaydi = { url: string; method: string; status?: number; hata?: string; st
 
 const KOBAY_IC_YOL_DESENI = /(?:^|[/\\])(?:node_modules[/\\](?:@[\w.-]+[/\\])?)?kobay[/\\](?:src|dist)[/\\]/i;
 const KOBAY_FIXTURE_YOL_DESENI = /(?:^|[/\\])(?:src|dist)[/\\]kos[/\\](?:fixture|fixture-sablonu)\.[cm]?[jt]s/i;
+
+/** Kanıt paketi hedefi, kaynak yolunun platformdan bağımsız çıplak dosya adıdır. */
+export function kanitDosyaAdi(kaynak: string, yol: Pick<PlatformPath, 'basename'> = { basename }): string {
+  return yol.basename(kaynak);
+}
 
 /** Playwright hata metninden Kobay'ın kendi stack frame'lerini çıkarır; kullanıcı test satırlarını korur. */
 export function hataMesajiniTemizle(metin: string): string {
@@ -93,6 +99,11 @@ function kodDuzeltmeIpucuEkle(analiz: HataAnalizi, hataMetni: string): HataAnali
   if (temiz.failureKind !== 'product_bug' || temiz.recommendedFixTarget.kind !== 'code') return temiz;
   if (/search the product (?:source )?code/i.test(temiz.recommendedFixTarget.rationale)) return temiz;
   const received = /Received(?: string)?:\s*(?:\n\s*)?([^\n]+)/i.exec(hataMetni)?.[1]?.trim();
+  // Beyin gerekçeyi uygulamanın dilinde yazar; Received metnini zaten anıyorsa
+  // ipucu verilmiştir, İngilizce sabit cümle eklenip metin karıştırılmaz.
+  const receivedCekirdek = received?.replace(/^["'`]|["'`]$/g, '').trim();
+  if (receivedCekirdek !== undefined && receivedCekirdek !== ''
+    && temiz.recommendedFixTarget.rationale.includes(receivedCekirdek)) return temiz;
   const aranacak = received === undefined || received === ''
     ? 'the "Received" value or text from the error message'
     : `the text ${received.slice(0, 160)} from the "Received" section of the error message`;
@@ -100,13 +111,32 @@ function kodDuzeltmeIpucuEkle(analiz: HataAnalizi, hataMetni: string): HataAnali
     ...temiz,
     recommendedFixTarget: {
       ...temiz.recommendedFixTarget,
-      rationale: `${temiz.recommendedFixTarget.rationale} To find the source file, search the product code for ${aranacak}.`,
+      // Kobay'ın kendi eki ayrı paragrafta ve etiketli: modelin metniyle aynı cümleye karışmaz.
+      rationale: `${temiz.recommendedFixTarget.rationale}\n\nKobay hint: to find the source file, search the product code for ${aranacak}.`,
     },
   };
 }
 
 function dosyaVarMi(yol: string): Promise<boolean> {
   return access(yol).then(() => true).catch(() => false);
+}
+
+type EkDosya = { kaynak: string; hedefAd: string; icerik?: string };
+
+/** Maskelenemeyen ikili kanıtlar (ekran görüntüsü, trace arşivi); bunlar olduğu gibi kopyalanır. */
+const IKILI_KANIT_DESENI = /\.(?:png|jpe?g|webp|gif|zip|webm)$/i;
+
+/**
+ * Pakete kopyalanacak kanıt: ikili dosya yalnız yoluyla gider, geri kalan her
+ * şey metin sayılır ve beyne giden metinle aynı maskeden geçmiş içerikle gider.
+ * Koşu dizinindeki özgün dosya değişmez.
+ */
+async function ekDosyasiHazirla(kaynak: string, hedefAd: string): Promise<EkDosya> {
+  if (IKILI_KANIT_DESENI.test(hedefAd)) return { kaynak, hedefAd };
+  const metin = await readFile(kaynak, 'utf8');
+  // JSON kanıtı ayrıştırılıp yalnız dize değerleri maskelenir: ajan paketi `JSON.parse` ile okuyabilsin.
+  const icerik = /\.json$/i.test(hedefAd) ? jsonGizliDegerleriMaskele(metin) : gizliDegerleriMaskele(metin);
+  return { kaynak, hedefAd, icerik };
 }
 
 async function istegeBagliOku(yol: string): Promise<string | null> {
@@ -229,6 +259,32 @@ function urunDegisikligiEslesmesi(
  * Beyin yeniden adlandırmayı kaçırdıysa yerel kıyasla düzeltir.
  * Sayfa kimliği tutmuyorsa (oturum düşmüş, giriş ekranına yönlenmiş) devreye girmez.
  */
+/** Üretim istemi gerçek kimlik isteyen adıma `throw new Error('kobay: ...')` yazdırır; mesaj bu önekle başlar. */
+const KOBAY_BILINCLI_DUSUS_DESENI = /^\s*(?:Error:\s*)?kobay:/;
+
+/**
+ * Üretilen testin bilinçli düşüşü (`kobay:` önekli fırlatma) yerelde sınıflanır, beyin çağrılmaz.
+ * Bu bir ürün hatası değil, planın desteklenmeyen bir adım (gerçek kimlik girişi) içermesidir;
+ * modele bırakılırsa `product_bug` çıkabilir ve ajan ürün koduna dokunabilir. Eşleşmezse null.
+ */
+export function yerelOnSiniflama(hataMetni: string, stepIndex: number): BeyindenGelenHataAnalizi | null {
+  if (!KOBAY_BILINCLI_DUSUS_DESENI.test(hataMetni)) return null;
+  const ilkSatir = hataMetni.trim().split(/\r?\n/)[0]!.slice(0, 300);
+  return {
+    rootCauseHypothesis: 'The generated test declared an unsupported step and failed on purpose: the step needs the '
+      + 'real credentials, but the session is already authenticated and generated tests cannot type them. '
+      + 'This is not a product bug.',
+    failureKind: 'test_bug',
+    recommendedFixTarget: {
+      kind: 'code',
+      reference: `test plan, step ${stepIndex}: ${ilkSatir}`,
+      rationale: 'Fix the test, not the product: regenerate the plan without real-credential steps, or remove or '
+        + 'rewrite this step so it does not type the real credentials.',
+    },
+    evidence: [],
+  };
+}
+
 function yerelHaritaEmniyeti(
   analiz: HataAnalizi,
   fark: HaritaFarki | undefined,
@@ -237,6 +293,8 @@ function yerelHaritaEmniyeti(
   kod: string,
 ): HataAnalizi {
   if (analiz.failureKind !== 'test_bug' && analiz.failureKind !== 'product_bug') return analiz;
+  // Bilinçli `kobay:` düşüşü harita karşılaştırmasıyla ürün değişikliğine çevrilmez.
+  if (KOBAY_BILINCLI_DUSUS_DESENI.test(hataMetni)) return analiz;
   if (fark !== undefined && !fark.pageIdentityMatches) return analiz;
   const eslesme = urunDegisikligiEslesmesi(fark, stepIndex, hataMetni, kod);
   if (eslesme === null || fark === undefined) return analiz;
@@ -272,9 +330,9 @@ function dusenAdimiBul(sonuc: KosuSonucu, adimlar: AdimSonucu[]): AdimSonucu {
 function kanitYolu(kaynakDizini: string, kanit: BeyindenGelenHataAnalizi['evidence'][number]): string | null {
   switch (kanit.kind) {
     case 'screenshot':
-      return join(kaynakDizini, `adim-${kanit.stepIndex}.png`);
+      return join(kaynakDizini, `step-${kanit.stepIndex}.png`);
     case 'snapshot':
-      return join(kaynakDizini, `adim-${kanit.stepIndex}.html`);
+      return join(kaynakDizini, `step-${kanit.stepIndex}.html`);
     case 'console':
       return join(kaynakDizini, 'console.json');
     case 'network':
@@ -297,7 +355,7 @@ const YEREL_KANIT_TANIMLARI = [
 async function yerelDusenAdimKanitlari(kosuDizini: string, stepIndex: number): Promise<KanitAdayi[]> {
   const adaylar: KanitAdayi[] = [];
   for (const tanim of YEREL_KANIT_TANIMLARI) {
-    const hedefAd = `adim-${stepIndex}.${tanim.uzanti}`;
+    const hedefAd = `step-${stepIndex}.${tanim.uzanti}`;
     const kaynak = join(kosuDizini, hedefAd);
     if (!(await dosyaVarMi(kaynak))) continue;
     adaylar.push({ kanit: { kind: tanim.kind, stepIndex, path: hedefAd, summary: tanim.summary }, kaynak });
@@ -307,7 +365,7 @@ async function yerelDusenAdimKanitlari(kosuDizini: string, stepIndex: number): P
 
 /**
  * Aynı `kind`+`path` çiftini tek maddede toplar: beyin aynı dosya için birden
- * çok madde yazdığında (gerçek koşuda `adim-0.html` dört kez) paket tekrar
+ * çok madde yazdığında (gerçek koşuda `step-0.html` dört kez) paket tekrar
  * dolmasın. Özetler "; " ile birleşir, ilk maddenin sırası korunur.
  */
 export function kanitlariTekille(adaylar: KanitAdayi[]): KanitAdayi[] {
@@ -378,8 +436,8 @@ export async function hataAnalizEt(
 
   const kosuDizini = await dizin.kosuDizini(sonuc.runId);
   const dusenAdim = dusenAdimiBul(sonuc, adimlar);
-  const ekranGoruntusuYolu = join(kosuDizini, `adim-${dusenAdim.stepIndex}.png`);
-  const domYolu = join(kosuDizini, `adim-${dusenAdim.stepIndex}.html`);
+  const ekranGoruntusuYolu = join(kosuDizini, `step-${dusenAdim.stepIndex}.png`);
+  const domYolu = join(kosuDizini, `step-${dusenAdim.stepIndex}.html`);
   const [dom, konsolMetni, agMetni, kod] = await Promise.all([
     istegeBagliOku(domYolu),
     istegeBagliOku(join(kosuDizini, 'console.json')),
@@ -414,10 +472,14 @@ export async function hataAnalizEt(
     dusenAdim.errorMessage ?? sonuc.errorMessage ?? 'No error message',
   ));
   const maskeliDom = dom === null ? null : gizliDegerleriMaskele(dom);
+  // Beyne giden ve pakete yazılan kod aynı: yalnız sır desenleri maskelenir.
+  const maskeliKod = gizliDegerleriMaskele(kod ?? '');
   const haritaFarki = await haritaFarkiHazirla(dizin, test, maskeliDom);
 
-  const beyinYaniti = await beyin.sor<BeyindenGelenHataAnalizi>({
-    gorev: `analiz-${test.id}`,
+  // `kobay:` önekli bilinçli düşüş yerelde sınıflanır; beyin çağrılmaz (maliyet yok).
+  const yerelSiniflama = yerelOnSiniflama(maskeliHataMetni, maskeliDusenAdim.stepIndex);
+  const beyinYaniti = yerelSiniflama !== null ? { json: yerelSiniflama } : await beyin.sor<BeyindenGelenHataAnalizi>({
+    gorev: `analysis-${test.id}`,
     sistem: analizSistemIstemiOlustur(),
     kullanici: analizKullaniciIstemiOlustur({
       dusenAdim: maskeliDusenAdim,
@@ -426,7 +488,7 @@ export async function hataAnalizEt(
       dom: maskeliDom === null ? null : domTemizle(maskeliDom),
       konsolHatalari,
       agHatalari,
-      kod: gizliDegerleriMaskele(kod ?? ''),
+      kod: maskeliKod,
       test,
       ...(haritaFarki === undefined ? {} : { mapDiff: haritaFarki }),
     }),
@@ -438,32 +500,32 @@ export async function hataAnalizEt(
   for (const kanit of beyinYaniti.json.evidence) {
     const kaynak = kanitYolu(kosuDizini, kanit);
     if (kaynak === null || !(await dosyaVarMi(kaynak))) continue;
-    beyinKanitlari.push({ kanit: { ...kanit, path: kaynak.slice(kaynak.lastIndexOf('/') + 1) }, kaynak });
+    beyinKanitlari.push({ kanit: { ...kanit, path: kanitDosyaAdi(kaynak) }, kaynak });
   }
   const secilenKanitlar = kanitlariBirlestir(
     kanitlariTekille(beyinKanitlari),
     await yerelDusenAdimKanitlari(kosuDizini, dusenAdim.stepIndex),
   );
 
-  const ekDosyalar: Array<{ kaynak: string; hedefAd: string }> = [];
+  const ekDosyalar: EkDosya[] = [];
   const eklenenHedefler = new Set<string>();
   const kanitlar: Kanit[] = [];
   for (const aday of secilenKanitlar) {
     if (!eklenenHedefler.has(aday.kanit.path)) {
-      ekDosyalar.push({ kaynak: aday.kaynak, hedefAd: aday.kanit.path });
+      ekDosyalar.push(await ekDosyasiHazirla(aday.kaynak, aday.kanit.path));
       eklenenHedefler.add(aday.kanit.path);
     }
     kanitlar.push(aday.kanit);
   }
   const traceYolu = join(kosuDizini, 'trace.zip');
-  if (await dosyaVarMi(traceYolu)) ekDosyalar.push({ kaynak: traceYolu, hedefAd: 'trace.zip' });
+  if (await dosyaVarMi(traceYolu)) ekDosyalar.push(await ekDosyasiHazirla(traceYolu, 'trace.zip'));
 
   const failure = kodDuzeltmeIpucuEkle(yerelHaritaEmniyeti(
     { ...beyinYaniti.json, evidence: kanitlar },
     haritaFarki,
     maskeliDusenAdim.stepIndex,
     maskeliHataMetni,
-    kod ?? '',
+    maskeliKod,
   ), maskeliHataMetni);
   const temizSonuc = sonuc.errorMessage === undefined ? sonuc : {
     ...sonuc,
@@ -476,16 +538,21 @@ export async function hataAnalizEt(
     // Paketteki koşu kopyası da sınıfı taşısın; runs/<id>/result.json'ı CLI ayrıca günceller.
     result: { ...temizSonuc, failureKind: failure.failureKind },
     steps: adimlariTemizle,
-    code: kod ?? '',
+    code: maskeliKod,
     failure,
     ...(haritaFarki === undefined ? {} : { mapDiff: haritaFarki }),
   };
+  // Yazıcı eski paketi `rm -r` ile siler: yol symlink ile dışarı çevrilmişse hiç yazılmaz.
+  // Yazımdan sonra da denetlenir ki yazım sırasında yol değiştirildiyse başarı denmesin.
+  await hataPaketiYolunuDenetle(dizin, test.id);
   await dizin.hataPaketiYaz(paket, ekDosyalar);
+  await hataPaketiYolunuDenetle(dizin, test.id);
   return paket;
 }
 
 export { analizKullaniciIstemiOlustur, analizSistemIstemiOlustur } from './istem.js';
 export { BeyindenGelenHataAnaliziSemasi } from './sema.js';
 export { domHaritaFarkiOlustur, haritaFarkiHesapla } from './harita-farki.js';
+export { UnsafeBundlePath, hataPaketiYolunuDenetle } from './paket-yolu.js';
 export type { AnalizIstemBaglami } from './istem.js';
 export type { BeyindenGelenHataAnalizi, BeyindenGelenKanit } from './sema.js';

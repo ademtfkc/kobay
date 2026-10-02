@@ -29,19 +29,20 @@ click buttons, submit forms and create records.
 
 ## Status
 
-**0.2.0, early release.** Usable, not yet smooth. What has and has not been
+**0.2.1.** Usable, not yet smooth. What has and has not been
 exercised, so you can decide before installing:
 
 | | |
 | --- | --- |
 | **Who it's for** | Developers running Claude Code (or Codex / Cursor) who want the agent to verify a local web app instead of claiming it works. |
 | **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. On 0.2 the same loop was re-run against the bundled demo app with the real brain — 14 proposals, 3 of 3 accepted tests passing, a deliberate product break classified `product_bug`, $0.28 for the round. |
-| **Untested in practice** | The `codex` and `openrouter` brains. Both adapters exist and have unit tests, but neither has been run against a real CLI or API. Treat them as unverified. |
-| **Platform** | Developed on macOS. CI runs the full suite plus a packaging smoke test on ubuntu-latest and macos-latest, Node 22 and 24. **Windows is untested.** |
+| **Tried once with the real CLI** | The `codex` brain. On 28 September 2026 one round against the bundled demo app with a real `codex exec` (Codex CLI 0.154.0, ChatGPT plan) produced a plan, generated test code and analysed a failure; every brain call matched the schema on the first try. One round, not long use. |
+| **Untested in practice** | The `openrouter` brain. The adapter has unit tests but has never been run against the real API. Treat it as unverified. |
+| **Platform** | Developed on macOS. Since 0.2.1, CI verifies the full suite on ubuntu-latest, macos-latest and windows-latest with Node 22 and 24; the Windows matrix has 415 passing tests. The packaging smoke test runs on macOS and Linux. |
 | **Language** | Everything a machine reads is English: CLI and MCP messages, JSON field names, error codes, file names, prompts. The brain writes test names and descriptions in the language of the app it explored, so a non-English app gets non-English test titles — by design. |
 | **Scope** | Browser tests only. No API tests, no backend tests, no dashboard. |
 
-**0.2.0 is a breaking release.** Every JSON field name, error code and `.kobay`
+**0.2.0 was a breaking release.** Every JSON field name, error code and `.kobay`
 file name changed from Turkish to English; the full rename table is in
 [CHANGELOG.md](CHANGELOG.md). A 0.1 project migrates itself on the first 0.2
 command, but the installed agent skill does not: **run `kobay agent install`
@@ -55,7 +56,7 @@ narrower, bring-your-own-LLM version of that idea.
 
 ## Requirements
 
-- **Node.js 22.12 or newer**; macOS or Linux.
+- **Node.js 22.12 or newer**; macOS, Linux or Windows (since 0.2.1).
 - **Chromium**, installed with `kobay install-browser`.
 - **A brain:** the `claude` CLI, logged in (default, and the only tested path);
   or the `codex` CLI; or an `OPENROUTER_API_KEY` environment variable.
@@ -72,6 +73,8 @@ kobay doctor
 For a one-off command without installing, `npx @ademtfkc/kobay <command>` works
 too — `npx @ademtfkc/kobay doctor`, say — but it re-fetches the package each
 time, so a global install is worth it if you'll run kobay more than once.
+
+If you installed the old unscoped `kobay` package globally, run `npm uninstall -g kobay` first; otherwise the install fails with `EEXIST`.
 
 **From source**, for development or to run an unreleased change:
 
@@ -92,6 +95,26 @@ published package or a local clone instead.
 version — use it rather than `npx playwright install`, which may fetch a
 different revision. On Linux, `--with-deps` also installs Chromium's system
 libraries through your package manager and may ask for `sudo`.
+
+### Windows (since 0.2.1)
+
+Native Windows is supported. In either PowerShell or `cmd.exe`, install kobay
+and its matching Chromium the same way:
+
+```powershell
+npm install -g @ademtfkc/kobay
+kobay install-browser
+kobay doctor
+```
+
+CI verifies this path on `windows-latest` with Node 22 and 24 (415 passing
+tests). It covers PATH/PATHEXT command resolution, `.cmd` shims, relative
+Playwright specs and process-tree termination. We have not yet verified on a
+physical Windows machine: orphan-process cleanup, rename-on-open-file `EPERM`,
+8.3 and UNC paths, and the `claude` CLI's Git Bash requirement still need that
+coverage. Please report Windows issues. Besides the test matrix, the CI also
+runs a smoke job on `windows-latest` (pack, install, `install-browser`, demo
+`explore`).
 
 `doctor` checks Node, the brain CLIs, Chromium, the current project and whether
 the target answers. It always exits `0`, so read the rows. Before a project
@@ -118,8 +141,10 @@ kobay setup --brain claude
 
 `--brain codex` and `--brain openrouter` are accepted too. The Codex brain runs
 `codex exec --ignore-user-config --ephemeral` in a read-only sandbox, so your
-`~/.codex/config.toml` is ignored; set model and effort with `--model` /
-`--effort`, and Codex login still comes from `CODEX_HOME`.
+`~/.codex/config.toml` is ignored. If you give no model, the Codex CLI runs its
+own built-in default; to choose one, set model and effort with `--model` /
+`--effort` or in the `brain` block (`model`, `effort`) of the project or global
+kobay config. Codex login still comes from `CODEX_HOME`.
 
 ## Quick start
 
@@ -168,15 +193,21 @@ kobay explore
 
 **4. Generate a plan** — **LLM call.** The brain reads the map (plus a product
 document if you passed `--docs`) and proposes 8–25 flows; proposals pointing at
-URLs outside the map are dropped. The text output is the summary line plus the
-same JSON body `--output json` returns:
+URLs outside the map are dropped. When a login is configured, proposals with a step
+that enters the real credentials (password, secret, PIN) are dropped too, listed
+under `dropped` with the step; steps that enter invalid or empty values are fine.
+Each proposal also states `requiresRealCredentials`; `true` drops it, and the
+step filter still drops real-credential steps when the flag says `false`.
+Generated code may not silently `test.skip`, and a step that would need the real
+credentials throws instead of being rewritten. The text output is the
+summary line plus the same JSON body `--output json` returns:
 
 ```sh
 kobay test plan generate
 #> 10 proposals generated
 #> {
 #>   "proposals": [
-#>     { "id": "p_xtj1ab", "priority": "p0", "title": "Log in with valid credentials",  "stepCount": 2 },
+#>     { "id": "p_xtj1ab", "priority": "p1", "title": "Login with invalid credentials shows an error", "stepCount": 3 },
 #>     { "id": "p_q3w8wt", "priority": "p0", "title": "Record list shows saved records", "stepCount": 2 },
 #>     { "id": "p_gonrog", "priority": "p1", "title": "New record form saves a record",  "stepCount": 2 },
 #>     … six more …
@@ -241,7 +272,7 @@ kobay test failure get t_sknz9qok
 #> Failure bundle copied: ~/kobay-demo/.kobay/failure-out/t_sknz9qok
 
 ls ~/kobay-demo/.kobay/failure-out/t_sknz9qok
-#> adim-1.html  adim-1.png  code.ts  failure.json  meta.json  steps.json  trace.zip
+#> code.ts  failure.json  meta.json  step-1.html  step-1.png  steps.json  trace.zip
 ```
 
 `failure.json` carries the analysis, the full run result, the step list and the
@@ -257,14 +288,14 @@ generated code. The part an agent acts on is `failure`:
     "rationale": "The records table ends after the last record row; no total is computed or rendered. To find the source file, search the product code for the \"Received\" value or text from the error message."
   },
   "evidence": [
-    { "kind": "snapshot",   "stepIndex": 1, "summary": "The table body ends after the last record row; there is no tfoot and no cell containing 'Monthly total'.", "path": "adim-1.html" },
-    { "kind": "screenshot", "stepIndex": 1, "summary": "The record list is visible with three rows and no total line.", "path": "adim-1.png" }
+    { "kind": "snapshot",   "stepIndex": 1, "summary": "The table body ends after the last record row; there is no tfoot and no cell containing 'Monthly total'.", "path": "step-1.html" },
+    { "kind": "screenshot", "stepIndex": 1, "summary": "The record list is visible with three rows and no total line.", "path": "step-1.png" }
   ]
 }
 ```
 
-Each evidence entry points at a file in the same folder (`adim-<step>.png` for
-the screenshot, `adim-<step>.html` for the DOM). `console.json` and
+Each evidence entry points at a file in the same folder (`step-<step>.png` for
+the screenshot, `step-<step>.html` for the DOM). `console.json` and
 `network.json` join the bundle only when the analysis cites them. Open the trace
 with `npx playwright show-trace trace.zip`.
 
@@ -283,9 +314,10 @@ kobay agent install --target claude
 #> MCP registered in .mcp.json (kobay → `kobay mcp`): ~/my-app/.mcp.json
 ```
 
-`.mcp.json` is a project-scoped MCP config, so Claude Code asks you once to
-approve the server the first time you start it in that directory. For other
-agents kobay writes the skill and you register the server yourself:
+`.mcp.json` is a project-scoped MCP config, so the first `claude` session in
+that directory shows the server as **pending approval** and asks you once to
+approve it. For other agents kobay writes the skill and you register the server
+yourself:
 
 ```sh
 kobay agent install --target codex
@@ -302,20 +334,68 @@ The Codex target replaces only the block between `<!-- kobay:BEGIN -->` and
 current project, never your home directory. To register the Claude Code server
 by hand: `claude mcp add -s project kobay -- kobay mcp`.
 
-**The agent's loop** (source: [`beceri/SKILL.md`](beceri/SKILL.md)): check the
-project and that the app is up → pick or generate tests for the changed feature →
-run them → on a failure fetch the bundle and act on `failureKind` → re-run and
-report what passed, what it changed and what is still unverified. The skill also
-tells it to stop after two failed fix attempts, never to weaken an assertion to
-get green, and never to print credentials or a trace into chat.
+### Paste this into your coding agent
 
-**The MCP server** (`kobay mcp`, stdio) exposes 17 tools:
+```text
+Use kobay to verify this local web app end to end. First ensure kobay is
+available (install it if needed), run `kobay install-browser`, and start or
+identify the app's local URL. Create or inspect the Kobay project, then run the
+app health check. For the feature I changed, find existing tests or explore the
+app, generate a small focused plan, accept only the relevant proposals, and run
+the tests. If a test fails, fetch and read its failure bundle. For
+`product_bug`, fix the product code; for `product_changed`, refresh the test;
+for `test_bug`, inspect the generated code before fixing the test. Re-run the
+same test after each fix. Prefer the Kobay MCP tools when available; otherwise
+use the CLI with `--output json`. In CLI JSON, decide from `ok` and `exitCode`,
+not the shell exit status of a piped command. Do not expose credentials, cookies
+or traces. Stop after two unsuccessful fix attempts and report the tests run,
+their verdicts, changes made, and anything still unverified.
+```
+
+### MCP-first call sequence
+
+Source: [`src/mcp/index.ts`](src/mcp/index.ts) and
+[`beceri/SKILL.md`](beceri/SKILL.md). All tools below accept optional
+`projectDir`; omit it when the server starts in the project.
+
+1. Call `project_get` → project configuration and status. If there is no
+   project, call `project_create` with required `url` and optional `docs`,
+   `loginUser`, `loginUrl`, and `force` → creates `.kobay/`.
+2. Call `doctor` → installation, target, and environment checks. Continue only
+   when the target row is `ok: true`; `doctor` itself can exit successfully when
+   a row fails.
+3. Call `test_list` → saved test records. For a new feature, call `explore` →
+   refreshed page map; then `plan_generate` with optional `hint` → proposals;
+   then `plan_accept` with `ids: string[]` (or `all: true`) → draft tests.
+4. Call `test_run` with `ids: string[]` or `all: true` (optional `rerun`) → one
+   result per test, including `verdict`, `runId`, and `failureKind` when it
+   fails.
+5. For a failed test, call `failure_get` with `id` (optional `out`) → the
+   evidence bundle. Read its `failureKind`: after a product fix call
+   `test_rerun` with `id`; for `product_changed` call `test_refresh` with `id`
+   (optional `run`); for a test problem call `code_get` with `id` before editing
+   the generated code.
+6. When the loop is done, call `prune` (optional `confirm`, `dryRun`, `maxMb`,
+   `olderThanDays`) → previews old runs, brain logs and leftovers by default;
+   review the result, then pass `confirm: true` to delete. `dryRun: true` always
+   forces a preview.
+
+**CLI when MCP is unavailable.** Use the matching commands with `--output json`:
+`kobay project get`, `kobay doctor`, `kobay test list`, `kobay explore`,
+`kobay test plan generate`, `kobay test plan accept --ids <P1,P2>`,
+`kobay test run <ID...>`, `kobay test failure get <ID>`, and
+`kobay test rerun <ID>`; clean up with `kobay prune --dry-run` and then
+`kobay prune`. Every CLI response is one JSON envelope. Decide from
+its `ok` and `exitCode` fields; do not pipe kobay into another command and read
+`$?`, which is the last command's status rather than kobay's.
+
+**The MCP server** (`kobay mcp`, stdio) exposes these tools:
 
 ```
 project_create  project_update  project_get  explore       plan_generate
 plan_accept     test_create     test_list    test_get      code_get
 test_delete     test_run        test_rerun   test_refresh  test_result
-failure_get     doctor
+failure_get     doctor          prune
 ```
 
 Every tool takes an optional `projectDir`, which must be inside the directory
@@ -383,27 +463,48 @@ Verified against `kobay --help` and every subcommand's `--help` in 0.2.0.
 | `test refresh <id> [--no-run]` | For `product_changed`: re-explore, adapt the plan, regenerate and run. |
 | `test result <id> [--history]` | Last run result, or every run still on disk. |
 | `test failure get <id> [--out <dir>]` | Copies the failure bundle. Default `.kobay/failure-out/<id>/`, refreshed in place. |
+| `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Removes old runs, brain logs, stale failure bundles and known leftovers from older versions. Unknown `failure-out/` files are skipped. Never removes the last failed run or a current failure bundle. The CLI deletes by default; `--dry-run` only previews. `--max-mb` caps `runs/` (default 500), and `--older-than-days` sets the age threshold (default 7). |
 | `agent install --target <claude\|codex\|cursor>` | Installs the agent skill here; for `claude` also registers the MCP server in `.mcp.json`. |
 | `mcp` | Starts the stdio MCP server. |
+
+`prune --dry-run` prints a summary (example from a real run on a demo project):
+
+```sh
+kobay prune --dry-run
+#> Prune preview: would remove 7 items and would reclaim 0.05 MB.
+#> Run storage after prune: 0.92 MB / 500.00 MB.
+```
+
+With `--output json` the same run returns `dryRun`, `estimate`, `policy`,
+`deleted`, `wouldDelete` (each with `path`, `kind`, `bytes`, `reason`), `skipped`
+(each with `path` and `reason`), `reclaimedBytes` and `wouldReclaimBytes`.
+Dry-run figures have `estimate: true`; deletion remeasures run storage. Over MCP
+the `prune` tool takes `projectDir`, `confirm`, `dryRun`, `maxMb` and
+`olderThanDays`: it previews by default, deletes only with `confirm: true`, and
+`dryRun: true` always forces a preview.
 
 Global options: `--cwd <dir>`, `--output json`, `-V/--version`, `-h/--help`.
 
 A hand-written plan file for `test create --plan`
-([`schemas/plan.schema.json`](schemas/plan.schema.json)) needs `projectId`,
-`type` (must be `frontend`) and `name`, takes an optional `description` and
-`priority` (`p0`–`p3`, default `p1`), and 1–200 `planSteps`, each `action` or
-`assertion` with a `description`:
+([`schemas/plan.schema.json`](schemas/plan.schema.json)) needs `type` (must be
+`frontend`) and `name`, takes an optional `url` (the test's page: a path such as
+`/records` or an address on the project's `baseUrl` origin), `description`,
+`priority` (`p0`–`p3`, default `p1`) and `projectId` (a free label, not stored),
+and 1–200 `planSteps`, each `action` or `assertion` with a `description`:
 
 ```json
-{ "projectId": "demo", "type": "frontend", "name": "Record list shows a monthly total",
-  "priority": "p0",
+{ "type": "frontend", "name": "Record list shows a monthly total",
+  "url": "/records", "priority": "p0",
   "planSteps": [
     { "type": "action", "description": "Open the record list at /records" },
     { "type": "assertion", "description": "A 'Monthly total' row shows the sum of the record amounts" } ] }
 ```
 
-There is no `url` field, so a hand-written test skips the map comparison during
-failure analysis and prints a warning saying so
+A `url` on another origin is rejected with exit `2`. The `url` is resolved
+against `baseUrl` and stored in that normalised form. In a project with stored
+credentials, a plan whose steps enter the real password or another secret is
+rejected with exit `2`; kobay's own login step already signs the test in. Without `url`, failure
+analysis skips the map comparison and prints a warning saying so
 (`Test has no URL (<id>); map comparison skipped.`).
 
 ## Output and failures
@@ -422,7 +523,9 @@ Read `ok` and `exitCode` from the JSON rather than `$?` after a pipe —
 
 **Exit codes:** `0` passed · `1` a test failed · `2` usage error · `3` target
 unreachable · `4` brain or engine error · `5` login or permission problem. With
-several tests, `test run` exits with the highest code.
+several tests, `test run` exits with the highest code. Exit `5` also covers a
+login that kobay refused because the page tried to send the credentials to
+another origin.
 
 **Error codes** (`error.code`): `UsageError`, `PermissionError`,
 `TargetUnreachableError`, `InvalidId`, `FileNotFound`, `SchemaError`,
@@ -450,6 +553,10 @@ error, or zero tests executed — the result is `inconclusive` with
 | `env` | Target, dependency or access is down. | Bring the environment up, then rerun. |
 | `flaky` | Changes from run to run. | Read the evidence; look for waits and races. |
 | `unknown` | kobay could not classify it. | Read the evidence yourself. |
+
+A `kobay:` error thrown by generated code marks an unsupported plan step (for
+example one that needs the real credentials); it is reported as `test_bug`
+without asking the brain.
 
 `failure.recommendedFixTarget.kind` is one of `code`, `selector`, `data`, `env`,
 `unknown`, with a `reference` and a `rationale`.
@@ -480,7 +587,8 @@ limit applies. OpenRouter defaults to `google/gemini-3.8-flash`: kobay fetches
 the model's price, reserves the worst case and sends `provider.max_price`, and
 makes no call if the price cannot be determined. If `ANTHROPIC_API_KEY` is set,
 `claude -p` may bill your API account instead of your subscription; kobay warns
-once. And `test run --all` generates code for every test that has none and
+once. If `OPENAI_API_KEY` or `CODEX_API_KEY` is set, `codex exec` may bill your
+API account instead of your ChatGPT plan; kobay warns once. And `test run --all` generates code for every test that has none and
 analyses every failure — accept a few proposals first.
 
 **What leaves your machine.** The browser, the app and the test runs stay local.
@@ -494,15 +602,18 @@ OpenRouter and whatever it routes to):
 | `test run` (failure analysis) | The error message, the failing step's cleaned DOM, up to 20 console errors, up to 20 failed network requests, the test code and plan steps. Screenshots are not sent. |
 | `test refresh` | The old and new summary of the test's page, the map diff and the plan steps. |
 
-Before failure analysis kobay masks values that look like secrets — password and
-token JSON fields, `Bearer`/`Basic` headers, secret-looking URL parameters,
-`key=value` pairs — as `[redacted]`. That is pattern matching, not a list of
-your real secrets, so it will miss some. **The map and docs sent during planning
+Before failure analysis, and before anything is written to `.kobay/logs/`, kobay
+masks the values of secret environment variables (`*_API_KEY`, `*_TOKEN`,
+`*_SECRET`, `KOBAY_LOGIN_PASS`), provider token shapes such as `sk-…` and `ghp_…`,
+and values that look like secrets — password and token JSON fields,
+`Bearer`/`Basic` headers, secret-looking URL parameters, `key=value` pairs — as
+`[redacted]`. Beyond the environment variables this is pattern matching, so it
+will miss some. **The map and docs sent during planning
 are not masked.** Do not point kobay at pages showing real customer data.
 
 kobay never puts the stored password into a prompt; Playwright types it into the
 login form locally. Every call's full prompt and raw response are logged to
-`.kobay/logs/` (git-ignored).
+`.kobay/logs/` (git-ignored), with the same masking applied.
 
 ## The `.kobay/` directory
 
@@ -616,15 +727,48 @@ Read this before pointing kobay at anything that matters.
   them under `invalidated`. If the saved origin does not match, `explore` and
   `test refresh` exit `5` before opening a browser; fix with
   `kobay project create --url <URL> --login --force`.
-- **Credentials stay on the target's origin — for HTML forms only.** The login
-  URL must share the base URL's origin, and kobay stops without typing the
-  password if the login page redirects elsewhere or the form's `action` points
-  off-origin. **This covers normal form posts only: if the page's JavaScript
-  submits the credentials itself (`fetch`/XHR), kobay cannot see where they go.**
+- **Credentials stay on the app's site.** The login URL must share the base
+  URL's origin, and kobay stops without typing the password if the login page
+  redirects to another origin or the form's `action` points to another site (the
+  same-site rule below applies, so a form on `app.example.com` may post to
+  `api.example.com`). *During login*
+  (from typing the password until the page has moved on and the network is
+  quiet, at most 2 s), requests may carry credentials only to the `baseUrl`
+  origin or its own site: a request (`fetch`, XHR, `sendBeacon`, image request)
+  that carries the password to another site is blocked and the login is
+  rejected, cross-site writes (POST, PUT and the like) are blocked, and
+  cross-site WebSockets are closed before they connect; messages sent on a
+  cross-site WebSocket that was already open are dropped silently during this
+  window (up to about 7 s). *After login*, until
+  the `explore` or `test refresh` browser closes, only cross-site requests and
+  WebSocket messages that visibly carry the password are blocked, and
+  exploration is rejected; the app's own cross-site API calls and WebSockets go
+  through. Same-site subdomains are allowed (`app.example.com` and
+  `api.example.com`, same scheme); a separate auth site (SSO) is not. On
+  `localhost`, IP addresses and single-label hosts the port may differ but the
+  host name must match: `localhost:5173` may call `localhost:8080`, while
+  `localhost` and `127.0.0.1` are different sites. kobay approximates the
+  registrable domain (last two labels, three after known suffixes such as
+  `co.uk` or `github.io`) instead of reading the Public Suffix List: tenants of
+  common hosting platforms (`github.io`, `vercel.app`, `a.run.app`,
+  `up.railway.app` and others) are separate sites, and anything under
+  `amazonaws.com` or `cloudfront.net` needs the exact origin. If your hosting
+  platform is missing from the list, report it so it can be added. When
+  credentials are configured, service workers are disabled. Limits: on a
+  307/308 redirect kobay detects and rejects the login, it cannot block the
+  redirected request itself, so the password may already have reached the
+  other server; a WebSocket opened from a Web Worker is not intercepted; a
+  password encoded in a way kobay does not recognise can still leave in a
+  cross-site GET, and after login in any cross-site request. When login is
+  refused for any of these reasons, `explore` and `test refresh` exit `5`.
 - **Traces contain session cookies.** `trace.zip` in `runs/`, `failure/` and any
   `failure-out/` copy includes the browser session. Treat a bundle like a
   password — do not attach it to public issues. `.kobay/failure-out/<id>/` is
   git-ignored; if you copy one elsewhere with `--out`, git-ignore that folder.
+  Text evidence (`console.json`, `network.json`, `step-*.html`) is secret-masked
+  when copied into the bundle, but screenshots and `trace.zip` cannot be: they
+  may contain secrets visible on screen or in network traces, so treat the whole
+  bundle as sensitive (`.kobay/failure-out/` is git-ignored).
 - **Path limits.** File arguments (`--docs`, `--docs-path`, `--plan`; `docs`,
   `docsPath`, `planPath`, `out` over MCP) must stay inside the project; `..` and
   symlink escapes are rejected, as are paths under `.kobay/` or with any
@@ -637,32 +781,40 @@ Read this before pointing kobay at anything that matters.
 
 ## Known limitations
 
-- **Only the `claude` brain is proven.** `codex` and `openrouter` are
-  unit-tested but have never run against a real CLI or API.
-- **Windows is untested**; macOS and Linux only.
+- **Only the `claude` brain has seen long use.** `codex` has passed one live
+  round (plan, code generation, failure analysis); `openrouter` is unit-tested
+  but has never run against the real API.
+- **Windows has CI coverage, not physical-machine coverage.** The unverified
+  cases are orphan-process cleanup, rename-on-open-file `EPERM`, 8.3 and UNC
+  paths, and the `claude` CLI's Git Bash requirement. Please report issues.
 - **No sandbox for generated tests.** See [Security model](#security-model).
 - **Browser tests only.** No API or backend tests.
 - **Always headless.** No visible browser window; use `trace.zip` instead.
-- **Simple login only.** A username/password HTML form. SSO, OAuth redirects,
-  CAPTCHA and 2FA are not handled, and a JavaScript-driven login is invisible to
-  the origin check.
+- **Simple login only.** A username/password HTML form. SSO (a login on a
+  separate auth site), OAuth redirects, CAPTCHA and 2FA are not handled;
+  subdomains of the app's own site may receive the credentials. A
+  JavaScript-driven login is covered only by the network guard, not by the
+  form-origin check.
 - **Exploration is shallow by design:** `<a href>` links only, no form submits or
   button clicks, stopping at 40 pages.
 - **Some commands still print raw JSON in text mode:** `project get`,
   `test get`, `test result`, and the body of `test plan generate`.
-- **Pruning only touches the test that just ran.** Runs belonging to tests you
-  never re-run are kept indefinitely, and the `<id>-<n>` bundle folders left by
-  0.1 are not cleaned up.
+- **The automatic pruning after a run only touches the test that just ran.**
+  Runs of tests you never re-run stay on disk until you run `kobay prune`, which
+  sweeps the whole `.kobay` storage (all tests' runs, brain logs and leftovers
+  from older versions).
+- **Killing kobay with SIGKILL leaves the process tree behind.** On
+  SIGTERM/SIGINT kobay terminates the Playwright worker and Chromium; SIGKILL
+  cannot be caught.
 - **`test delete` leaves evidence behind.** It removes the test record and its
   generated code, but `failure/<id>/`, `failure-out/<id>/` and old run folders
   stay on disk.
 
 ## Roadmap
 
-1. **Live test of the Codex brain**, then OpenRouter, against a real app.
-2. **A `prune` command** and cleanup on `test delete`.
-3. **Windows support**, once someone has actually run it there.
-4. **JavaScript logins**, beyond the plain HTML form.
+1. **Live test of the OpenRouter brain** against a real app, and longer use of Codex.
+2. **Cleanup on `test delete`.**
+3. **JavaScript logins**, beyond the plain HTML form.
 
 Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
@@ -675,20 +827,20 @@ cd kobay && npm install && npm run build
 npm run typecheck         # tsc --noEmit
 npm run lint              # eslint
 npm test                  # vitest
-KOBAY_01_DIST=skip npm run test:kati   # strict run: real Chromium, cross-version suite skipped
+KOBAY_01_DIST=skip npm run test:strict # strict run: real Chromium, cross-version suite skipped
 npm run duman             # smoke test: npm pack, install into a clean dir, real explore
 npm run kobay -- doctor   # run the CLI from source via tsx
 ```
 
-`test:kati` requires `KOBAY_01_DIST`: `skip` skips the cross-version suite
+`test:strict` requires `KOBAY_01_DIST`: `skip` skips the cross-version suite
 (what CI does); point it at a real 0.1 install instead to run that suite for real.
 
-CI (`.github/workflows/ci.yml`) runs build, `test:kati` and `duman` on
+CI (`.github/workflows/ci.yml`) runs build, `test:strict` and `duman` on
 ubuntu-latest and macos-latest with Node 22 and 24.
 
 **Contributing.** Issues and pull requests welcome at
 [github.com/ademtfkc/kobay](https://github.com/ademtfkc/kobay). Run
-`npm run typecheck`, `npm run lint` and `KOBAY_01_DIST=skip npm run test:kati`
+`npm run typecheck`, `npm run lint` and `KOBAY_01_DIST=skip npm run test:strict`
 before opening a PR, and say what you actually ran. Everything a machine reads
 is English; the source identifiers and code comments are Turkish, and stay
 that way.

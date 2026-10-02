@@ -1,23 +1,27 @@
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { codexHataOzeti } from '../../src/beyin/codex.js';
 import { BrainError, beyinOlustur } from '../../src/beyin/index.js';
 import {
   BeyinButcesi,
   eksikKapanislariTamamla,
+  beyinGunluguYaz,
+  gizliDegerleriMaskele,
   ilkJsonBlogu,
+  jsonGizliDegerleriMaskele,
   VARSAYILAN_CLAUDE_BUTCESI_USD,
 } from '../../src/beyin/ortak.js';
 
 const sema = v.object({ tamam: v.boolean() });
 const cliDizini = resolve('test/sahte-cli');
-const anahtarliOrtam = process.env.PATH === undefined ? cliDizini : `${cliDizini}:${process.env.PATH}`;
+const anahtarliOrtam = process.env.PATH === undefined ? cliDizini : `${cliDizini}${delimiter}${process.env.PATH}`;
 const geciciler: string[] = [];
 
 async function geciciDizin(): Promise<string> {
-  const dizin = await mkdtemp(join(tmpdir(), 'kobay-beyin-'));
+  const dizin = await mkdtemp(join(tmpdir(), 'kobay-brain-'));
   geciciler.push(dizin);
   return dizin;
 }
@@ -81,11 +85,15 @@ process.stdin.on('end', async () => {
   const bekle = Number(process.env.T_BEKLE_MS ?? '0');
   if (bekle > 0) await new Promise((coz) => setTimeout(coz, bekle));
   process.stdout.write(process.env.T_CIKTI ?? '');
+  process.stderr.write(process.env.T_STDERR ?? '');
   process.exitCode = Number(process.env.T_KOD ?? '0');
 });
 `);
   await chmod(join(dizin, ad), 0o755);
-  return { path: process.env.PATH === undefined ? dizin : `${dizin}:${process.env.PATH}`, sayac };
+  if (process.platform === 'win32') {
+    await writeFile(join(dizin, `${ad}.cmd`), `@echo off\r\nnode "%~dp0${ad}" %*\r\n`);
+  }
+  return { path: process.env.PATH === undefined ? dizin : `${dizin}${delimiter}${process.env.PATH}`, sayac };
 }
 
 async function cagriSayisi(sayac: string): Promise<number> {
@@ -167,8 +175,9 @@ describe('CLI adaptörleri', () => {
       '--strict-mcp-config', '--no-session-persistence', '--max-budget-usd', '0.4', '--model', 'sonnet',
     ]));
     expect(kaydedilen.girdi).toContain('Sistem\n\nKullanıcı');
-    await expect(readFile(join(logDizini, 'beyin-plan-1.log'), 'utf8')).resolves
-      .toContain('"maliyetUsd":0.012,"turSayisi":2,"hataMi":false');
+    const gunluk = await readFile(join(logDizini, 'brain-plan-1.log'), 'utf8');
+    expect(gunluk).toContain('--- usage ---');
+    expect(gunluk).toContain('"maliyetUsd":0.012,"turSayisi":2,"hataMi":false');
   });
 
   it('ANTHROPIC_API_KEY varsa kullanıcıyı süreçte yalnız bir kez stderr üzerinden uyarır', async () => {
@@ -185,6 +194,24 @@ describe('CLI adaptörleri', () => {
     const uyarilar = stderr.mock.calls.map(([metin]) => String(metin)).filter((metin) => metin.includes('ANTHROPIC_API_KEY'));
     expect(uyarilar).toHaveLength(1);
     expect(uyarilar[0]).toContain('may be billed to your API account');
+  });
+
+  it('codex: OPENAI_API_KEY varsa kullanıcıyı süreçte yalnız bir kez stderr üzerinden uyarır', async () => {
+    await chmod(join(cliDizini, 'codex'), 0o755);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const cikti = await ciktiDosyasi('{"tamam":true}');
+    const anahtarsiz = beyinOlustur({ adaptor: 'codex' }, ortam({ KOBAY_SAHTE_CIKTI: cikti, OPENAI_API_KEY: '' }));
+    await anahtarsiz.sor({ gorev: 'sifir', sistem: 'S', kullanici: 'K', sema });
+    const beyin = beyinOlustur({ adaptor: 'codex' }, ortam({ OPENAI_API_KEY: 'test-anahtari', KOBAY_SAHTE_CIKTI: cikti }));
+
+    await beyin.sor({ gorev: 'bir', sistem: 'S', kullanici: 'K', sema });
+    await beyin.sor({ gorev: 'iki', sistem: 'S', kullanici: 'K', sema });
+
+    const uyarilar = stderr.mock.calls.map(([metin]) => String(metin)).filter((metin) => metin.includes('_API_KEY'));
+    expect(uyarilar).toHaveLength(1);
+    expect(uyarilar[0]).toContain('OPENAI_API_KEY is set');
+    expect(uyarilar[0]).toContain('may be billed to your API account');
+    expect(uyarilar[0]).not.toContain('test-anahtari');
   });
 
   it('codex bayraklarını geçirir ve -o dosyasındaki JSON yanıtını okur', async () => {
@@ -231,16 +258,19 @@ describe('CLI adaptörleri', () => {
     const claudeYolu = join(binDizini, 'claude');
     await writeFile(claudeYolu, '#!/usr/bin/env node\nprocess.stderr.write("Authorization: Bearer cok-gizli-token\\n");\nprocess.exit(7);\n');
     await chmod(claudeYolu, 0o755);
+    if (process.platform === 'win32') {
+      await writeFile(join(binDizini, 'claude.cmd'), '@echo off\r\nnode "%~dp0claude" %*\r\n');
+    }
     const logDizini = await geciciDizin();
     const beyin = beyinOlustur({ adaptor: 'claude' }, {
-      PATH: process.env.PATH === undefined ? binDizini : `${binDizini}:${process.env.PATH}`,
+      PATH: process.env.PATH === undefined ? binDizini : `${binDizini}${delimiter}${process.env.PATH}`,
     });
 
     const hata = await beyin.sor({ gorev: 'cli', sistem: 'S', kullanici: 'K', sema, logDizini }).catch((neden: unknown) => neden);
     expect(hata).toMatchObject({ sebep: 'cli_error', message: expect.stringContaining('CLI exited with code 7') });
     expect((hata as Error).message).toContain('[redacted]');
     expect((hata as Error).message).not.toContain('cok-gizli-token');
-    const gunluk = await readFile(join(logDizini, 'beyin-cli-1.log'), 'utf8');
+    const gunluk = await readFile(join(logDizini, 'brain-cli-1.log'), 'utf8');
     expect(gunluk).toContain('[redacted]');
     expect(gunluk).not.toContain('cok-gizli-token');
   });
@@ -283,8 +313,8 @@ describe('şema, günlük ve diğer adaptörler', () => {
     const tamamlamaCagrilari = fetchSahte.mock.calls.filter(([url]) => String(url).includes('/chat/completions'));
     expect(JSON.parse(String(tamamlamaCagrilari[1]?.[1]?.body)).messages[0].content)
       .toContain('proposals[0].steps[0].description');
-    await expect(readFile(join(logDizini, 'beyin-tekrar-1.log'), 'utf8')).resolves.toContain('---\n{"proposals":[{"steps":[{}]}]}');
-    await expect(readFile(join(logDizini, 'beyin-tekrar-2.log'), 'utf8')).resolves.toContain('---\n{"proposals":[{"steps":[{}]}]}');
+    await expect(readFile(join(logDizini, 'brain-tekrar-1.log'), 'utf8')).resolves.toContain('---\n{"proposals":[{"steps":[{}]}]}');
+    await expect(readFile(join(logDizini, 'brain-tekrar-2.log'), 'utf8')).resolves.toContain('---\n{"proposals":[{"steps":[{}]}]}');
   });
 
   it('sahte adaptör dosyadaki yanıtı döner, yoksa bos_yanit verir ve günlük yazar', async () => {
@@ -293,7 +323,7 @@ describe('şema, günlük ve diğer adaptörler', () => {
     await writeFile(join(yanitDizini, 'plan.json'), '{"tamam":true}');
     const beyin = beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: yanitDizini });
     await expect(beyin.sor({ gorev: 'plan', sistem: 'S', kullanici: 'K', sema, logDizini })).resolves.toMatchObject({ json: { tamam: true } });
-    await expect(readFile(join(logDizini, 'beyin-plan-1.log'), 'utf8')).resolves.toContain('---\n{"tamam":true}');
+    await expect(readFile(join(logDizini, 'brain-plan-1.log'), 'utf8')).resolves.toContain('---\n{"tamam":true}');
     await expect(beyin.sor({ gorev: 'yok', sistem: 'S', kullanici: 'K', sema }))
       .rejects.toMatchObject({ sebep: 'empty_response' });
   });
@@ -604,6 +634,138 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
     expect(argumanlar).toContain('--ephemeral');
     expect(argumanlar.indexOf('--ignore-user-config')).toBeLessThan(argumanlar.indexOf('-'));
     expect(argumanlar).toEqual(expect.arrayContaining(['-m', 'gpt-5', '-c', 'model_reasoning_effort=low']));
+  });
+
+  it('codex sıfır dışı çıkışta başlık ve istem yankısını değil, sondaki ERROR mesajını raporlar', async () => {
+    // codex-cli 0.154.0, geçersiz modelle gerçek stderr biçimi (28 Eyl 2026): başlık + istem yankısı + ERROR satırları.
+    const uzunIstem = 'x'.repeat(2000);
+    const stderr = [
+      'OpenAI Codex v0.154.0', '--------', 'workdir: /tmp/kobay-codex-abc', 'model: no-such-model-xyz',
+      'provider: openai', 'approval: never', 'sandbox: read-only', 'reasoning effort: none',
+      'reasoning summaries: none', 'session id: 01a0e998-3397-7fa2-958d-fb4b572f7faa', '--------', 'user', uzunIstem, '',
+      'warning: Model metadata for `no-such-model-xyz` not found. Defaulting to fallback metadata.',
+      'ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'no-such-model-xyz\' model is not supported when using Codex with a ChatGPT account."}}',
+      'ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'no-such-model-xyz\' model is not supported when using Codex with a ChatGPT account."}}',
+      '',
+    ].join('\n');
+    const cli = await sahteCliDizini('codex');
+    const beyin = beyinOlustur({ adaptor: 'codex', model: 'no-such-model-xyz' }, {
+      PATH: cli.path, T_KOD: '1', T_STDERR: stderr,
+    });
+    const hata = await beyin.sor({ gorev: 'codex', sistem: 'S', kullanici: 'K', sema }).catch((e: unknown) => e);
+    expect(hata).toMatchObject({ sebep: 'cli_error' });
+    const mesaj = (hata as Error).message;
+    expect(mesaj).toContain("The 'no-such-model-xyz' model is not supported when using Codex with a ChatGPT account.");
+    expect(mesaj).not.toContain('OpenAI Codex v0.154.0');
+    expect(mesaj).not.toContain('xxxxxxxxxx');
+    expect(mesaj.split('is not supported')).toHaveLength(2);
+    expect(await cagriSayisi(cli.sayac)).toBe(1);
+  });
+
+  it('codexHataOzeti ERROR satırı yoksa stderr\'in başını değil sonunu verir ve gizli değerleri maskeler', () => {
+    const ozet = codexHataOzeti(`OpenAI Codex v0.154.0\n${'y'.repeat(3000)}\nfatal: stream disconnected api_key=sk-gizli123\n`);
+    expect(ozet).toContain('fatal: stream disconnected');
+    expect(ozet).not.toContain('OpenAI Codex');
+    expect(ozet).not.toContain('sk-gizli123');
+    expect(ozet.length).toBeLessThanOrEqual(500);
+    expect(codexHataOzeti('ERROR: plain failure text\nERROR: plain failure text')).toBe('plain failure text');
+  });
+
+  it('maskeleyici: sağlayıcı token biçimleri ve ortamdaki gizli değerlerin tam hali (denetim P1, sahte değerler)', () => {
+    // Denetimin örneği: anahtar adı "api_key=" biçiminde değil, düz metinde.
+    expect(gizliDegerleriMaskele('Incorrect API key provided: sk-live-SAHTEsahteSAHTEsahte0123456789ab')).toBe('Incorrect API key provided: [redacted]');
+    for (const token of ['sk-ant-api03-SAHTEsahte123', 'sk-proj-SAHTEsahte123', 'ghp_SAHTEsahteSAHTEsahteSAHTEsahte01234567', 'xoxb-1234-SAHTE-sahte-SAHTE-sahte']) {
+      expect(gizliDegerleriMaskele(`x ${token} y`), token).toBe('x [redacted] y');
+    }
+    const env = {
+      OPENAI_API_KEY: 'ozel-bicim-anahtar-777', CODEX_API_KEY: 'codex-sahte-degeri-9',
+      OPENROUTER_API_KEY: 'or-sahte-degeri-111', ANTHROPIC_API_KEY: 'ant-sahte-degeri-222',
+      BENIM_SERVIS_TOKEN: 'servis-sahte-token-333', DIGER_SECRET: 'diger-sahte-gizli-444',
+      KOBAY_LOGIN_PASS: 'p4ss', KISA_TOKEN: 'true', PATH: '/usr/bin',
+    };
+    const metin = Object.values(env).join(' | ');
+    const maskeli = gizliDegerleriMaskele(metin, env);
+    for (const [ad, deger] of Object.entries(env)) {
+      if (['KISA_TOKEN', 'PATH'].includes(ad)) expect(maskeli, ad).toContain(deger);
+      else expect(maskeli, ad).not.toContain(deger);
+    }
+    // Sıradan metin bozulmaz.
+    expect(gizliDegerleriMaskele('task-management risk-assessment page', env)).toBe('task-management risk-assessment page');
+  });
+
+  it('maskeleyici: kısa ürün kodu token sayılmaz, gerçek uzunluktaki anahtar maskelenir (denetim N9)', () => {
+    for (const metin of [
+      'SKU sk-proj-ALUMINUM42 is unavailable', 'Code sk-1234567890abcdef', 'ghp_SHORTcode123 missing',
+      'github_pat_SHORT12345 tag', 'xoxb-1234-short channel',
+    ]) expect(gizliDegerleriMaskele(metin, {}), metin).toBe(metin);
+    expect(gizliDegerleriMaskele('Incorrect API key provided: sk-live-abcdefghijklmnopqrstuvwxyz012345', {}))
+      .toBe('Incorrect API key provided: [redacted]');
+    for (const token of [
+      'sk-abcdefghijklmnopq', 'gho_abcdefghijklmnopqrstuvwxyz0123456789', 'github_pat_11ABCDEFG0abcdefghijklmn',
+      'xoxp-1234-5678-abcdefghijk',
+    ]) expect(gizliDegerleriMaskele(`x ${token} y`, {}), token).toBe('x [redacted] y');
+  });
+
+  it('maskeleyici: URL parametresi tırnak, virgül ve HTML ayracını yutmaz (denetim F3)', () => {
+    const html = '<a href="/reset?token=abc123">Reset password</a>';
+    expect(gizliDegerleriMaskele(html, {})).toBe('<a href="/reset?token=[redacted]">Reset password</a>');
+    expect(gizliDegerleriMaskele('<a href=/reset?token=abc123>Reset</a>', {})).toBe('<a href=/reset?token=[redacted]>Reset</a>');
+    // Fixture'ın kendi biçimi: JSON.stringify(ag, null, 2) + satır sonu.
+    const ag = `${JSON.stringify([{ url: 'https://api.example.com/reset?token=zzz', method: 'GET', status: 500 }], null, 2)}\n`;
+    const duzMaskeli = gizliDegerleriMaskele(ag, {});
+    expect(duzMaskeli).toContain('"url": "https://api.example.com/reset?token=[redacted]",');
+    expect(JSON.parse(duzMaskeli)).toEqual([{ url: 'https://api.example.com/reset?token=[redacted]', method: 'GET', status: 500 }]);
+    // Kaçışlı tırnak içeren JSON alanı: kapanış tırnağı yerinde kalır.
+    expect(JSON.parse(gizliDegerleriMaskele('{"password":"a\\"b","x":1}', {}))).toEqual({ password: '[redacted]', x: 1 });
+  });
+
+  it('JSON maskesi: yalnız dize değerleri maskelenir, gizli adlı alan tümden gider, çıktı ayrıştırılabilir kalır', () => {
+    const ag = `${JSON.stringify([
+      { url: 'https://api.example.com/reset?token=zzz', method: 'POST', status: 401, body: 'password=hunter2&x=1',
+        headers: { authorization: 'weird value, with "quotes"' }, password: 'p"a,s}s' },
+    ], null, 2)}\n`;
+    const maskeli = jsonGizliDegerleriMaskele(ag, {});
+    expect(maskeli.endsWith('\n')).toBe(true);
+    expect(maskeli).toContain('\n  {\n    "url"');
+    expect(JSON.parse(maskeli)).toEqual([{
+      url: 'https://api.example.com/reset?token=[redacted]', method: 'POST', status: 401, body: 'password=[redacted]',
+      headers: { authorization: '[redacted]' }, password: '[redacted]',
+    }]);
+    expect(jsonGizliDegerleriMaskele('{"a":"sk-abcdefghijklmnopqrst"}', {})).toBe('{"a":"[redacted]"}');
+    // JSON değilse düz metin maskesine düşer.
+    expect(jsonGizliDegerleriMaskele('not json ?token=abc', {})).toBe('not json ?token=[redacted]');
+  });
+
+  it('beyin günlüğü diske yazılmadan önce maskelenir (ortak yol; tüm adaptörler)', async () => {
+    const logDizini = await geciciDizin();
+    await beyinGunluguYaz(logDizini, 'plan', 'istem ghp_SAHTEsahteSAHTEsahteSAHTEsahte01234567', 'yanit ortam-sahte-degeri-55 sk-live-SAHTEsahteSAHTEsahte0123456789ab',
+      undefined, { OPENROUTER_API_KEY: 'ortam-sahte-degeri-55' });
+    const gunluk = await readFile(join(logDizini, 'brain-plan-1.log'), 'utf8');
+    expect(gunluk).toBe('istem [redacted]\n---\nyanit [redacted] [redacted]');
+  });
+
+  it('codex API anahtarı hatası: hata mesajında ve .kobay/logs günlüğünde anahtar kalmaz', async () => {
+    const ozelAnahtar = 'onekisiz-sahte-anahtar-4242';
+    const stderr = [
+      'OpenAI Codex v0.154.0',
+      `ERROR: {"type":"error","status":401,"error":{"message":"Incorrect API key provided: sk-live-SAHTEsahteSAHTEsahte0123456789ab (key ${ozelAnahtar})"}}`,
+      '',
+    ].join('\n');
+    const cli = await sahteCliDizini('codex');
+    const logDizini = await geciciDizin();
+    const beyin = beyinOlustur({ adaptor: 'codex' }, {
+      PATH: cli.path, T_KOD: '1', T_STDERR: stderr, OPENAI_API_KEY: ozelAnahtar,
+    });
+    const hata = await beyin.sor({ gorev: 'codex', sistem: 'S', kullanici: 'K', sema, logDizini }).catch((e: unknown) => e);
+    const mesaj = (hata as Error).message;
+    expect(mesaj).toContain('Incorrect API key provided: [redacted]');
+    expect(mesaj).not.toContain('SAHTEsahteSAHTEsahte0123456789ab');
+    expect(mesaj).not.toContain(ozelAnahtar);
+    expect(codexHataOzeti(stderr, { OPENAI_API_KEY: ozelAnahtar })).not.toContain(ozelAnahtar);
+    const gunluk = await readFile(join(logDizini, 'brain-codex-1.log'), 'utf8');
+    expect(gunluk).toContain('[redacted]');
+    expect(gunluk).not.toContain('SAHTEsahteSAHTEsahte0123456789ab');
+    expect(gunluk).not.toContain(ozelAnahtar);
   });
 
   it('#8 tavan her çağrıda biraz artırılsa da sayaç sıfırlanmaz (taze.mts)', async () => {

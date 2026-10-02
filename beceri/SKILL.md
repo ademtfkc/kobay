@@ -29,7 +29,7 @@ If `mcp__kobay__*` tools are available, use them. Otherwise use the `kobay` CLI
 | Explore the app | `explore` | `kobay explore --output json` |
 | Propose tests | `plan_generate` | `kobay test plan generate --output json` |
 | Accept proposals | `plan_accept` (`ids`) | `kobay test plan accept --ids <P1,P2> --output json` |
-| Test from a plan file | `test_create` (`planPath`) | `kobay test create --plan <FILE> --output json` |
+| Test from a plan file (`type`, `name`, `planSteps`; optional `url` on the project's origin) | `test_create` (`planPath`) | `kobay test create --plan <FILE> --output json` |
 | List tests | `test_list` | `kobay test list --output json` |
 | Run tests | `test_run` (`ids` or `all: true`) | `kobay test run <ID...> --output json` / `kobay test run --all --output json` |
 | Re-run existing code | `test_rerun` | `kobay test rerun <ID> --output json` |
@@ -38,6 +38,7 @@ If `mcp__kobay__*` tools are available, use them. Otherwise use the `kobay` CLI
 | Failure bundle | `failure_get` (`id`, `out`) | `kobay test failure get <ID> --out <DIR> --output json` |
 | Generated code | `code_get` | `kobay test code get <ID> --output json` |
 | Delete a test | `test_delete` | `kobay test delete <ID> --output json` |
+| Clean up old runs and logs | `prune` (`confirm`, `dryRun`, `maxMb`, `olderThanDays`; preview by default) | `kobay prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>] --output json` |
 
 Rules for reading results:
 
@@ -67,11 +68,12 @@ Rules for reading results:
    `KOBAY_LOGIN_PASS` and `KOBAY_LOGIN_ORIGIN` (for example
    `http://localhost:3000`) exported, and the project URL must be on that
    origin, or the call fails. The login URL must be on the same origin as the
-   base URL (exit code `2` otherwise). If exploring stops because the login page
-   or form points to another origin, or `explore`/`test_refresh` exits `5`
-   because the saved login belongs to another origin, report it to the user and
-   ask them to run `kobay project create --url <URL> --login --force` in a
-   terminal; do not work around it.
+   base URL (exit code `2` otherwise). If `explore`/`test_refresh` exits `5`
+   because the login page or form points to another origin, or the page tried
+   to send the credentials to another origin, report it to the user; do not work
+   around it. If it exits `5` because the saved login belongs to another origin,
+   also ask them to run `kobay project create --url <URL> --login --force` in a
+   terminal.
 
 2. **Make sure the app is up.** Run `doctor` and check the row with
    `"name": "target"`: it must have `"ok": true`. `doctor` itself exits `0`
@@ -129,7 +131,8 @@ Rules for reading results:
 8. **Re-run after a product fix only when the app is serving the new code.**
    After editing product code, wait for the dev server to rebuild or restart and
    answer at the base URL, then `test_rerun`. A run against a half-reloaded
-   server gives a false `env` or `product_bug`.
+   server gives a false `env` or `product_bug`. Do not poll the server with
+   `curl`: call `doctor` to check the target, then go straight to `test_rerun`.
 
 9. **Stop at a cost limit.** If kobay reports that a budget, call or cost
    limit was hit, stop and ask the user. Do not change `KOBAY_MAX_*` variables or
@@ -139,6 +142,15 @@ Rules for reading results:
 10. **Stop and report.** If the same test still fails after two fix attempts,
    stop and report to the user with the failure bundle path. Always end with: which
    tests ran, their verdicts, what you changed, and what is still unverified.
+
+11. **Clean up.** After the loop, call MCP `prune` without confirmation to
+    preview cleanup, review `wouldDelete` and `skipped`, then call it with
+    `confirm: true` to delete, but only when the user asked for clean-up;
+    otherwise show the preview and ask; `dryRun: true` always forces a preview. With the
+    CLI, use `kobay prune --dry-run --output json` to preview, then run
+    `kobay prune --output json`. Adjust `maxMb` / `--max-mb` and
+    `olderThanDays` / `--older-than-days` when needed. It keeps the last failed
+    run and current failure bundles.
 
 ## Never
 

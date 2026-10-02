@@ -1,7 +1,7 @@
 import { access, readFile, readdir, rename } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { join, relative, sep, type PlatformPath } from 'node:path';
 import {
   yeniRunId,
   yazAtomik,
@@ -13,6 +13,8 @@ import {
 import { kaliciCalismaAlaniHazirla } from './calisma-alani.js';
 import { testSureciOrtami } from './ortam.js';
 import { raporuAyristir } from './rapor.js';
+import { kobayOlurkenAgaciOldur, sureciSonlandir } from '../ortak/komut-coz.js';
+import { gizliDegerleriMaskele } from '../beyin/ortak.js';
 
 export { FixtureModuleMissing, fixtureYenidenAktarimMetni, kaliciCalismaAlaniHazirla } from './calisma-alani.js';
 export { testSureciOrtami } from './ortam.js';
@@ -44,6 +46,21 @@ function simdi(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Playwright hatası ve stderr, testin yazdığı ya da sayfanın gösterdiği gizli değeri
+ * (API anahtarı, token) taşıyabilir: result.json/steps.json'a ve `test_result`/`test_run`
+ * çıktısına girmeden önce maskelenir.
+ */
+function sonucuMaskele(sonuc: KosuSonucu): KosuSonucu {
+  return sonuc.errorMessage === undefined ? sonuc : { ...sonuc, errorMessage: gizliDegerleriMaskele(sonuc.errorMessage) };
+}
+
+function adimlariMaskele(adimlar: AdimSonucu[]): AdimSonucu[] {
+  return adimlar.map((adim) => (adim.errorMessage === undefined
+    ? adim
+    : { ...adim, errorMessage: gizliDegerleriMaskele(adim.errorMessage) }));
+}
+
 async function kaydet(
   dizin: KobayDizini,
   test: TestKaydi,
@@ -52,8 +69,8 @@ async function kaydet(
 ): Promise<void> {
   const kosuDizini = await dizin.kosuDizini(sonuc.runId);
   await Promise.all([
-    yazAtomik(join(kosuDizini, 'steps.json'), jsonMetni(adimlar)),
-    dizin.kosuSonucuYaz(sonuc),
+    yazAtomik(join(kosuDizini, 'steps.json'), jsonMetni(adimlariMaskele(adimlar))),
+    dizin.kosuSonucuYaz(sonucuMaskele(sonuc)),
   ]);
   await dizin.testYaz({
     ...test,
@@ -66,6 +83,15 @@ async function kaydet(
   // Eski koşuları komut katmanı, analiz bittikten sonra budar (`cli/komutlar/test.ts`).
 }
 
+/** Playwright konumsal filtreyi regex sayar; bu nedenle göreli, `/` ayracılı bir yol verilir. */
+export function playwrightSpecArgumani(
+  specYolu: string,
+  cwd: string,
+  yol: Pick<PlatformPath, 'relative' | 'sep'> = { relative, sep },
+): string {
+  return yol.relative(cwd, specYolu).split(yol.sep).join('/');
+}
+
 function kosuSureci(
   specYolu: string,
   configYolu: string,
@@ -74,27 +100,33 @@ function kosuSureci(
   zamanAsimiMs: number,
 ): Promise<{ zamanAsimi: boolean; stderr: string }> {
   return new Promise((coz) => {
-    const surec = spawn(process.execPath, [PLAYWRIGHT_CLI, 'test', specYolu, '--config', configYolu], {
+    const specArgumani = playwrightSpecArgumani(specYolu, cwd);
+    const surec = spawn(process.execPath, [PLAYWRIGHT_CLI, 'test', specArgumani, '--config', configYolu], {
       cwd,
       env,
       stdio: ['ignore', 'ignore', 'pipe'],
     });
+    // Kobay ölürse (SIGINT/SIGTERM) Playwright worker'ı ve Chromium öksüz kalmasın.
+    const olumDinleyicisiniKaldir = kobayOlurkenAgaciOldur(surec);
     let stderr = '';
     let bitti = false;
+    let oldurmeBasladi = false;
     const bitir = (sonuc: { zamanAsimi: boolean; stderr: string }): void => {
       if (bitti) return;
       bitti = true;
       clearTimeout(zamanlayici);
+      olumDinleyicisiniKaldir();
       coz(sonuc);
     };
     const zamanlayici = setTimeout(() => {
-      surec.kill('SIGTERM');
-      bitir({ zamanAsimi: true, stderr });
+      // Kök ölünce `close` gelir; sonucu ağaç tamamen kapanana kadar bu yol verir.
+      oldurmeBasladi = true;
+      void sureciSonlandir(surec, { agac: true }).finally(() => { bitir({ zamanAsimi: true, stderr }); });
     }, zamanAsimiMs + 30_000);
     surec.stderr.setEncoding('utf8');
     surec.stderr.on('data', (parca: string) => { stderr += parca; });
     surec.once('error', (hata: Error) => bitir({ zamanAsimi: false, stderr: `${stderr}${hata.message}` }));
-    surec.once('close', () => bitir({ zamanAsimi: false, stderr }));
+    surec.once('close', () => { if (!oldurmeBasladi) bitir({ zamanAsimi: false, stderr }); });
   });
 }
 
@@ -113,6 +145,16 @@ export async function hedefAyaktaMi(url: string, zamanAsimiMs = 3_000): Promise<
 
 /** Bir üretilmiş Playwright testini izole süreçte çalıştırır ve kanıtlarını kaydeder. */
 export async function kostur(
+  dizin: KobayDizini,
+  test: TestKaydi,
+  s: KosturmaAyari,
+): Promise<{ sonuc: KosuSonucu; adimlar: AdimSonucu[] }> {
+  // Diskteki kayıtla aynı maske dönen değere de uygulanır (komut katmanı result.json'u yeniden yazar).
+  const { sonuc, adimlar } = await kosturHam(dizin, test, s);
+  return { sonuc: sonucuMaskele(sonuc), adimlar: adimlariMaskele(adimlar) };
+}
+
+async function kosturHam(
   dizin: KobayDizini,
   test: TestKaydi,
   s: KosturmaAyari,
@@ -158,14 +200,18 @@ export async function kostur(
   }
   const zamanAsimiMs = s.testZamanAsimiMs ?? 120_000;
   const kosuDizini = await dizin.kosuDizini(runId);
-  const raporYolu = join(kosuDizini, 'pw-rapor.json');
+  const raporYolu = join(kosuDizini, 'pw-report.json');
   const storageStateYolu = s.storageStateYolu ?? dizin.storageStateYolu();
   // Üretilen kod bu süreçte çalışır: kullanıcının sırları (API anahtarları, KOBAY_LOGIN_PASS…)
   // devredilmez. Oturum storageState dosyasıyla taşınır.
   const env = testSureciOrtami(process.env, {
     KOBAY_BASE_URL: s.baseUrl,
+    KOBAY_RUN_DIR: join('runs', runId),
+    KOBAY_REPORT_FILE: join('runs', runId, 'pw-report.json'),
+    KOBAY_TEST_TIMEOUT_MS: String(zamanAsimiMs),
+    // 0.3'te eski adlar kalkar.
     KOBAY_KOSU_DIZINI: join('runs', runId),
-    KOBAY_RAPOR_DOSYASI: join('runs', runId, 'pw-rapor.json'),
+    KOBAY_RAPOR_DOSYASI: join('runs', runId, 'pw-report.json'),
     KOBAY_TEST_ZAMAN_ASIMI_MS: String(zamanAsimiMs),
     ...(await dosyaVarMi(storageStateYolu) ? { KOBAY_STORAGE_STATE: storageStateYolu } : {}),
   });

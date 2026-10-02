@@ -24,6 +24,7 @@ import {
 } from './semalar.js';
 import { FileNotFound, jsonOku, yazAtomik } from './dosya.js';
 import { eskiAnahtarVarMi, eskiIsaretineEsle, kalicidanEsle } from './anahtar-gocu.js';
+import { hataPaketiYolunuDenetle } from './paket-yolu.js';
 
 export class BundleIncomplete extends Error {
   constructor(testId: string) {
@@ -593,7 +594,8 @@ export class KobayDizini {
    * Yazma hakkı olmayan dosya sisteminde komut düşmez: tek satır uyarı yazılır
    * ve okuma yolu eski ada düşer (`eskiAdaDuserekOku`), yani veri görünmez olmaz.
    */
-  private async eskiDosyaAdlariniTasi(): Promise<void> {
+  private async eskiDosyaAdlariniTasi(): Promise<boolean> {
+    let degisti = false;
     for (const { eski, yeni } of YENIDEN_ADLANDIRILANLAR) {
       const kaynak = this.yol(...eski);
       const hedef = this.yol(...yeni);
@@ -618,7 +620,9 @@ export class KobayDizini {
       // Bağ kuruldu: iki ad da aynı içeriği gösteriyor, eski adı bırakabiliriz.
       // (Yedek yol `rename` ile taşıdıysa kaynak zaten yok; ENOENT yutulur.)
       await unlink(kaynak).catch(() => undefined);
+      degisti = true;
     }
+    return degisti;
   }
 
   /**
@@ -628,7 +632,8 @@ export class KobayDizini {
    * dokunulmaz (şema hatasını kullanıcı görsün), eski anahtar yoksa disk hiç
    * yazılmaz. `credentials.json` 0600 ile yeniden yazılır.
    */
-  private async alanAdlariniGocur(): Promise<void> {
+  private async alanAdlariniGocur(): Promise<boolean> {
+    let degisti = false;
     for (const { ad, mod } of ALAN_GOCU_DOSYALARI) {
       const yol = this.yol(...ad);
       let ham: string;
@@ -647,18 +652,23 @@ export class KobayDizini {
       if (!eskiAnahtarVarMi(veri)) continue;
       try {
         await yazAtomik(yol, jsonYaz(kalicidanEsle(veri)), mod);
+        degisti = true;
       } catch (hata: unknown) {
         const kod = hataKodu(hata);
         if (kod === undefined || !YAZILAMAZ_KODLARI.has(kod)) throw hata;
-        return;
+        return degisti;
       }
     }
+    return degisti;
   }
 
   /** Açılış kancasının göç adımı: önce ad, sonra içerik. */
   private async eskiSurumdenGocur(): Promise<void> {
-    await this.eskiDosyaAdlariniTasi();
-    await this.alanAdlariniGocur();
+    const adDegisti = await this.eskiDosyaAdlariniTasi();
+    const alanDegisti = await this.alanAdlariniGocur();
+    if (adDegisti || alanDegisti) {
+      process.stderr.write('[kobay] Migrated project data from the 0.1 format to 0.2.\n');
+    }
   }
 
   /**
@@ -737,14 +747,6 @@ export class KobayDizini {
 
   async kimlikYaz(kimlik: Kimlik): Promise<void> {
     await yazAtomik(this.yol('credentials.json'), jsonYaz(kimlik), 0o600);
-  }
-
-  /**
-   * Yazılmış giriş bilgisini siler. Yalnız geri alma yolunda kullanılır: kenara
-   * alınacak eski kimlik yokken düşen bir işlemin yazdığı yeni kimlik kalmasın.
-   */
-  async kimligiSil(): Promise<void> {
-    await rm(this.yol('credentials.json'), { force: true });
   }
 
   /**
@@ -1528,7 +1530,7 @@ export class KobayDizini {
 
   async hataPaketiYaz(
     paket: HataPaketi,
-    ekDosyalar: Array<{ kaynak: string; hedefAd: string }>,
+    ekDosyalar: Array<{ kaynak: string; hedefAd: string; icerik?: string }>,
   ): Promise<string> {
     kimlikDogrula(paket.testId, 'testId');
     kimlikDogrula(paket.runId, 'runId');
@@ -1537,6 +1539,9 @@ export class KobayDizini {
 
     const hataKoku = this.yol('failure');
     const paketDizini = this.hataPaketiYolu(paket.testId);
+    // Eski paket `rm -r` ile silineceği için `.kobay`, `failure` ve `<testId>`
+    // symlink ya da `.kobay` dışı olmamalı (failure-out ile aynı disiplin).
+    await hataPaketiYolunuDenetle(this, paket.testId);
     const rastgele = randomUUID();
     const geciciDizin = altYol(hataKoku, `.tmp-${paket.testId}-${rastgele}`);
     const partialYolu = altYol(geciciDizin, '.partial');
@@ -1548,7 +1553,8 @@ export class KobayDizini {
 
     for (const ek of ekDosyalar) {
       guvenliAd(ek.hedefAd);
-      await yazAtomik(altYol(geciciDizin, ek.hedefAd), await readFile(ek.kaynak));
+      // `icerik` verilmişse (maskelenmiş metin kanıtı) o yazılır; yoksa bayt bayt kopya.
+      await yazAtomik(altYol(geciciDizin, ek.hedefAd), ek.icerik ?? await readFile(ek.kaynak));
     }
     await yazAtomik(altYol(geciciDizin, 'failure.json'), jsonYaz(paket));
     await yazAtomik(altYol(geciciDizin, 'code.ts'), paket.code);
@@ -1563,7 +1569,9 @@ export class KobayDizini {
 
     const eskiDizinler: string[] = [];
     for (let deneme = 0; deneme < 10; deneme += 1) {
-      const eskiDizin = altYol(hataKoku, `.stale-${paket.testId}-${randomUUID()}`);
+      // Ad, kenara alınma anını taşır: rename dizinin mtime'ını yenilemez, budama
+      // yaşı bu addan okur ki geri alma için bekleyen taze kopya "eski" sayılmasın.
+      const eskiDizin = altYol(hataKoku, `.stale-${paket.testId}-${Date.now()}-${randomUUID()}`);
       try {
         await rename(paketDizini, eskiDizin);
         eskiDizinler.push(eskiDizin);
@@ -1573,8 +1581,6 @@ export class KobayDizini {
 
       try {
         await rename(geciciDizin, paketDizini);
-        await Promise.all(eskiDizinler.map((yol) => rm(yol, { recursive: true, force: true })));
-        return paketDizini;
       } catch (hata: unknown) {
         if (typeof hata === 'object' && hata !== null && 'code' in hata && (hata.code === 'EEXIST' || hata.code === 'ENOTEMPTY')) {
           continue;
@@ -1583,6 +1589,12 @@ export class KobayDizini {
         if (geriYuklenecek !== undefined) await rename(geriYuklenecek, paketDizini).catch(() => undefined);
         throw hata;
       }
+      // Denetim ile taşıma arasında yol symlink'e çevrilmiş olabilir: `rm` hangi
+      // klasörleri sileceğini bilmeden çalışmasın, önce yol yeniden doğrulanır.
+      // Doğrulama düşerse eskiler silinmez; iz kalır ama dışarısı silinmez.
+      await hataPaketiYolunuDenetle(this, paket.testId);
+      await Promise.all(eskiDizinler.map((yol) => rm(yol, { recursive: true, force: true })));
+      return paketDizini;
     }
     throw new Error(`Failure bundle could not be published: ${paket.testId}`);
   }
@@ -1767,6 +1779,8 @@ export class KobayDizini {
     for (const kosu of kosular.slice(-sakla)) korunan.add(kosu.runId);
     const paketKosusu = await this.paketinKosusu(testId);
     if (paketKosusu !== undefined) korunan.add(paketKosusu);
+    const sonBasarisiz = kosular.findLast((kosu) => kosu.verdict === 'failed');
+    if (sonBasarisiz !== undefined) korunan.add(sonBasarisiz.runId);
 
     const silinen: string[] = [];
     for (const kosu of kosular) {
@@ -1776,6 +1790,11 @@ export class KobayDizini {
       const guncel = await yoksaNull(() => this.kosuSonucuOku(kosu.runId));
       if (guncel === null || guncel.testId !== testId) continue;
       if (kosuTazeMi(guncel, Date.now() - tazeMs)) continue;
+      // Keep one run-list snapshot. The final check rereads only the candidate
+      // and the bundle pointer: another process may have pointed the bundle at
+      // this run or changed the candidate to a failed result in the meantime.
+      if (await this.paketinKosusu(testId) === kosu.runId) continue;
+      if (kosu.verdict !== 'failed' && guncel.verdict === 'failed') continue;
       await rm(this.kosuYolu(kosu.runId), { recursive: true, force: true });
       silinen.push(kosu.runId);
     }

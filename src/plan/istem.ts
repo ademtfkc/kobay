@@ -15,15 +15,19 @@ Produce 8-25 proposals. Every proposal must be a real user flow: bind it through
 
 Record URLs that match a path pattern in the map but do not exist (for example /customers/999999 when the map contains /customers/36) may be proposed as error-case tests; those are accepted.
 
+When the map says "Logged in: yes", the session is already authenticated through kobay's login step and the generated tests cannot type the real credentials. Do not propose tests that log in with the real credentials (for example "Log in with valid credentials"). Tests that only check that the login page renders, or that invalid or empty credentials show an error, are fine because they do not need the real credentials. When the map says "Logged in: no", there is no such restriction.
+
+Every proposal must carry requiresRealCredentials as a boolean: true if any step needs the real username/password (typing them, submitting the login form with them, or signing in as a configured account), otherwise false. Set it honestly for every proposal, also when the map says "Logged in: no".
+
 Propose destructive operations such as delete and logout only when they are explicitly reversible. Do not propose things that cannot be tested, such as sending e-mail or calling an external service.
 
 Return only an object matching the JSON skeleton below. Do not send proposalId; the system assigns it locally:
-{"proposals":[{"title":"...","description":"...","priority":"p1","category":"...","feature":"...","type":"frontend","url":"/example","steps":[{"type":"action","description":"..."},{"type":"assertion","description":"..."}]}]}
+{"proposals":[{"title":"...","description":"...","priority":"p1","category":"...","feature":"...","type":"frontend","url":"/example","steps":[{"type":"action","description":"..."},{"type":"assertion","description":"..."}],"requiresRealCredentials":false}]}
 
 Full example:
-{"proposals":[{"title":"View the product list","description":"Verifies that the user opens the products page and sees the list.","priority":"p1","category":"navigation","feature":"products","type":"frontend","url":"/products","steps":[{"type":"action","description":"Open the products page"},{"type":"assertion","description":"Verify that the product list is visible"}]}]}
+{"proposals":[{"title":"View the product list","description":"Verifies that the user opens the products page and sees the list.","priority":"p1","category":"navigation","feature":"products","type":"frontend","url":"/products","steps":[{"type":"action","description":"Open the products page"},{"type":"assertion","description":"Verify that the product list is visible"}],"requiresRealCredentials":false}]}
 
-The keys title, description, priority, category, feature, type, url and the type and description keys inside steps are English and fixed; do not translate them into any other language. Only the text values may be in another language.
+The keys title, description, priority, category, feature, type, url, requiresRealCredentials and the type and description keys inside steps are English and fixed; do not translate them into any other language. Only the text values may be in another language.
 ${DIL_KURALI}`;
 
 function metniKes(metin: string, sinir: number): string {

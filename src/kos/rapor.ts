@@ -100,12 +100,12 @@ function motorHatasiBul(rapor: unknown, sonucKayitlari: BilinmeyenKayit[]): stri
 
 async function kanitYollari(kosuDizini: string, indeks: number): Promise<{ screenshotPath?: string; htmlPath?: string }> {
   const [png, html] = await Promise.all([
-    access(join(kosuDizini, `adim-${indeks}.png`)).then(() => true).catch(() => false),
-    access(join(kosuDizini, `adim-${indeks}.html`)).then(() => true).catch(() => false),
+    access(join(kosuDizini, `step-${indeks}.png`)).then(() => true).catch(() => false),
+    access(join(kosuDizini, `step-${indeks}.html`)).then(() => true).catch(() => false),
   ]);
   return {
-    ...(png ? { screenshotPath: `adim-${indeks}.png` } : {}),
-    ...(html ? { htmlPath: `adim-${indeks}.html` } : {}),
+    ...(png ? { screenshotPath: `step-${indeks}.png` } : {}),
+    ...(html ? { htmlPath: `step-${indeks}.html` } : {}),
   };
 }
 

@@ -2,15 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ademtfkc/kobay/blob/main/schemas/plan.schema.json",
   "title": "kobay plan file",
-  "description": "A hand-written plan file, the input of `kobay test create --plan <path>`. One file is one test; a top-level array is not accepted. kobay turns the file into a draft test record and stops there — nothing is generated or run until `kobay test run <id>`. The file carries no page address: a test created this way has no `url`, so failure analysis cannot compare the page against the exploration map and says so in its output. Extra properties anywhere in the file are tolerated and ignored, so an editor directive such as `$schema` is safe to keep. This file mirrors the validator in `src/depo/semalar.ts`; where the two disagree, the validator is what actually runs.",
+  "description": "A hand-written plan file, the input of `kobay test create --plan <path>`. One file is one test; a top-level array is not accepted. kobay turns the file into a draft test record and stops there — nothing is generated or run until `kobay test run <id>`. Give the test's page in `url` so failure analysis can compare the page against the exploration map; without it the analysis skips that comparison and says so in its output. Extra properties anywhere in the file are tolerated and ignored, so an editor directive such as `$schema` is safe to keep. This file mirrors the validator in `src/depo/semalar.ts`; where the two disagree, the validator is what actually runs.",
   "type": "object",
-  "required": ["projectId", "type", "name", "planSteps"],
+  "required": ["type", "name", "planSteps"],
   "properties": {
     "projectId": {
       "type": "string",
       "minLength": 1,
       "pattern": "\\S",
-      "description": "A name for the project this test belongs to. Required and must contain a non-whitespace character, but kobay does not store it on the created test or match it against the current project — it is there so a plan file says out loud what it was written for.",
+      "description": "Optional label for the project this test was written for. When present it must contain a non-whitespace character; kobay does not store it on the created test or match it against the current project, so any name you like works (older plan files that carry it keep working).",
       "examples": ["demo"]
     },
     "type": {
@@ -22,7 +22,14 @@
       "minLength": 1,
       "pattern": "\\S",
       "description": "The test's name, kept as-is on the test record and shown by `test list` and `test get`. Must contain a non-whitespace character. Write it as the behavior you expect to hold, not as a noun fragment.",
-      "examples": ["Log in with valid credentials"]
+      "examples": ["Record list shows saved records"]
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S",
+      "description": "Optional. The page the test starts on: a path such as `/records`, or a full address on the project's `baseUrl` origin. It is kept on the test record; failure analysis and `kobay test refresh` use it to find the page in the exploration map. An address on another origin is rejected.",
+      "examples": ["/records"]
     },
     "description": {
       "type": "string",
@@ -54,8 +61,8 @@
             "pattern": "\\S",
             "description": "What this one step does or checks. Must contain a non-whitespace character. One step, one verb.",
             "examples": [
-              "Open /giris and log in as demo / demo123",
-              "The 'Kontrol Paneli' heading is visible"
+              "Open the record list at /records",
+              "At least one record row is visible"
             ]
           }
         }
@@ -64,13 +71,13 @@
   },
   "examples": [
     {
-      "projectId": "demo",
       "type": "frontend",
-      "name": "Log in with valid credentials",
+      "name": "Record list shows saved records",
+      "url": "/records",
       "priority": "p0",
       "planSteps": [
-        { "type": "action", "description": "Open /giris and log in as demo / demo123" },
-        { "type": "assertion", "description": "The 'Kontrol Paneli' heading is visible" }
+        { "type": "action", "description": "Open the record list at /records" },
+        { "type": "assertion", "description": "At least one record row is visible" }
       ]
     }
   ]

@@ -3,6 +3,7 @@ import { chromium } from '@playwright/test';
 import type { Harita, Kimlik, Sayfa } from '../depo/index.js';
 import { girisFormuBul } from './giris.js';
 import { gez } from './gezgin.js';
+import { girisKorumasiKur, girisKorumasiSonDenetim } from './giris-korumasi.js';
 import { girisiGonder, kimlikOriginDogrula, loginUrlDogrula, oturumDurumunuYaz } from './oturum.js';
 import { sayfaOzeti } from './sayfa-ozeti.js';
 
@@ -23,7 +24,13 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
   // Tarayıcı açılmadan: başka origin'e ait kimlikle hiçbir sayfaya gidilmez.
   if (secenekler.kimlik !== undefined) kimlikOriginDogrula(secenekler.kimlik, new URL(secenekler.baseUrl).origin);
   const tarayici = await chromium.launch({ headless: true });
-  const context = await tarayici.newContext();
+  // Service worker istekleri context.route'a uğramaz; giriş korumasının dışında kalmasın diye
+  // kimlik verildiğinde kapalı. Kimliksiz keşifte koruma yok, worker'lar çalışır.
+  const context = await tarayici.newContext({ serviceWorkers: secenekler.kimlik !== undefined ? 'block' : 'allow' });
+  // WebSocket yönlendirmesi yalnız sonra açılan belgelere işler; koruma ilk sayfadan önce kurulur.
+  if (secenekler.kimlik !== undefined) {
+    await girisKorumasiKur(context, secenekler.kimlik, new URL(secenekler.baseUrl).origin);
+  }
   const sayfa = await context.newPage();
   const maxSayfa = secenekler.maxSayfa ?? 40;
   const derinlik = secenekler.derinlik ?? 3;
@@ -50,19 +57,23 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
 
     await oturumDurumunuYaz(context, secenekler.storageStateYolu);
 
+    const pages = await gez(sayfa, {
+      baseUrl: secenekler.baseUrl,
+      maxSayfa,
+      derinlik,
+      sayfaZamanAsimiMs,
+      ilkSayfalar,
+      ...(secenekler.ekranGoruntusuDizini
+        ? { ekranGoruntusuDizini: secenekler.ekranGoruntusuDizini }
+        : {}),
+    });
+    // Giriş koruması keşif boyunca kurulu kaldı; giriş sonrası bir sayfa parolayı
+    // başka origin'e göndermeye çalıştıysa harita dönmez.
+    girisKorumasiSonDenetim(context);
     return {
       baseUrl: secenekler.baseUrl,
       loggedIn: girisYapildi,
-      pages: await gez(sayfa, {
-        baseUrl: secenekler.baseUrl,
-        maxSayfa,
-        derinlik,
-        sayfaZamanAsimiMs,
-        ilkSayfalar,
-        ...(secenekler.ekranGoruntusuDizini
-          ? { ekranGoruntusuDizini: secenekler.ekranGoruntusuDizini }
-          : {}),
-      }),
+      pages,
       exploredAt: new Date().toISOString(),
     };
   } finally {
@@ -72,10 +83,12 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
 }
 
 export { girisFormuBul } from './giris.js';
+export { CredentialLeakBlockedError } from './giris-korumasi.js';
 export {
   girisiGonder,
   CredentialOriginError,
   kimlikOriginDogrula,
+  LoginFormOriginError,
   loginUrlDogrula,
   oturumDurumunuYaz,
 } from './oturum.js';

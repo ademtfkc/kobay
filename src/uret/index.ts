@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { join, relative, sep, type PlatformPath } from 'node:path';
 import type { Beyin } from '../beyin/index.js';
 import type { Harita, TestKaydi } from '../depo/index.js';
 import { yazAtomik } from '../depo/index.js';
@@ -29,6 +29,15 @@ interface KodDogrulamaSonucu {
 const require = createRequire(import.meta.url);
 const PLAYWRIGHT_CLI = require.resolve('@playwright/test/cli');
 const PLAYWRIGHT_LISTE_ARGUMANLARI = ['test', '--list', '--config'];
+
+/** Playwright konumsal filtreyi regex sayar; bu nedenle göreli, `/` ayracılı bir yol verilir. */
+export function playwrightSpecArgumani(
+  specYolu: string,
+  cwd: string,
+  yol: Pick<PlatformPath, 'relative' | 'sep'> = { relative, sep },
+): string {
+  return yol.relative(cwd, specYolu).split(yol.sep).join('/');
+}
 
 /** Eski sürümlerin geçici config'ine koyduğu, hiçbir yerde okunmayan reporter satırı. */
 const ESKI_REPORTER_SATIRI = "  reporter: [['json', { outputFile: 'son-liste.json' }]],";
@@ -527,7 +536,8 @@ export async function calismaAlaniHazirla(kobayKoku: string): Promise<{ configYo
 
 async function playwrightListele(specYolu: string, configYolu: string, cwd: string): Promise<{ ok: boolean; stderr: string }> {
   return new Promise((coz) => {
-    const surec = spawn(process.execPath, [PLAYWRIGHT_CLI, ...PLAYWRIGHT_LISTE_ARGUMANLARI, configYolu, specYolu], {
+    const specArgumani = playwrightSpecArgumani(specYolu, cwd);
+    const surec = spawn(process.execPath, [PLAYWRIGHT_CLI, ...PLAYWRIGHT_LISTE_ARGUMANLARI, configYolu, specArgumani], {
       cwd,
       // `--list` sırasında da üretilen kodun modül düzeyi çalışır; sırlar devredilmez.
       env: testSureciOrtami(process.env),
@@ -568,7 +578,7 @@ export async function kodUret(
   let oncekiHata: string | undefined;
   for (let deneme = 1; deneme <= maxTur; deneme += 1) {
     const yanit = await beyin.sor<{ code: string; explanation?: string }>({
-      gorev: `uret-${test.id}`,
+      gorev: `generate-${test.id}`,
       sistem: sistemIstemi(),
       kullanici: kullaniciIstemi(test, harita, oncekiHata),
       sema: KodYanitiSemasi,

@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rename, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rename, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -48,19 +48,57 @@ function hataPaketi(): HataPaketi {
 }
 
 describe('MCP sunucusu', () => {
-  it('17 aracı listeler', async () => {
+  it('18 aracı listeler', async () => {
     const baglanti = await bagliMcp(await mkdtemp(join(tmpdir(), 'kobay-mcp-')));
     try {
       const liste = await baglanti.istemci.listTools();
-      expect(liste.tools).toHaveLength(17);
+      expect(liste.tools).toHaveLength(18);
       expect(liste.tools.map((arac) => arac.name)).toEqual(expect.arrayContaining([
         'project_create', 'project_update', 'project_get', 'explore', 'plan_generate', 'plan_accept',
         'test_create', 'test_list', 'test_get', 'code_get', 'test_delete', 'test_run', 'test_rerun',
-        'test_refresh', 'test_result', 'failure_get', 'doctor',
+        'test_refresh', 'test_result', 'failure_get', 'prune', 'doctor',
       ]));
       for (const arac of liste.tools) {
         expect((arac.inputSchema.properties as Record<string, unknown>).projectDir).toBeDefined();
       }
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
+  it('prune previews by default and requires confirm true for deletion', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-prune-'));
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://localhost:3000', brain: { adaptor: 'sahte' } });
+    await writeFile(dizin.yol('failure-out', 'trace.zip'), 'legacy');
+    await utimes(dizin.yol('failure-out', 'trace.zip'), new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'));
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const onizleme = await baglanti.istemci.callTool({
+        name: 'prune', arguments: { maxMb: 25, olderThanDays: 2 },
+      });
+      expect(onizleme.isError).not.toBe(true);
+      expect(JSON.parse((onizleme.content[0] as { text: string }).text)).toMatchObject({
+        dryRun: true,
+        policy: { maxMb: 25, olderThanDays: 2 },
+        deleted: [],
+        wouldDelete: [{ path: '.kobay/failure-out/trace.zip', kind: 'legacy-failure-file' }],
+      });
+      await expect(access(dizin.yol('failure-out', 'trace.zip'))).resolves.toBeUndefined();
+
+      const zorlananOnizleme = await baglanti.istemci.callTool({
+        name: 'prune', arguments: { confirm: true, dryRun: true },
+      });
+      expect(JSON.parse((zorlananOnizleme.content[0] as { text: string }).text)).toMatchObject({ dryRun: true });
+      await expect(access(dizin.yol('failure-out', 'trace.zip'))).resolves.toBeUndefined();
+
+      const sil = await baglanti.istemci.callTool({ name: 'prune', arguments: { confirm: true } });
+      expect(sil.isError).not.toBe(true);
+      expect(JSON.parse((sil.content[0] as { text: string }).text)).toMatchObject({
+        dryRun: false,
+        deleted: [{ path: '.kobay/failure-out/trace.zip', kind: 'legacy-failure-file' }],
+        wouldDelete: [],
+      });
+      await expect(access(dizin.yol('failure-out', 'trace.zip'))).rejects.toThrow();
     } finally {
       await baglanti.kapat();
     }
@@ -73,6 +111,8 @@ describe('MCP sunucusu', () => {
       expect(baglanti.istemci.getServerVersion()?.version).toBe(paket.version);
       expect(baglanti.istemci.getInstructions()).toContain('Use test_run');
       expect(baglanti.istemci.getInstructions()).toContain('test_refresh only for product_changed');
+      expect(baglanti.istemci.getInstructions()).toContain('prune tool previews by default');
+      expect(baglanti.istemci.getInstructions()).toContain('confirm true');
     } finally {
       await baglanti.kapat();
     }

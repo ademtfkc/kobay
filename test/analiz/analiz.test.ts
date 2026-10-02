@@ -1,11 +1,11 @@
-import { access, mkdtemp, readFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import { beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
 import { BrainError, beyinOlustur } from '../../src/beyin/index.js';
 import { KobayDizini, yazAtomik, type KosuSonucu, type Sayfa, type TestKaydi } from '../../src/depo/index.js';
-import { analizKullaniciIstemiOlustur, analizSistemIstemiOlustur, domTemizle, dusenAdimKodunuBul, hataAnalizEt, hataMesajiniTemizle } from '../../src/analiz/index.js';
+import { analizKullaniciIstemiOlustur, analizSistemIstemiOlustur, domTemizle, dusenAdimKodunuBul, hataAnalizEt, hataMesajiniTemizle, hataPaketiYolunuDenetle, UnsafeBundlePath } from '../../src/analiz/index.js';
 
 const runId = 'r_20260917010101_abcd';
 const test: TestKaydi = {
@@ -56,12 +56,12 @@ async function hazirDizin(yanit: unknown = beyinYanit) {
   await Promise.all([
     dizin.testYaz(test),
     dizin.kodYaz(test.id, "test('başlık', async () => expect('Ürün').toBe('Ürün'))"),
-    yazAtomik(join(kosuDizini, 'adim-1.png'), 'sahte png'),
-    yazAtomik(join(kosuDizini, 'adim-1.html'), '<style>.gizli{}</style><!-- yorum --><h1 class="baslik" data-id="7">Yeni ürün</h1><svg><path /></svg><script>gizli()</script>'),
+    yazAtomik(join(kosuDizini, 'step-1.png'), 'sahte png'),
+    yazAtomik(join(kosuDizini, 'step-1.html'), '<style>.gizli{}</style><!-- yorum --><h1 class="baslik" data-id="7">Yeni ürün</h1><svg><path /></svg><script>gizli()</script>'),
     yazAtomik(join(kosuDizini, 'console.json'), JSON.stringify(Array.from({ length: 22 }, (_deger, sira) => ({ tip: 'error', metin: `konsol-${sira + 1}` })))),
     yazAtomik(join(kosuDizini, 'network.json'), JSON.stringify([{ url: '/api/urun', method: 'GET', status: 500 }])),
     yazAtomik(join(kosuDizini, 'trace.zip'), 'sahte trace'),
-    yazAtomik(join(yanitDizini, `analiz-${test.id}.json`), JSON.stringify(yanit)),
+    yazAtomik(join(yanitDizini, `analysis-${test.id}.json`), JSON.stringify(yanit)),
   ]);
   return { dizin, kosuDizini, beyin: beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: yanitDizini }) };
 }
@@ -80,7 +80,7 @@ async function carilerHazirla(yanit: unknown, s: { dom: string; kod?: string; sa
   await Promise.all([
     dizin.testYaz(carilerTesti),
     dizin.kodYaz(test.id, s.kod ?? carilerKodu),
-    yazAtomik(join(kosuDizini, 'adim-1.html'), s.dom),
+    yazAtomik(join(kosuDizini, 'step-1.html'), s.dom),
     dizin.haritaYaz({
       baseUrl: 'http://uygulama.test',
       loggedIn: true,
@@ -177,10 +177,10 @@ describe('hataAnalizEt', () => {
 
     const okunan = await dizin.hataPaketiOku(test.id);
     expect(okunan).toEqual(paket);
-    expect(okunan.failure.evidence.map((kanit) => kanit.path)).toEqual(['adim-1.png', 'adim-1.html', 'console.json', 'network.json']);
+    expect(okunan.failure.evidence.map((kanit) => kanit.path)).toEqual(['step-1.png', 'step-1.html', 'console.json', 'network.json']);
     await Promise.all(okunan.failure.evidence.map((kanit) => access(join(dizin.yol('failure', test.id), kanit.path))));
     await expect(access(join(dizin.yol('failure', test.id), 'trace.zip'))).resolves.toBeUndefined();
-    const gunluk = await readFile(join(kosuDizini, `beyin-analiz-${test.id}-1.log`), 'utf8');
+    const gunluk = await readFile(join(kosuDizini, `brain-analysis-${test.id}-1.log`), 'utf8');
     expect(gunluk).toContain('"stepIndex": 1');
     expect(gunluk).toContain('konsol-20');
     expect(gunluk).not.toContain('konsol-21');
@@ -272,7 +272,7 @@ describe('hataAnalizEt', () => {
     await expect(page.getByRole('heading', { name: 'Cariler' })).toBeVisible();
   });
 });`),
-      yazAtomik(join(kosuDizini, 'adim-1.html'), '<html><head><title>Müşteriler</title></head><body><h1>Müşteriler</h1></body></html>'),
+      yazAtomik(join(kosuDizini, 'step-1.html'), '<html><head><title>Müşteriler</title></head><body><h1>Müşteriler</h1></body></html>'),
       dizin.haritaYaz({
         baseUrl: 'http://uygulama.test',
         loggedIn: true,
@@ -353,7 +353,7 @@ describe('hataAnalizEt', () => {
 
     expect(paket.mapDiff?.addedHeadings).toEqual(['Token: [redacted]']);
     expect(JSON.stringify(paket)).not.toContain('abc123XYZ');
-    const gunluk = await readFile(join(kosuDizini, `beyin-analiz-${test.id}-1.log`), 'utf8');
+    const gunluk = await readFile(join(kosuDizini, `brain-analysis-${test.id}-1.log`), 'utf8');
     expect(gunluk).not.toContain('abc123XYZ');
   }, 60_000);
 
@@ -388,8 +388,8 @@ describe('hataAnalizEt', () => {
     ]);
 
     expect(paket.failure.evidence).toEqual([
-      { kind: 'screenshot', stepIndex: 1, path: 'adim-1.png', summary: 'screenshot of the failing step' },
-      { kind: 'snapshot', stepIndex: 1, path: 'adim-1.html', summary: 'DOM snapshot of the failing step' },
+      { kind: 'screenshot', stepIndex: 1, path: 'step-1.png', summary: 'screenshot of the failing step' },
+      { kind: 'snapshot', stepIndex: 1, path: 'step-1.html', summary: 'DOM snapshot of the failing step' },
     ]);
     await Promise.all(paket.failure.evidence.map((kanit) => access(join(dizin.yol('failure', test.id), kanit.path))));
   });
@@ -413,11 +413,11 @@ describe('hataAnalizEt', () => {
     expect(snapshotlar[0]).toEqual({
       kind: 'snapshot',
       stepIndex: 1,
-      path: 'adim-1.html',
+      path: 'step-1.html',
       summary: 'Başlık DOM içinde yok.; Menüde Müşteriler yazıyor.; Tablo boş.',
     });
     // Tekilleştirme sınırı da boşaltır: yerel png hâlâ pakete giriyor.
-    expect(paket.failure.evidence.map((kanit) => kanit.path)).toEqual(['adim-1.html', 'adim-1.png']);
+    expect(paket.failure.evidence.map((kanit) => kanit.path)).toEqual(['step-1.html', 'step-1.png']);
   });
 
   it('kanıt sınırı aşılırsa yerel ekleme kalır, beyninkilerden kırpılır', async () => {
@@ -434,10 +434,10 @@ describe('hataAnalizEt', () => {
       ],
     });
     await Promise.all([
-      yazAtomik(join(kosuDizini, 'adim-2.png'), 'sahte png'),
-      yazAtomik(join(kosuDizini, 'adim-2.html'), '<h1>iki</h1>'),
-      yazAtomik(join(kosuDizini, 'adim-3.png'), 'sahte png'),
-      yazAtomik(join(kosuDizini, 'adim-3.html'), '<h1>üç</h1>'),
+      yazAtomik(join(kosuDizini, 'step-2.png'), 'sahte png'),
+      yazAtomik(join(kosuDizini, 'step-2.html'), '<h1>iki</h1>'),
+      yazAtomik(join(kosuDizini, 'step-3.png'), 'sahte png'),
+      yazAtomik(join(kosuDizini, 'step-3.html'), '<h1>üç</h1>'),
     ]);
     const paket = await hataAnalizEt(beyin, dizin, test, sonuc, [
       { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
@@ -445,7 +445,7 @@ describe('hataAnalizEt', () => {
 
     const yollar = paket.failure.evidence.map((kanit) => kanit.path);
     expect(yollar).toHaveLength(6);
-    expect(yollar.slice(-2)).toEqual(['adim-1.png', 'adim-1.html']);
+    expect(yollar.slice(-2)).toEqual(['step-1.png', 'step-1.html']);
     expect(paket.failure.evidence.filter((kanit) => kanit.summary.startsWith('beyin kanıtı'))).toHaveLength(4);
   });
 
@@ -455,7 +455,7 @@ describe('hataAnalizEt', () => {
       { stepIndex: 1, description: 'İlk hata', status: 'failed', durationMs: 1 },
       { stepIndex: 2, description: 'Son hata', status: 'failed', durationMs: 1 },
     ]);
-    await expect(readFile(join(kosuDizini, `beyin-analiz-${test.id}-1.log`), 'utf8')).resolves.toContain('"stepIndex": 2');
+    await expect(readFile(join(kosuDizini, `brain-analysis-${test.id}-1.log`), 'utf8')).resolves.toContain('"stepIndex": 2');
   });
 
   it('beyin hatasını yutmaz', async () => {
@@ -482,11 +482,164 @@ describe('hataAnalizEt', () => {
       { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', errorMessage: 'Basic Zm9vOmJhcg==', durationMs: 10 },
     ]);
 
-    const gunluk = await readFile(join(kosuDizini, `beyin-analiz-${test.id}-1.log`), 'utf8');
+    const gunluk = await readFile(join(kosuDizini, `brain-analysis-${test.id}-1.log`), 'utf8');
     for (const sir of ['json-secret', 'duz-secret', 'abc.DEF-123', 'QWxhZGRpbjpvcGVuIHNlc2FtZQ', 'url-secret', 'key-secret', 'hata-secret', 'hata.token', 'Zm9vOmJhcg']) {
       expect(gunluk).not.toContain(sir);
     }
     expect(gunluk).toContain('[redacted]');
+
+    const paket = await dizin.hataPaketiOku(test.id);
+    const kodDosyasi = await readFile(join(dizin.yol('failure', test.id), 'code.ts'), 'utf8');
+    for (const metin of [paket.code, kodDosyasi]) {
+      expect(metin).not.toContain('json-secret');
+      expect(metin).not.toContain('duz-secret');
+      // Yalnız sır değeri gider; kodun geri kalanı kanıt olarak kalır.
+      expect(metin).toBe('const ayar = {"password":"[redacted]", api_key: "[redacted]"};');
+    }
+  });
+
+  it('beyin gerekçede Received metnini zaten anıyorsa İngilizce ek cümle eklemez', async () => {
+    const hata = 'Expected: "Onaylandı"\nReceived: "Ödeme reddedildi"';
+    const rationale = 'Ürün kodunda "Ödeme reddedildi" metnini arayarak kaynak dosyayı bulun.';
+    const { dizin, beyin } = await hazirDizin({
+      ...beyinYanit,
+      recommendedFixTarget: { ...beyinYanit.recommendedFixTarget, rationale },
+    });
+    const paket = await hataAnalizEt(beyin, dizin, test, { ...sonuc, errorMessage: hata }, [
+      { stepIndex: 1, description: 'Durumu doğrula', status: 'failed', errorMessage: hata, durationMs: 10 },
+    ]);
+
+    expect(paket.failure.recommendedFixTarget.rationale).toBe(rationale);
+  });
+
+  it('Kobay ipucunu modelin gerekçesinden ayrı, etiketli paragrafa yazar', async () => {
+    const hata = 'Expected: "Onaylandı"\nReceived: "Ödeme reddedildi"';
+    const { dizin, beyin } = await hazirDizin();
+    const paket = await hataAnalizEt(beyin, dizin, test, { ...sonuc, errorMessage: hata }, [
+      { stepIndex: 1, description: 'Durumu doğrula', status: 'failed', errorMessage: hata, durationMs: 10 },
+    ]);
+
+    const [model, ipucu] = paket.failure.recommendedFixTarget.rationale.split('\n\n');
+    expect(model).toBe('DOM h1 içeriyor.');
+    expect(ipucu).toMatch(/^Kobay hint: to find the source file, search the product code for .*Ödeme reddedildi/);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('hata paketi yolu symlink denetimi', () => {
+  const adimlar = [
+    { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed' as const, errorMessage: 'Başlık bulunamadı', durationMs: 10 },
+  ];
+
+  /** Depo dışında, silinmemesi gereken bir dosya taşıyan kurban klasörü kurar. */
+  async function kurban() {
+    const disari = await mkdtemp(join(tmpdir(), 'kobay-analiz-disari-'));
+    await mkdir(join(disari, test.id), { recursive: true });
+    await writeFile(join(disari, test.id, 'degerli.txt'), 'silinmemeli');
+    return disari;
+  }
+
+  it('.kobay/failure symlink ise paketi yazmaz, kök dışını silmez', async () => {
+    const { dizin, beyin } = await hazirDizin();
+    const disari = await kurban();
+    await rename(dizin.yol('failure'), dizin.yol('failure-eski'));
+    await symlink(disari, dizin.yol('failure'), 'dir');
+
+    await expect(hataAnalizEt(beyin, dizin, test, sonuc, adimlar)).rejects.toBeInstanceOf(UnsafeBundlePath);
+    await expect(readFile(join(disari, test.id, 'degerli.txt'), 'utf8')).resolves.toBe('silinmemeli');
+    expect(await readdir(disari)).toEqual([test.id]);
+  });
+
+  it('.kobay/failure/<testId> symlink ise reddeder, hedefe dokunmaz', async () => {
+    const { dizin, beyin } = await hazirDizin();
+    const disari = await kurban();
+    await symlink(join(disari, test.id), dizin.yol('failure', test.id), 'dir');
+
+    await expect(hataAnalizEt(beyin, dizin, test, sonuc, adimlar)).rejects.toBeInstanceOf(UnsafeBundlePath);
+    expect((await lstat(dizin.yol('failure', test.id))).isSymbolicLink()).toBe(true);
+    await expect(readFile(join(disari, test.id, 'degerli.txt'), 'utf8')).resolves.toBe('silinmemeli');
+  });
+
+  it('.kobay symlink ise reddeder', async () => {
+    const { dizin } = await hazirDizin();
+    const kopya = await mkdtemp(join(tmpdir(), 'kobay-analiz-kopya-'));
+    await rename(dizin.kok, join(kopya, '.kobay'));
+    await symlink(join(kopya, '.kobay'), dizin.kok, 'dir');
+
+    await expect(hataPaketiYolunuDenetle(dizin, test.id)).rejects.toBeInstanceOf(UnsafeBundlePath);
+  });
+
+  it('pakete kopyalanan metin kanıtlarını maskeler; PNG ve trace.zip bayt bayt aynı kalır', async () => {
+    const envDegeri = 'kobay-env-gizli-9f8e7d6c';
+    vi.stubEnv('KOBAY_KANIT_TEST_TOKEN', envDegeri);
+    try {
+      const { dizin, kosuDizini, beyin } = await hazirDizin();
+      const saglayici = 'sk-SAHTEsahte1234567890abcdef';
+      // Geçersiz UTF-8 baytları: metin gibi okunup yazılırsa bozulur.
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0xc3, 0x28]);
+      const trace = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0x80, 0x00, 0x01]);
+      const hamKonsol = JSON.stringify([{ tip: 'error', metin: `key ${saglayici} env ${envDegeri}` }]);
+      const hamDom = `<h1>Yeni ürün</h1><p>${saglayici}</p><p>${envDegeri}</p>`;
+      await Promise.all([
+        writeFile(join(kosuDizini, 'step-1.png'), png),
+        writeFile(join(kosuDizini, 'trace.zip'), trace),
+        writeFile(join(kosuDizini, 'console.json'), hamKonsol),
+        writeFile(join(kosuDizini, 'network.json'), JSON.stringify([{ url: `/api?x=${envDegeri}`, method: 'GET', status: 500 }])),
+        writeFile(join(kosuDizini, 'step-1.html'), hamDom),
+      ]);
+
+      await hataAnalizEt(beyin, dizin, test, sonuc, [
+        { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
+      ]);
+
+      const paketDizini = dizin.yol('failure', test.id);
+      for (const ad of ['console.json', 'network.json', 'step-1.html']) {
+        const metin = await readFile(join(paketDizini, ad), 'utf8');
+        expect(metin).not.toContain(saglayici);
+        expect(metin).not.toContain(envDegeri);
+        expect(metin).toContain('[redacted]');
+      }
+      expect(await readFile(join(paketDizini, 'step-1.html'), 'utf8')).toContain('<h1>Yeni ürün</h1>');
+      expect((await readFile(join(paketDizini, 'step-1.png'))).equals(png)).toBe(true);
+      expect((await readFile(join(paketDizini, 'trace.zip'))).equals(trace)).toBe(true);
+      // Koşu dizinindeki özgün kanıt değişmez.
+      await expect(readFile(join(kosuDizini, 'console.json'), 'utf8')).resolves.toBe(hamKonsol);
+      await expect(readFile(join(kosuDizini, 'step-1.html'), 'utf8')).resolves.toBe(hamDom);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('maskeli kanıt geçerli kalır: network.json ayrıştırılır, HTML bağlantısının tırnağı yerinde (denetim F3)', async () => {
+    const { dizin, kosuDizini, beyin } = await hazirDizin();
+    // Konsol metnindeki kaçışlı tırnak (`\"`): düz metin maskesi ters bölüyü yutup JSON'u bozardı.
+    // Fixture'ın kendi yazım biçimi (src/kos/fixture.ts): JSON.stringify(ag, null, 2) + satır sonu.
+    const ag = [{ url: 'https://api.example.com/reset?token=zzz', method: 'GET', status: 500 }];
+    await Promise.all([
+      writeFile(join(kosuDizini, 'network.json'), `${JSON.stringify(ag, null, 2)}\n`),
+      writeFile(join(kosuDizini, 'console.json'), `${JSON.stringify([{ tip: 'error', metin: 'GET /x?password=hunter2, then fetch("/y?token=abc") failed' }], null, 2)}\n`),
+      writeFile(join(kosuDizini, 'step-1.html'), '<p><a href="/reset?token=abc">Reset password</a></p>'),
+    ]);
+
+    await hataAnalizEt(beyin, dizin, test, sonuc, [
+      { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
+    ]);
+
+    const paketDizini = dizin.yol('failure', test.id);
+    const agMetni = await readFile(join(paketDizini, 'network.json'), 'utf8');
+    expect(JSON.parse(agMetni)).toEqual([{ url: 'https://api.example.com/reset?token=[redacted]', method: 'GET', status: 500 }]);
+    expect(JSON.parse(await readFile(join(paketDizini, 'console.json'), 'utf8')))
+      .toEqual([{ tip: 'error', metin: 'GET /x?password=[redacted], then fetch("/y?token=[redacted]") failed' }]);
+    expect(await readFile(join(paketDizini, 'step-1.html'), 'utf8'))
+      .toBe('<p><a href="/reset?token=[redacted]">Reset password</a></p>');
+  });
+
+  it('düz klasörde eski paketi yerinde yeniler', async () => {
+    const { dizin, beyin } = await hazirDizin();
+    await hataAnalizEt(beyin, dizin, test, sonuc, adimlar);
+    await writeFile(join(dizin.yol('failure', test.id), 'eski-kalinti.txt'), 'x');
+    await hataAnalizEt(beyin, dizin, test, sonuc, adimlar);
+
+    expect(await readdir(dizin.yol('failure', test.id))).not.toContain('eski-kalinti.txt');
   });
 });
 

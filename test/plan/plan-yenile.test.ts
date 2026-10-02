@@ -58,7 +58,7 @@ const mapDiff: HaritaFarki = {
   changed: true,
 };
 
-async function sahteBeyin(icerik: unknown, gorev = `plan-yenile-${test.id}`) {
+async function sahteBeyin(icerik: unknown, gorev = `plan-refresh-${test.id}`) {
   const dizin = await mkdtemp(join(tmpdir(), 'kobay-plan-yenile-'));
   await yazAtomik(join(dizin, `${gorev}.json`), JSON.stringify(icerik));
   return beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: dizin });

@@ -1,6 +1,6 @@
 import { access, mkdir, mkdtemp, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
 import { KobayDizini, SAKLANAN_KOSU, yazAtomik, type PlanAdimi, type TestKaydi } from '../../src/depo/index.js';
@@ -86,7 +86,7 @@ describe('hedefAyaktaMi', () => {
 describe('raporuAyristir', () => {
   it('iç içe adımları düzleştirir, ANSI hatayı temizler ve olmayanı skipped yapar', async () => {
     const kok = await mkdtemp(join(tmpdir(), 'kobay-rapor-'));
-    await yazAtomik(join(kok, 'adim-0.png'), 'png');
+    await yazAtomik(join(kok, 'step-0.png'), 'png');
     const rapor = {
       suites: [{ specs: [{ tests: [{ results: [{ status: 'failed', error: { message: '\u001b[31mdoğrulama düştü\u001b[0m' }, steps: [
         { title: 'yardımcı adım', duration: 2, steps: [{ title: '0: Sayfayı aç', duration: 7 }] },
@@ -99,7 +99,7 @@ describe('raporuAyristir', () => {
       { type: 'assertion', description: 'Sonraki adım' },
     ], kok);
     expect(sonuc.adimlar).toEqual([
-      { stepIndex: 0, description: 'Sayfayı aç', status: 'passed', durationMs: 7, screenshotPath: 'adim-0.png' },
+      { stepIndex: 0, description: 'Sayfayı aç', status: 'passed', durationMs: 7, screenshotPath: 'step-0.png' },
       { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', durationMs: 9, errorMessage: 'Başlık yok' },
       { stepIndex: 2, description: 'Sonraki adım', status: 'skipped', durationMs: 0 },
     ]);
@@ -205,8 +205,18 @@ describe('kaliciCalismaAlaniHazirla', () => {
   it('derlenmiş modül varsa onu yeniden dışa aktarır', async () => {
     const sahtePaket = await mkdtemp(join(tmpdir(), 'kobay-sahte-paket-'));
     await yazAtomik(join(sahtePaket, 'dist', 'kos', 'fixture.js'), 'export const test = 1;\n');
+    const beklenenYol = join(sahtePaket, 'dist', 'kos', 'fixture.js').split(sep).join('/');
     expect(await fixtureYenidenAktarimMetni(sahtePaket))
-      .toBe(`export * from ${JSON.stringify(join(sahtePaket, 'dist', 'kos', 'fixture.js'))};\n`);
+      .toBe(`export * from ${JSON.stringify(beklenenYol)};\n`);
+  });
+
+  it('aktif derlenmiş fixture İngilizce step kanıt adlarını içerir', async () => {
+    const metin = await fixtureYenidenAktarimMetni();
+    const eslesme = /^export \* from (.+);\n$/.exec(metin);
+    expect(eslesme?.[1]).toBeDefined();
+    const fixtureYolu = JSON.parse(eslesme?.[1] ?? 'null') as string;
+    const sablonYolu = join(dirname(fixtureYolu), 'fixture-sablonu.js');
+    expect(await readFile(sablonYolu, 'utf8')).toContain('step-${indeks}.png');
   });
 });
 
@@ -217,7 +227,7 @@ describe('kostur', () => {
     await dizin.testYaz(test);
     const { sonuc } = await kostur(dizin, test, { baseUrl: 'http://127.0.0.1:1' });
     expect(sonuc.verdict).toBe('blocked');
-    await expect(access(join(await dizin.kosuDizini(sonuc.runId), 'pw-rapor.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(join(await dizin.kosuDizini(sonuc.runId), 'pw-report.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await dizin.testOku(test.id)).status).toBe('blocked');
   });
 
@@ -263,7 +273,7 @@ describe('kostur', () => {
     expect(sonuc.verdict).toBe('passed');
     expect(adimlar).toHaveLength(3);
     const kosuDizini = await dizin.kosuDizini(sonuc.runId);
-    await Promise.all([access(join(kosuDizini, 'adim-0.png')), access(join(kosuDizini, 'trace.zip'))]);
+    await Promise.all([access(join(kosuDizini, 'step-0.png')), access(join(kosuDizini, 'trace.zip'))]);
     expect(JSON.parse(await readFile(join(kosuDizini, 'steps.json'), 'utf8'))).toHaveLength(3);
   });
 
@@ -280,7 +290,32 @@ describe('kostur', () => {
     expect(sonuc).toMatchObject({ verdict: 'failed', failedStepIndex: 1 });
     expect(adimlar[1]?.errorMessage).toBeTruthy();
     expect(adimlar[2]).toMatchObject({ status: 'skipped' });
-    await expect(access(join(await dizin.kosuDizini(sonuc.runId), 'adim-1.png'))).resolves.toBeUndefined();
+    await expect(access(join(await dizin.kosuDizini(sonuc.runId), 'step-1.png'))).resolves.toBeUndefined();
+  });
+
+  it('Playwright hatasındaki gizli değer result.json, steps.json ve dönen sonuçta maskelenir (denetim N3)', async (context) => {
+    if (!playwrightMumkun(context) || demo === undefined) return;
+    const dizin = await geciciDizin(demo.url);
+    const sahteAnahtar = 'sk-SAHTEsahteSAHTE0123456789abcd';
+    const test = testKaydi('t_abcd1234', [
+      { type: 'action', description: 'Open the login page' },
+      { type: 'assertion', description: 'See the key heading' },
+    ]);
+    const spec = kod(demo.url, true).replace("name: 'Wrong heading'", `name: '${sahteAnahtar}'`);
+    expect(spec).toContain(sahteAnahtar);
+    await Promise.all([dizin.testYaz(test), dizin.kodYaz(test.id, spec)]);
+    const { sonuc, adimlar } = await kostur(dizin, test, { baseUrl: demo.url, testZamanAsimiMs: 10_000 });
+    expect(sonuc.verdict).toBe('failed');
+    const kosuDizini = await dizin.kosuDizini(sonuc.runId);
+    const [sonucMetni, adimMetni] = await Promise.all([
+      readFile(join(kosuDizini, 'result.json'), 'utf8'), readFile(join(kosuDizini, 'steps.json'), 'utf8'),
+    ]);
+    // Anahtar Playwright hatasına gerçekten girdi (locator metni) ve maskelendi.
+    expect(JSON.parse(sonucMetni).errorMessage).toContain('[redacted]');
+    expect(adimlar[1]?.errorMessage).toContain('[redacted]');
+    for (const metin of [sonucMetni, adimMetni, JSON.stringify(sonuc), JSON.stringify(adimlar)]) {
+      expect(metin).not.toContain(sahteAnahtar);
+    }
   });
 
   it('bayat fixture yolunu koşudan önce tazeler ve yeşili gerçekten koşturur', async (context) => {
@@ -298,7 +333,7 @@ describe('kostur', () => {
     expect(await readFile(fixtureYolu, 'utf8')).not.toContain('/eski/kurulum/kobay');
     expect(sonuc.verdict).toBe('passed');
     expect(adimlar.every((adim) => adim.status === 'passed')).toBe(true);
-    const rapor = JSON.parse(await readFile(join(await dizin.kosuDizini(sonuc.runId), 'pw-rapor.json'), 'utf8'));
+    const rapor = JSON.parse(await readFile(join(await dizin.kosuDizini(sonuc.runId), 'pw-report.json'), 'utf8'));
     expect(rapor.stats.expected).toBeGreaterThanOrEqual(1);
   });
 
@@ -311,7 +346,7 @@ describe('kostur', () => {
     const { sonuc } = await kostur(dizin, test, { baseUrl: 'data:text/plain,ok', testZamanAsimiMs: 5_000 });
     expect(sonuc).toMatchObject({ verdict: 'inconclusive', status: 'unknown', failureKind: 'env' });
     expect(sonuc.errorMessage).toBeTruthy();
-    await expect(access(join(await dizin.kosuDizini(sonuc.runId), 'pw-rapor.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(join(await dizin.kosuDizini(sonuc.runId), 'pw-report.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('Playwright hiç test koşmazsa passed değil inconclusive kaydeder', async (context) => {

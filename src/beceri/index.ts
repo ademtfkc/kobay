@@ -1,9 +1,10 @@
-import { constants, readFileSync } from 'node:fs';
-import { access, readFile } from 'node:fs/promises';
-import { delimiter, join, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { yazAtomik } from '../depo/index.js';
+import { komutCoz } from '../ortak/komut-coz.js';
 
 const baslangic = '<!-- kobay:BEGIN -->';
 const bitis = '<!-- kobay:END -->';
@@ -86,27 +87,6 @@ export class McpRegistryUnreadable extends Error {
  * kabuğun `kobay`ı bulduğu bir kurulumda `npx -y @ademtfkc/kobay` yazardık. PATH hiç
  * tanımlı değilse arama yapılmaz (boş PATH ile karıştırılmaz).
  */
-async function kobayKomutuVarMi(ortam: NodeJS.ProcessEnv): Promise<boolean> {
-  const ham = ortam.PATH ?? ortam.Path;
-  if (ham === undefined) return false;
-  const patikalar = ham.split(delimiter).map((parca) => (parca === '' ? process.cwd() : parca));
-  const uzantilar = process.platform === 'win32'
-    ? (ortam.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter((parca) => parca !== '')
-    : [''];
-  for (const dizin of patikalar) {
-    for (const uzanti of uzantilar) {
-      try {
-        // İlk eşleşmede duruluyor; paralel tarama gereksiz iş yapardı.
-        await access(join(dizin, `kobay${uzanti}`), constants.X_OK);
-        return true;
-      } catch {
-        // Bu dizinde yok; sıradakine bak.
-      }
-    }
-  }
-  return false;
-}
-
 /** `.mcp.json` içine yazılan sunucu girdisi. */
 export interface McpSunucuGirdisi {
   command: string;
@@ -118,10 +98,16 @@ export interface McpSunucuGirdisi {
  * paketi kapsamlı (`@ademtfkc/kobay`); paket adı `kobay` tek başına npx'e
  * verilirse registry'de bizim paketimiz bulunmaz.
  */
-export async function mcpSunucuGirdisi(ortam: NodeJS.ProcessEnv = process.env): Promise<McpSunucuGirdisi> {
-  return await kobayKomutuVarMi(ortam)
+export async function mcpSunucuGirdisi(
+  ortam: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<McpSunucuGirdisi> {
+  const girdi = (await komutCoz('kobay', { env: ortam, platform })) !== null
     ? { command: 'kobay', args: ['mcp'] }
     : { command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] };
+  return platform === 'win32'
+    ? { command: 'cmd', args: ['/c', girdi.command, ...girdi.args] }
+    : girdi;
 }
 
 function duzNesneMi(deger: unknown): deger is Record<string, unknown> {

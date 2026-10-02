@@ -105,14 +105,14 @@ async function proje(): Promise<{ cwd: string; dizin: KobayDizini }> {
   await dizin.kodYaz(TEST_ID, '// eski kod: Cariler');
   const yanitlar = await mkdtemp(join(tmpdir(), 'kobay-refresh-yanit-'));
   await Promise.all([
-    yazAtomik(join(yanitlar, `plan-yenile-${TEST_ID}.json`), JSON.stringify({
+    yazAtomik(join(yanitlar, `plan-refresh-${TEST_ID}.json`), JSON.stringify({
       name: 'Müşteriler listesini görüntüle',
       steps: [
         { type: 'action', description: 'Müşteriler sayfasını aç' },
         { type: 'assertion', description: 'Müşteriler başlığını gör' },
       ],
     })),
-    yazAtomik(join(yanitlar, `uret-${TEST_ID}.json`), JSON.stringify({ kod: YENI_KOD })),
+    yazAtomik(join(yanitlar, `generate-${TEST_ID}.json`), JSON.stringify({ kod: YENI_KOD })),
   ]);
   process.env.KOBAY_SAHTE_YANIT_DIZINI = yanitlar;
   sahteler.yeniSayfa = sayfa('/cariler', 'Müşteriler', ['Müşteri Ekle']);
@@ -201,7 +201,7 @@ describe('test refresh', () => {
   it('koşu düşerse exit 1 ve failureKind döner', async () => {
     const { cwd } = await proje();
     sahteler.verdict = 'failed';
-    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI ?? '', `analiz-${TEST_ID}.json`), JSON.stringify({
+    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI ?? '', `analysis-${TEST_ID}.json`), JSON.stringify({
       rootCauseHypothesis: 'Adım hâlâ eski adı arıyor',
       failureKind: 'test_bug',
       recommendedFixTarget: { kind: 'selector', reference: '/cariler', rationale: 'Seçici eski' },

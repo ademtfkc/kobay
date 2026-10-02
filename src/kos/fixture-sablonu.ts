@@ -33,8 +33,8 @@ export function adimSar<TestArgumanlari extends object, IsciArgumanlari extends 
       if (indeks !== null) {
         const [ekran, html] = await Promise.all([sayfa.screenshot(), sayfa.content()]);
         await Promise.all([
-          yazAtomik(`${dizin}/adim-${indeks}.png`, ekran),
-          yazAtomik(`${dizin}/adim-${indeks}.html`, html),
+          yazAtomik(`${dizin}/step-${indeks}.png`, ekran),
+          yazAtomik(`${dizin}/step-${indeks}.html`, html),
         ]);
       }
     }

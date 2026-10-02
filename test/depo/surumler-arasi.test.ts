@@ -14,8 +14,8 @@ import { ISARET_ESKI_ANAHTARLARI, KALICI_ANAHTARLAR } from '../../src/depo/anaht
  * hatayı yakalayamıyordu (0.1 İngilizce gövdeyi geçersiz sayıp siliyordu).
  */
 
-/** KOBAY_TEST_KATI=1 verildiğinde atlama yasak: eksik ortam hata sayılır. */
-const kati = process.env.KOBAY_TEST_KATI === '1';
+/** KOBAY_TEST_STRICT=1 verildiğinde atlama yasak: eksik ortam hata sayılır. */
+const kati = process.env.KOBAY_TEST_STRICT === '1';
 /** 0.1 kurulumu olmayan ortamlarda (CI) bilerek atlandığını söyleyen açık bayrak. */
 const ATLAMA_BAYRAGI = 'skip';
 const ESKI_DIST_HAM = process.env.KOBAY_01_DIST ?? '';
@@ -70,7 +70,7 @@ function ortamYoksaAtla(context: { skip: () => void }): boolean {
   if (ESKI_DIST_HAM === '') {
     if (kati) {
       throw new Error(
-        'KOBAY_TEST_KATI=1: sürümler arası testler atlanamaz;'
+        'KOBAY_TEST_STRICT=1: sürümler arası testler atlanamaz;'
         + ' KOBAY_01_DIST=<0.1 kurulumu> verin ya da bilerek atlamak için KOBAY_01_DIST=skip verin',
       );
     }

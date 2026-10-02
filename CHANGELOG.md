@@ -7,6 +7,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-29
+
+### Windows
+
+- CI: added a Windows smoke job that packs, installs and explores the demo with the real product; new timeout test checks that the worker and Chromium processes are gone.
+- Native Windows now resolves PATH/PATHEXT commands, starts `.cmd` brain CLIs
+  through safely escaped `cmd.exe` arguments, and passes slash-separated relative
+  spec filters to Playwright. Timed-out brain and Playwright processes now close
+  their Windows process trees.
+- Windows CI now runs the strict suite; the Bash-only smoke script remains skipped there.
+- Windows fixture imports now use ESM-safe slash paths, and failures print Playwright output in CI.
+
+### Breaking
+
+- Kobay-generated step evidence, brain logs and the Playwright JSON report now
+  use English file names. The run environment now uses English variable names;
+  legacy aliases are also exported to the child process during 0.2 and will be
+  removed in 0.3. The strict test script is now `test:strict`.
+- This corrects the 0.2.0 claim that Turkish survived only in prompts and text
+  written by the brain: several generated artifact and environment names were
+  still Turkish.
+
+### Added
+
+- `kobay prune` and the MCP `prune` tool remove old runs, brain logs, stale
+  failure bundles and known artifacts left by older versions while skipping
+  unknown `failure-out/` files. The CLI deletes by default and supports
+  `--dry-run`; MCP previews by default and requires `confirm: true` to delete.
+  Dry-run JSON is marked `estimate: true`, while deletion remeasures run
+  storage. Retention options are `--max-mb` (default 500) and
+  `--older-than-days` (default 7). The automatic clean-up after a test run also
+  keeps the last failed run, and the 0.1 to 0.2 migration prints one stderr line
+  when it actually changes something.
+
+### Changed
+
+- Plan: when a login is configured, a test whose steps enter the real credentials
+  (a password, credentials, a secret, a passcode or a PIN) is not accepted.
+  Generated proposals with such a step are listed under `dropped` with the step
+  quoted, and `test create --plan` rejects such a plan file with exit 2 when the
+  project has stored credentials. The decision reads the steps, not the title,
+  and steps that enter invalid, wrong, empty or fake values are allowed.
+  Generated code no longer rewrites such a step into another check: if one slips
+  through, the step throws a `kobay:` error and the test fails. Silent
+  `test.skip` stays forbidden. Each generated proposal also carries a
+  structured `requiresRealCredentials` flag: `true` drops it, while `false` or a
+  missing flag still goes through the step filter, which now also catches
+  "Submit the login form", "Sign in as <account>" and an "invalid" marker that
+  belongs to a different field.
+- Failure analysis: a generated test that fails on purpose with a `kobay:` error
+  (an unsupported step, such as one that needs the real credentials) is
+  classified locally as `test_bug` with a test-side fix; the brain is not called.
+- Run: on timeout, and when kobay itself is interrupted, the whole Playwright
+  process tree (worker and Chromium) is now terminated on macOS/Linux, with a
+  SIGKILL fallback for hung workers.
+- Run: process-tree shutdown bounds its ps reads to 2 s (when ps is missing or times out, only the child is stopped: SIGTERM, a wait, then SIGKILL) and re-reads the tree before SIGKILL, so a reused PID or process group is never signalled; prune's summary now counts skipped failure-out items by reason (unrecognized / too recent).
+- Codex brain: kobay warns once on stderr when `OPENAI_API_KEY` or
+  `CODEX_API_KEY` is set, since `codex exec` may then bill the API account
+  instead of the ChatGPT plan.
+
+### Fixed
+
+- Failure analysis refuses to write the bundle when `.kobay`, `.kobay/failure` or
+  `.kobay/failure/<testId>` is a symlink or resolves outside `.kobay`.
+  `failure.json` `code` and `code.ts` are now secret-masked like the analysis
+  prompt. The Kobay source-file hint in `recommendedFixTarget.rationale` is only
+  added when the model did not already quote the received text, and then as a
+  separate `Kobay hint:` paragraph.
+- Codex brain: a failed `codex exec` now reports the actual error message (for
+  example an unsupported model) instead of the CLI banner and the echoed prompt.
+- Failure bundles: after publishing the new bundle and before removing the old
+  one, kobay checks `.kobay`, `.kobay/failure` and `.kobay/failure/<testId>` for
+  symlinks again (as `failure-out` does); if the path changed, the old bundle is
+  left in place instead of removed.
+- `test create --plan`: the plan file's `url` (a path, or an address on the
+  project's `baseUrl` origin) is now kept on the test, so failure analysis can
+  compare the page against the map; an address on another origin is rejected
+  with exit 2. `projectId` is now optional.
+- `kobay prune`: a stale failure bundle set aside while a new one is published
+  is now aged from the moment it was set aside (recorded in its
+  `.stale-<testId>-<ms>-<uuid>` name), so a concurrent prune no longer deletes
+  the rollback copy of an old bundle. Flat files in `.kobay/failure-out/` with a
+  known evidence name are only removed once older than `--older-than-days`;
+  newer ones are kept and listed under `skipped` with reason `too-recent`.
+- Two concurrent writes of the same failure bundle no longer fail with `ENOENT`
+  during the post-rename safety check; the check re-inspects a path that
+  vanished mid-check and still rejects it if it came back as a symlink.
+
+### Security
+
+- `test create --plan`: the plan file's `url` is always resolved against
+  `baseUrl` before the origin check, so `"/\\evil.test/path"` (which browsers
+  read as `http://evil.test/path`) is rejected; only `http`/`https` is accepted
+  and the stored `url` is the normalised form.
+- Secret masking: brain logs in `.kobay/logs/` are now masked before they are
+  written, for every brain. The masker also replaces the exact values of
+  `OPENAI_API_KEY`, `CODEX_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`,
+  `KOBAY_LOGIN_PASS` and any `*_API_KEY`, `*_TOKEN` or `*_SECRET` variable, and
+  provider token shapes (`sk-…`, `sk-ant-…`, `ghp_…`, `github_pat_…`, `xoxb-…`).
+  A Codex error such as `Incorrect API key provided: sk-…` no longer keeps the
+  key. Provider token shapes need a realistic length (`sk-` 20+ characters,
+  `ghp_` a 36-character body, `github_pat_` 22+, `xox?-` 20+), so short product
+  codes such as `sk-proj-ALUMINUM42` stay readable in failure output.
+- Failure bundles: text evidence copied from the run (`console.json`,
+  `network.json`, `step-*.html` and other non-binary files) now goes through the
+  same secret masking as the analysis prompt; the evidence files under `runs/`
+  are left as they were. JSON evidence is parsed and only its string values are
+  masked, so it stays valid JSON; URL parameters are masked up to the closing
+  quote, comma or tag, so HTML attributes stay intact. Screenshots and
+  `trace.zip` cannot be masked and are copied unchanged.
+- Run results: `errorMessage` (Playwright error or stderr) in
+  `runs/<id>/result.json` and `steps.json` is now secret-masked before it is
+  written, so `test result` / `test_result` and `test run` / `test_run` no
+  longer return a key that appeared in a failure.
+- Login: kobay now blocks JavaScript (`fetch`, XHR, `sendBeacon`, image
+  requests, WebSockets) from sending the login password to a different site,
+  until the `explore` or `test refresh` browser closes, so a page that keeps
+  the password and sends it later is caught when the password is recognizable
+  in the request; encoded passwords in cross-site GETs (and, after login, in
+  any cross-site request) are not. During login, cross-site
+  writes are blocked and cross-site WebSockets are closed before they connect;
+  after login, only requests that carry the password are blocked, so the app's
+  own cross-site API and WebSockets keep working. Same-site subdomains
+  (`api.example.com` for `app.example.com`) and, on `localhost` or an IP, other
+  ports of the same host are allowed; tenants of common hosting platforms
+  (`*.vercel.app`, `*.a.run.app`, `*.amazonaws.com` and others) are separate
+  sites, and a separate auth site (SSO) is not allowed. Service workers are
+  disabled when credentials are configured.
+  Login or exploration is rejected when the password would leave the app's
+  site. A 307/308 redirect to another site is detected and rejected, not
+  blocked: the redirected request itself still goes out.
+- Login form: the HTML form's `action` follows the same site rule, so a form on
+  `app.example.com` may post to `api.example.com`; a form that posts to another
+  site is still refused before the password is typed. The login page itself
+  must stay on the `baseUrl` origin.
+- `explore` and `test refresh` now exit 5 (permission) instead of 4 when login
+  is refused because the page would send the credentials to another origin. Over
+  MCP this stays `isError: true`, with `code: "PermissionError"`.
+
 ## [0.2.0] - 2026-09-23
 
 ### Breaking
@@ -255,5 +394,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ademtfkc/kobay/compare/v0.2.0...v0.2.1
 [0.1.0]: https://github.com/ademtfkc/kobay/releases/tag/v0.1.0

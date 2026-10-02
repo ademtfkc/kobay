@@ -10,8 +10,14 @@ import {
   type Sayfa,
   type TestKaydi,
 } from '../../depo/index.js';
-import { haritadaSayfaBul, haritadaSayfayiDegistir, kesfet, sayfayiYenile } from '../../kesif/index.js';
-import { CredentialOriginError, kimlikOriginDogrula } from '../../kesif/oturum.js';
+import {
+  CredentialLeakBlockedError,
+  haritadaSayfaBul,
+  haritadaSayfayiDegistir,
+  kesfet,
+  sayfayiYenile,
+} from '../../kesif/index.js';
+import { CredentialOriginError, LoginFormOriginError, kimlikOriginDogrula } from '../../kesif/oturum.js';
 import { hedefAyaktaMi } from '../../kos/index.js';
 import { TargetUnreachableError, UsageError, PermissionError } from '../komut.js';
 
@@ -209,6 +215,21 @@ function agHatasiniCevir(hata: unknown, baseUrl: string): never {
   throw hata;
 }
 
+/**
+ * Giriş sırasında parolanın başka origin'e gitmesini engelleyen hatalar motor
+ * arızası değil, hedefin güvenlik reddidir: kayıtlı kimlik uyuşmazlığı gibi
+ * yetki hatası (exit 5) olarak döner. Mesaj aynen korunur.
+ */
+function girisHatasiniCevir(hata: unknown): void {
+  if (
+    hata instanceof CredentialLeakBlockedError
+    || hata instanceof CredentialOriginError
+    || hata instanceof LoginFormOriginError
+  ) {
+    throw new PermissionError(hata.message);
+  }
+}
+
 export async function kesfiYenile(dizin: KobayDizini): Promise<Harita> {
   const [config, kimlik] = await Promise.all([dizin.configOku(), dizin.kimlikOku()]);
   if (kimlik !== null) kimlikHedefeUyar(kimlik, config);
@@ -222,6 +243,7 @@ export async function kesfiYenile(dizin: KobayDizini): Promise<Harita> {
       ...(config.loginUrl === undefined ? {} : { loginUrl: config.loginUrl }),
     });
   } catch (hata: unknown) {
+    girisHatasiniCevir(hata);
     agHatasiniCevir(hata, config.baseUrl);
   }
   if (kimlik !== null && !harita.loggedIn) {
@@ -265,6 +287,7 @@ export async function sayfaKesfiniYenile(
       ...(config.loginUrl === undefined ? {} : { loginUrl: config.loginUrl }),
     });
   } catch (hata: unknown) {
+    girisHatasiniCevir(hata);
     agHatasiniCevir(hata, config.baseUrl);
   }
   const guncel = haritadaSayfayiDegistir(harita, testUrl, yeniSayfa);

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { agentInstall } from '../../src/cli/komutlar/index.js';
@@ -11,6 +11,12 @@ import { yazAtomik } from '../../src/depo/index.js';
 
 /** `kobay` bulunmayan PATH: tespit `npx -y @ademtfkc/kobay mcp` biçimine düşmeli. */
 const KOBAYSIZ_PATH = { PATH: join(tmpdir(), 'kobay-yok-bir-dizin') };
+
+function mcpGirdisi(komut: string, args: string[]): { command: string; args: string[] } {
+  return process.platform === 'win32'
+    ? { command: 'cmd', args: ['/c', komut, ...args] }
+    : { command: komut, args };
+}
 
 async function mcpOku(proje: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(join(proje, '.mcp.json'), 'utf8')) as Record<string, unknown>;
@@ -89,7 +95,10 @@ describe('beceri kurulumu', () => {
     expect(ilk.metin).not.toContain('claude mcp add');
     expect(ilk.metin).toContain('Skill created:');
     expect(ilk.json).toMatchObject({
-      mcp: { path: join(proje, '.mcp.json'), action: 'created', command: ['npx', '-y', '@ademtfkc/kobay', 'mcp'] },
+      mcp: {
+        path: join(proje, '.mcp.json'), action: 'created',
+        command: [mcpGirdisi('npx', ['-y', '@ademtfkc/kobay', 'mcp']).command, ...mcpGirdisi('npx', ['-y', '@ademtfkc/kobay', 'mcp']).args],
+      },
     });
 
     const ikinci = await agentInstall({ cwd: proje, target: 'claude', home, ortam: KOBAYSIZ_PATH });
@@ -102,35 +111,38 @@ describe('beceri kurulumu', () => {
     const proje = await geciciDizin();
     const sahtePath = join(proje, 'bin');
     await mkdir(sahtePath, { recursive: true });
-    await writeFile(join(sahtePath, 'kobay'), '#!/bin/sh\n', { mode: 0o755 });
+    await writeFile(join(sahtePath, process.platform === 'win32' ? 'kobay.cmd' : 'kobay'), '#!/bin/sh\n', { mode: 0o755 });
 
     const sonuc = await beceriKur('claude', { projeKoku: proje, ortam: { PATH: sahtePath } });
-    expect(sonuc.mcp).toMatchObject({ path: join(proje, '.mcp.json'), action: 'created', command: ['kobay', 'mcp'] });
+    expect(sonuc.mcp).toMatchObject({
+      path: join(proje, '.mcp.json'), action: 'created',
+      command: [mcpGirdisi('kobay', ['mcp']).command, ...mcpGirdisi('kobay', ['mcp']).args],
+    });
     expect(await mcpOku(proje)).toEqual({
-      mcpServers: { kobay: { command: 'kobay', args: ['mcp'] } },
+      mcpServers: { kobay: mcpGirdisi('kobay', ['mcp']) },
     });
   });
 
   it('kobay PATH\'te yoksa npx biçimine düşer', async () => {
     const proje = await geciciDizin();
-    await expect(mcpSunucuGirdisi(KOBAYSIZ_PATH)).resolves.toEqual({ command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] });
+    await expect(mcpSunucuGirdisi(KOBAYSIZ_PATH)).resolves.toEqual(mcpGirdisi('npx', ['-y', '@ademtfkc/kobay', 'mcp']));
 
     await beceriKur('claude', { projeKoku: proje, ortam: KOBAYSIZ_PATH });
     expect(await mcpOku(proje)).toEqual({
-      mcpServers: { kobay: { command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] } },
+      mcpServers: { kobay: mcpGirdisi('npx', ['-y', '@ademtfkc/kobay', 'mcp']) },
     });
   });
 
   it('PATH\'teki boş bileşen çalışma dizini demektir; oradaki kobay bulunur', async () => {
     const calismaDizini = await geciciDizin();
-    await writeFile(join(calismaDizini, 'kobay'), '#!/bin/sh\n', { mode: 0o755 });
+    await writeFile(join(calismaDizini, process.platform === 'win32' ? 'kobay.cmd' : 'kobay'), '#!/bin/sh\n', { mode: 0o755 });
     const casus = vi.spyOn(process, 'cwd').mockReturnValue(calismaDizini);
     try {
-      // Baştaki `:` sıfır uzunluklu ön ek; kabuk burada çalışma dizinine bakar.
-      await expect(mcpSunucuGirdisi({ PATH: `:${join(tmpdir(), 'kobay-yok-bir-dizin')}` }))
-        .resolves.toEqual({ command: 'kobay', args: ['mcp'] });
-      await expect(mcpSunucuGirdisi({ PATH: `${join(tmpdir(), 'kobay-yok-bir-dizin')}:` }))
-        .resolves.toEqual({ command: 'kobay', args: ['mcp'] });
+      // Baştaki ayraç sıfır uzunluklu ön ek; kabuk burada çalışma dizinine bakar.
+      await expect(mcpSunucuGirdisi({ PATH: `${delimiter}${join(tmpdir(), 'kobay-yok-bir-dizin')}` }))
+        .resolves.toEqual(mcpGirdisi('kobay', ['mcp']));
+      await expect(mcpSunucuGirdisi({ PATH: `${join(tmpdir(), 'kobay-yok-bir-dizin')}${delimiter}` }))
+        .resolves.toEqual(mcpGirdisi('kobay', ['mcp']));
     } finally {
       casus.mockRestore();
     }
@@ -138,13 +150,19 @@ describe('beceri kurulumu', () => {
 
   it('PATH hiç tanımlı değilse çalışma dizini aranmaz', async () => {
     const calismaDizini = await geciciDizin();
-    await writeFile(join(calismaDizini, 'kobay'), '#!/bin/sh\n', { mode: 0o755 });
+    await writeFile(join(calismaDizini, process.platform === 'win32' ? 'kobay.cmd' : 'kobay'), '#!/bin/sh\n', { mode: 0o755 });
     const casus = vi.spyOn(process, 'cwd').mockReturnValue(calismaDizini);
     try {
-      await expect(mcpSunucuGirdisi({})).resolves.toEqual({ command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] });
+      await expect(mcpSunucuGirdisi({})).resolves.toEqual(mcpGirdisi('npx', ['-y', '@ademtfkc/kobay', 'mcp']));
     } finally {
       casus.mockRestore();
     }
+  });
+
+  it('win32 .mcp.json girdisini cmd /c ile yazar', async () => {
+    await expect(mcpSunucuGirdisi({ PATH: 'C:\\empty' }, 'win32')).resolves.toEqual({
+      command: 'cmd', args: ['/c', 'npx', '-y', '@ademtfkc/kobay', 'mcp'],
+    });
   });
 
   it('mevcut .mcp.json ile birleşir: başka sunucular ve kök fields korunur', async () => {
@@ -159,7 +177,7 @@ describe('beceri kurulumu', () => {
     expect(await mcpOku(proje)).toEqual({
       mcpServers: {
         baska: { command: 'node', args: ['sunucu.js'] },
-        kobay: { command: 'npx', args: ['-y', '@ademtfkc/kobay', 'mcp'] },
+        kobay: mcpGirdisi('npx', ['-y', '@ademtfkc/kobay', 'mcp']),
       },
       inputs: [{ id: 'token' }],
     });

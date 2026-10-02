@@ -1,21 +1,13 @@
 import { access } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { chromium } from '@playwright/test';
 import { yazAtomik, type BeyinAyari } from '../../depo/index.js';
+import { komutCoz } from '../../ortak/komut-coz.js';
 import { UsageError, PermissionError, basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
 
-const execFileAsync = promisify(execFile);
-
 export async function komutVarMi(ad: string): Promise<boolean> {
-  try {
-    await execFileAsync('which', [ad]);
-    return true;
-  } catch {
-    return false;
-  }
+  return (await komutCoz(ad)) !== null;
 }
 
 export async function chromiumVarMi(): Promise<boolean> {

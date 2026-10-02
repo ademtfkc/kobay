@@ -155,7 +155,7 @@ async function budamaProjesi(): Promise<{ cwd: string; dizin: KobayDizini; test:
   await dizin.testYaz(test);
   await dizin.kodYaz(test.id, '// hazır');
   process.env.KOBAY_SAHTE_YANIT_DIZINI = await sahteYanitlariYaz();
-  await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI, `analiz-${test.id}.json`), JSON.stringify({
+  await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI, `analysis-${test.id}.json`), JSON.stringify({
     rootCauseHypothesis: 'Başlık değişmiş', failureKind: 'product_bug',
     recommendedFixTarget: { kind: 'code', reference: 'ana sayfa', rationale: 'Beklenen başlık yok' }, evidence: [],
   }));
@@ -173,7 +173,7 @@ async function kosuYaz(
   await dizin.kosuSonucuYaz({
     testId, runId, status: verdict === 'failed' ? 'failed' : 'passed', verdict, codeVersion: 1, ...zaman,
   });
-  await yazAtomik(join(dizin.yol('runs'), runId, 'adim-0.html'), '<html>kanıt</html>');
+  await yazAtomik(join(dizin.yol('runs'), runId, 'step-0.html'), '<html>kanıt</html>');
 }
 
 function kosuKimlikleri(adet: number, gun: string): string[] {
@@ -205,7 +205,7 @@ describe('CLI komut fonksiyonları', () => {
     expect(kabul.exitCode).toBe(0);
     const test = (kabul.json as TestKaydi[])[0];
     expect(test?.status).toBe('draft');
-    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI!, `uret-${test?.id}.json`), JSON.stringify({
+    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI!, `generate-${test?.id}.json`), JSON.stringify({
       kod: [
         "import { test, expect } from './_fixture';",
         "test('Giriş akışı', async ({ page }) => {",
@@ -215,7 +215,7 @@ describe('CLI komut fonksiyonları', () => {
         '',
       ].join('\n'),
     }));
-    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI!, `analiz-${test?.id}.json`), JSON.stringify({
+    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI!, `analysis-${test?.id}.json`), JSON.stringify({
       rootCauseHypothesis: 'Başlık değişmiş', failureKind: 'product_bug',
       recommendedFixTarget: { kind: 'code', reference: 'ana sayfa', rationale: 'Beklenen başlık yok' }, evidence: [],
     }));
@@ -224,8 +224,8 @@ describe('CLI komut fonksiyonları', () => {
     expect(kosu.exitCode).toBe(1);
     expect(kosu.json).toEqual([expect.objectContaining({ id: test?.id, verdict: 'failed' })]);
     await Promise.all([
-      access(join(cwd, '.kobay', 'logs', `beyin-uret-${test?.id}-1.log`)),
-      access(join(cwd, '.kobay', 'logs', `beyin-analiz-${test?.id}-1.log`)),
+      access(join(cwd, '.kobay', 'logs', `brain-generate-${test?.id}-1.log`)),
+      access(join(cwd, '.kobay', 'logs', `brain-analysis-${test?.id}-1.log`)),
     ]);
 
     const hedef = join(cwd, 'disari-aktarilan-hata');
@@ -251,7 +251,7 @@ describe('CLI komut fonksiyonları', () => {
     await dizin.testYaz(test);
     await dizin.kodYaz(test.id, '// hazır');
     process.env.KOBAY_SAHTE_YANIT_DIZINI = await sahteYanitlariYaz();
-    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI!, `analiz-${test.id}.json`), JSON.stringify({
+    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI!, `analysis-${test.id}.json`), JSON.stringify({
       rootCauseHypothesis: 'Başlık değişmiş', failureKind: 'product_bug',
       recommendedFixTarget: { kind: 'code', reference: 'ana sayfa', rationale: 'Beklenen başlık yok' }, evidence: [],
     }));
@@ -318,7 +318,7 @@ describe('CLI komut fonksiyonları', () => {
 
     const kalan = (await dizin.kosuListele(test.id)).map((kosu) => kosu.runId);
     expect(kalan).toContain(SAHTE_KOSU_ID);
-    await expect(access(join(cwd, '.kobay', 'runs', SAHTE_KOSU_ID, 'adim-0.html'))).resolves.toBeUndefined();
+    await expect(access(join(cwd, '.kobay', 'runs', SAHTE_KOSU_ID, 'step-0.html'))).resolves.toBeUndefined();
   });
 
   it('son dakikalarda biten koşuları budamaz (eşzamanlı koşunun kanıtı)', async () => {
@@ -550,7 +550,7 @@ describe('CLI komut fonksiyonları', () => {
     await dizin.testYaz(test);
     await dizin.kodYaz(test.id, '// hazır');
     process.env.KOBAY_SAHTE_YANIT_DIZINI = await sahteYanitlariYaz();
-    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI!, `analiz-${test.id}.json`), JSON.stringify({
+    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI!, `analysis-${test.id}.json`), JSON.stringify({
       rootCauseHypothesis: 'Başlık değişmiş', failureKind: 'product_bug',
       recommendedFixTarget: { kind: 'code', reference: 'ana sayfa', rationale: 'Beklenen başlık yok' }, evidence: [],
     }));
@@ -768,7 +768,7 @@ describe('CLI komut fonksiyonları', () => {
     await dizin.testYaz(test);
     await dizin.kodYaz(test.id, '// hazır');
     process.env.KOBAY_SAHTE_YANIT_DIZINI = await sahteYanitlariYaz();
-    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI, `analiz-${test.id}.json`), JSON.stringify({
+    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI, `analysis-${test.id}.json`), JSON.stringify({
       rootCauseHypothesis: 'Başlık değişmiş', failureKind: 'product_bug',
       recommendedFixTarget: { kind: 'code', reference: 'ana sayfa', rationale: 'Beklenen başlık yok' }, evidence: [],
     }));
@@ -816,7 +816,7 @@ describe('CLI komut fonksiyonları', () => {
     await dizin.testYaz(test);
     await dizin.kodYaz(test.id, '// hazır');
     process.env.KOBAY_SAHTE_YANIT_DIZINI = await sahteYanitlariYaz();
-    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI, `analiz-${test.id}.json`), JSON.stringify({
+    await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI, `analysis-${test.id}.json`), JSON.stringify({
       rootCauseHypothesis: 'Başlık değişmiş', failureKind: 'product_bug',
       recommendedFixTarget: { kind: 'code', reference: 'ana sayfa', rationale: 'Beklenen başlık yok' }, evidence: [],
     }));
@@ -1291,7 +1291,8 @@ describe('güvenlik sınırları (karşıt denetim 3)', () => {
     await expect(access(dizin.yol('.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('bayat işlemin kurtarması düşerse komut durur; project update bayat işareti devralmaz', async () => {
+  // Windows'ta chmod dizin yazmayı engellemez; senaryo POSIX'e özgü.
+  it.skipIf(process.platform === 'win32')('bayat işlemin kurtarması düşerse komut durur; project update bayat işareti devralmaz', async () => {
     const cwd = await geciciDizin();
     await projectCreate({
       cwd, url: 'http://mesru.test', login: { username: 'ali', password: 'gizli-1' }, beyin: { adaptor: 'sahte' },

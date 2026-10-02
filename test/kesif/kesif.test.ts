@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
-import { girisFormuBul, kesfet } from '../../src/kesif/index.js';
+import { LoginFormOriginError, girisFormuBul, kesfet } from '../../src/kesif/index.js';
 import { baslat } from '../kobay-demo/sunucu.mjs';
 
 let demo: { url: string; kapat: () => Promise<void> };
@@ -30,12 +30,12 @@ async function geciciDizin(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'kobay-kesif-'));
 }
 
-/** KOBAY_TEST_KATI=1 verildiğinde atlama yasak: engel hata sayılır. */
-const kati = process.env.KOBAY_TEST_KATI === '1';
+/** KOBAY_TEST_STRICT=1 verildiğinde atlama yasak: engel hata sayılır. */
+const kati = process.env.KOBAY_TEST_STRICT === '1';
 
 function engelleAtla(context: TestContext, engel: unknown, baslik: string): false {
   const ozet = String(engel).split('\n')[0] ?? '';
-  if (kati) throw new Error(`KOBAY_TEST_KATI=1: ${baslik} atlanamaz: ${ozet}`);
+  if (kati) throw new Error(`KOBAY_TEST_STRICT=1: ${baslik} atlanamaz: ${ozet}`);
   context.skip(`${baslik}: ${ozet}`);
   return false;
 }
@@ -80,7 +80,8 @@ describe('kesfet', () => {
         yanit.end('<form action="/topla" method="post"><input type="text" name="k"><input type="password" name="p"><button type="submit">Gir</button></form>');
       });
     });
-    const yabanciUrl = await dinle(yabanci);
+    // Yerel makinede port serbest (aynı site): yabancıyı ayıran ana makine adıdır.
+    const yabanciUrl = (await dinle(yabanci)).replace('127.0.0.1', 'localhost');
     const hedef = createServer((istek, yanit) => {
       if (istek.url === '/yonlendir') {
         yanit.writeHead(302, { location: `${yabanciUrl}/giris` });
@@ -101,7 +102,7 @@ describe('kesfet', () => {
           storageStateYolu: join(dizin, 'storage.json'),
           maxSayfa: 1,
           sayfaZamanAsimiMs: 5_000,
-        })).rejects.toThrow('different origin');
+        })).rejects.toThrow(LoginFormOriginError);
       }
       expect(gelenGovdeler).toEqual([]);
     } finally {
@@ -165,7 +166,7 @@ describe('kesfet', () => {
     expect(harita.pages.some(({ url }) => new URL(url).pathname === '/logout')).toBe(false);
     expect(harita.pages.find(({ url }) => new URL(url).pathname === '/new')?.forms[0]?.fields.map(({ name }) => name))
       .toEqual(['name', 'amount']);
-    expect((await stat(state)).mode & 0o777).toBe(0o600);
+    expect((await stat(state)).mode & 0o777).toBe(process.platform === 'win32' ? 0o666 : 0o600);
   });
 
   it('giriş bilgisi yokken giriş ekranında kalır', async (context) => {

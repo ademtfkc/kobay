@@ -2,6 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { yazAtomik, type BeyinAyari } from '../depo/index.js';
+import { komutCagrisiCoz, sureciSonlandir } from '../ortak/komut-coz.js';
 import { BrainRuntimeError, BrainError, type BeyinIstegi } from './index.js';
 
 export const VARSAYILAN_ZAMAN_ASIMI_SN = 180;
@@ -325,13 +326,14 @@ export async function beyinGunluguYaz(
   istem: string,
   ham: string,
   kullanim?: BeyinKullanimi,
+  env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   if (dizin === undefined) return;
   const guvenliGorev = gorev.replace(/[^a-zA-Z0-9_-]/g, '-');
   let sayi = 1;
   try {
     const dosyalar = await readdir(dizin);
-    const eslesme = new RegExp(`^beyin-${guvenliGorev}-(\\d+)\\.log$`);
+    const eslesme = new RegExp(`^brain-${guvenliGorev}-(\\d+)\\.log$`);
     for (const dosya of dosyalar) {
       const bulunan = eslesme.exec(dosya)?.[1];
       if (bulunan !== undefined) sayi = Math.max(sayi, Number(bulunan) + 1);
@@ -339,24 +341,107 @@ export async function beyinGunluguYaz(
   } catch (hata: unknown) {
     if (!(typeof hata === 'object' && hata !== null && 'code' in hata && hata.code === 'ENOENT')) throw hata;
   }
-  const ek = kullanim === undefined ? '' : `\n--- kullanim ---\n${JSON.stringify(kullanim)}`;
-  await yazAtomik(`${dizin}/beyin-${guvenliGorev}-${sayi}.log`, `${istem}\n---\n${ham}${ek}`);
+  const ek = kullanim === undefined ? '' : `\n--- usage ---\n${JSON.stringify(kullanim)}`;
+  // Günlük diske kalıcı yazılır: istem, ham yanıt ve hata ayrıntısı gizli değer taşıyabilir.
+  await yazAtomik(
+    `${dizin}/brain-${guvenliGorev}-${sayi}.log`,
+    gizliDegerleriMaskele(`${istem}\n---\n${ham}${ek}`, env),
+  );
 }
 
 const GIZLI_AD_DESENI = String.raw`(?:parola|password|token|secret|authorization|api[_ -]?key)`;
-const TIRNAKLI_JSON_DESENI = new RegExp(String.raw`("${GIZLI_AD_DESENI}"\s*:\s*")[^"]*(")`, 'gi');
-const ANAHTAR_DEGER_DESENI = new RegExp(String.raw`((?:${GIZLI_AD_DESENI})\s*[:=]\s*["']?)([^\s,;"']+)(["']?)`, 'gi');
+// Değer, kaçışlı tırnağı (`\"`) da içerebilir; kapanış tırnağı yerinde kalır, JSON geçerli kalır.
+const TIRNAKLI_JSON_DESENI = new RegExp(String.raw`("${GIZLI_AD_DESENI}"\s*:\s*")(?:[^"\\]|\\.)*(")`, 'gi');
+// Değer sınıfı HTML/JSON ayraçlarını (`<>)`) yutmaz: `?token=abc>Reset` metni bozulmaz.
+const ANAHTAR_DEGER_DESENI = new RegExp(String.raw`((?:${GIZLI_AD_DESENI})\s*[:=]\s*["']?)([^\s,;"'<>)]+)(["']?)`, 'gi');
 const BEARER_DESENI = /\b(Bearer\s+)[A-Za-z0-9._-]+/gi;
 const BASIC_DESENI = /\b(Basic\s+)[A-Za-z0-9+/=]+/gi;
-const URL_GIZLI_PARAMETRE_DESENI = /([?&](?:token|api[_-]?key|password|parola|secret)=)[^&#\s]+/gi;
+// Değer tırnak, virgül ve HTML ayraçlarında biter: `href="/r?token=abc"` ve `"url": "...?token=x",` bozulmaz.
+const URL_GIZLI_PARAMETRE_DESENI = /([?&](?:token|api[_-]?key|password|parola|secret)=)[^&#\s"'<>,;)]+/gi;
+const GIZLI_AD_TAM_DESENI = new RegExp(String.raw`^${GIZLI_AD_DESENI}$`, 'i');
 
-export function gizliDegerleriMaskele(metin: string): string {
-  return metin
+/**
+ * Sağlayıcı token biçimleri: anahtar adı geçmeyen metinde de ("Incorrect API key provided: sk-...") yakalanır.
+ * Uzunluk alt sınırı ürün metnini korur: "SKU sk-proj-ALUMINUM42" gibi kısa kodlar token sayılmaz.
+ * Gerçek anahtarlar bu sınırların çok üstündedir (sk- 40+, ghp_ 36 gövde, github_pat_ 80+ gövde).
+ * sk-: toplam en az 20 karakter; gh?_: gövde en az 36; github_pat_: gövde en az 22; xox?-: gövde en az 20.
+ */
+const SAGLAYICI_TOKEN_DESENLERI: readonly RegExp[] = [
+  /\bsk-[A-Za-z0-9_-]{17,}/g,
+  /\bgh[pousr]_[A-Za-z0-9]{36,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{22,}/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{20,}/g,
+];
+
+/** Değeri tam haliyle maskelenecek ortam değişkenleri; ek olarak adı desene uyan her değişken. */
+const GIZLI_ORTAM_ADLARI = new Set([
+  'OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'KOBAY_LOGIN_PASS',
+]);
+const GIZLI_ORTAM_ADI_DESENI = /(?:_API_KEY|_TOKEN|_SECRET)$/i;
+/**
+ * Çok kısa değerler ("1", "true") her yerde geçer; maskelemek metni bozar. Adıyla bilinen gizliler
+ * (kısa bir giriş parolası dahil) 4 karakterden, yalnız ad desenine uyanlar 8 karakterden maskelenir.
+ */
+const EN_KISA_BILINEN_GIZLI = 4;
+const EN_KISA_DESEN_GIZLI = 8;
+
+function ortamdakiGizliDegerler(env: NodeJS.ProcessEnv): string[] {
+  const degerler = new Set<string>();
+  for (const [ad, deger] of Object.entries(env)) {
+    const temiz = deger?.trim() ?? '';
+    const bilinen = GIZLI_ORTAM_ADLARI.has(ad);
+    if (!bilinen && !GIZLI_ORTAM_ADI_DESENI.test(ad)) continue;
+    if (temiz.length >= (bilinen ? EN_KISA_BILINEN_GIZLI : EN_KISA_DESEN_GIZLI)) degerler.add(temiz);
+  }
+  // Uzun önce: biri ötekinin parçasıysa uzun değer yarım kalmasın.
+  return [...degerler].sort((x, y) => y.length - x.length);
+}
+
+/**
+ * Kalıcı yazım (beyin günlüğü, hata mesajı, hata paketi) öncesi gizli değerleri `[redacted]` yapar:
+ * (1) ortamdaki bilinen gizli değişkenlerin TAM değerleri, (2) sağlayıcı token biçimleri,
+ * (3) `api_key=...`, JSON alanı, Bearer/Basic ve URL parametresi kalıpları.
+ * `env` verilmezse `process.env`; beyin adaptörü kendi ortamını geçirir, ikisi birlikte taranır.
+ */
+export function gizliDegerleriMaskele(metin: string, env?: NodeJS.ProcessEnv): string {
+  let sonuc = metin;
+  const degerler = ortamdakiGizliDegerler(env === undefined || env === process.env ? process.env : { ...process.env, ...env });
+  for (const deger of degerler) sonuc = sonuc.split(deger).join('[redacted]');
+  for (const desen of SAGLAYICI_TOKEN_DESENLERI) sonuc = sonuc.replace(desen, '[redacted]');
+  return sonuc
     .replace(TIRNAKLI_JSON_DESENI, '$1[redacted]$2')
     .replace(BEARER_DESENI, '$1[redacted]')
     .replace(BASIC_DESENI, '$1[redacted]')
     .replace(URL_GIZLI_PARAMETRE_DESENI, '$1[redacted]')
     .replace(ANAHTAR_DEGER_DESENI, '$1[redacted]$3');
+}
+
+/**
+ * JSON kanıtı (console.json, network.json) için maske: metin geçerli JSON ise yalnız dize
+ * DEĞERLERİ (ve anahtarları) maskelenir, adı gizli olan alanın dize değeri tümden `[redacted]`
+ * olur, sonra aynı girinti biçimiyle yeniden yazılır; çıktı her zaman ayrıştırılabilir kalır.
+ * Metin JSON değilse düz metin maskesine düşer.
+ */
+export function jsonGizliDegerleriMaskele(metin: string, env?: NodeJS.ProcessEnv): string {
+  let veri: unknown;
+  try {
+    veri = JSON.parse(metin);
+  } catch {
+    return gizliDegerleriMaskele(metin, env);
+  }
+  const gez = (deger: unknown, anahtar?: string): unknown => {
+    if (typeof deger === 'string') {
+      return anahtar !== undefined && GIZLI_AD_TAM_DESENI.test(anahtar) ? '[redacted]' : gizliDegerleriMaskele(deger, env);
+    }
+    if (Array.isArray(deger)) return deger.map((oge) => gez(oge));
+    if (typeof deger === 'object' && deger !== null) {
+      return Object.fromEntries(Object.entries(deger).map(([ad, alt]) => [gizliDegerleriMaskele(ad, env), gez(alt, ad)]));
+    }
+    return deger;
+  };
+  const girintili = /^[[{]\s*\n/.test(metin);
+  const sonSatir = metin.endsWith('\n') ? '\n' : '';
+  return `${JSON.stringify(gez(veri), null, girintili ? 2 : undefined)}${sonSatir}`;
 }
 
 const baslamayanSurecHatalari = new WeakSet<object>();
@@ -391,11 +476,18 @@ export async function komutSonucu(
   secenekler: { girdi?: string; env: NodeJS.ProcessEnv; cwd?: string; zamanAsimiSn?: number },
 ): Promise<KomutSonucu> {
   const zamanAsimiMs = (secenekler.zamanAsimiSn ?? VARSAYILAN_ZAMAN_ASIMI_SN) * 1000;
+  const cagri = await komutCagrisiCoz(komut, argumanlar, { env: secenekler.env });
+  if (cagri === null) {
+    const hata = new BrainError('cli_missing');
+    baslamayanSurecHatalari.add(hata);
+    throw hata;
+  }
   return new Promise((coz, red) => {
-    const surec = spawn(komut, argumanlar, {
+    const surec = spawn(cagri.komut, cagri.argumanlar, {
       cwd: secenekler.cwd,
       env: secenekler.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      ...cagri.spawnSecenekleri,
     });
     let basladi = false;
     let stdout = '';
@@ -403,7 +495,7 @@ export async function komutSonucu(
     let zamanAsimi = false;
     const zamanlayici = setTimeout(() => {
       zamanAsimi = true;
-      surec.kill('SIGTERM');
+      void sureciSonlandir(surec);
     }, zamanAsimiMs);
 
     surec.once('spawn', () => { basladi = true; });

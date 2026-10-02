@@ -10,6 +10,7 @@ import {
   type PlanDosyasi,
   type TestKaydi,
 } from '../depo/index.js';
+import { girisKuraliIhlali } from './giris-filtresi.js';
 import { PLAN_SISTEM_ISTEMI, planKullaniciIstemiOlustur } from './istem.js';
 import { PlanYanitiSemasi, type PlanYaniti } from './sema.js';
 import { haritaYolKaliplari, oneriUrlKarari } from './url-kalip.js';
@@ -21,6 +22,13 @@ export {
   planYenilemeKullaniciIstemiOlustur,
   type PlanYenilemeIstemBaglami,
 } from './istem.js';
+export {
+  BEYAN_SEBEBI,
+  GERCEK_KIMLIK_SEBEBI,
+  adimGercekKimlikIsterMi,
+  gercekKimlikAdimi,
+  girisKuraliIhlali,
+} from './giris-filtresi.js';
 export {
   PlanYanitiSemasi,
   planYenilemeYanitiSemasi,
@@ -88,7 +96,16 @@ export async function planUret(
       dusurulen.push({ title: taslak.title, reason: `Step count is outside the 1-200 range: ${taslak.steps.length}` });
       continue;
     }
-    oneriler.push({ ...taslak, proposalId: yeniOneriId() });
+    // Giriş yapılandırılmışsa (harita.loggedIn) oturum zaten açıktır; gerçek kimlik giren adımı olan
+    // test yazılamaz. Karar adımlardan; elle yazılan plan da aynı kuraldan geçer (CLI test create).
+    // Beyin öneri başına `requiresRealCredentials` beyan eder: true düşürür; false/yok ise sözcük filtresi karar verir.
+    const { requiresRealCredentials: beyan, ...oneriAlanlari } = taslak;
+    const girisIhlali = girisKuraliIhlali(taslak.steps, harita.loggedIn, beyan);
+    if (girisIhlali !== null) {
+      dusurulen.push({ title: taslak.title, reason: girisIhlali });
+      continue;
+    }
+    oneriler.push({ ...oneriAlanlari, proposalId: yeniOneriId() });
   }
 
   if (oneriler.length === 0) throw new Error('No usable proposal was produced');
@@ -130,6 +147,9 @@ function planDosyasiniTesteCevir(plan: PlanDosyasi): TestKaydi {
     status: 'draft',
     planSteps: plan.planSteps,
     priority: plan.priority ?? 'p1',
+    // Şema yalnız biçimi denetler; hedefin origin'iyle karşılaştırma CLI'da
+    // (config'teki baseUrl orada okunur).
+    ...(plan.url === undefined ? {} : { url: plan.url }),
     codeVersion: 0,
     createdAt: simdi,
     updatedAt: simdi,

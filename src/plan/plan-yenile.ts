@@ -31,7 +31,7 @@ export async function planYenile(
   if (adimSayisi === 0) throw new Error(`The test has no plan steps, so it cannot be refreshed: ${baglam.test.id}`);
 
   const yanit = await beyin.sor<PlanYenilemeYaniti>({
-    gorev: `plan-yenile-${baglam.test.id}`,
+    gorev: `plan-refresh-${baglam.test.id}`,
     sistem: PLAN_YENILEME_SISTEM_ISTEMI,
     kullanici: planYenilemeKullaniciIstemiOlustur({
       test: { name: baglam.test.name, planSteps: baglam.test.planSteps },

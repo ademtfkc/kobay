@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -20,6 +20,13 @@ const atomikDurum = vi.hoisted(() => ({
   accessYokKosulu: undefined as ((yol: string) => boolean) | undefined,
   /** `link` çağrısını düşüren kod; sert bağ desteklemeyen dosya sistemini taklit eder. */
   linkKodu: undefined as string | undefined,
+  /** Başarılı bir `rename` çağrısından hemen sonra koşar; yarışı taklit eder. */
+  renameSonrasi: undefined as ((eski: string, yeni: string) => Promise<void>) | undefined,
+  /**
+   * `realpath` çağrısından hemen önce koşar; `lstat` ile `realpath` arasındaki
+   * pencerede araya giren bir yazıcıyı taklit eder. Fırlatırsa `realpath` o hatayı verir.
+   */
+  realpathOncesi: undefined as ((yol: string) => Promise<void>) | undefined,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -34,6 +41,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
           : Object.assign(hata, { code: atomikDurum.renameKodu });
       }
       await asil.rename(eski, yeni);
+      await atomikDurum.renameSonrasi?.(eski, yeni);
     },
     rm: async (yol: Parameters<typeof asil.rm>[0], secenekler?: Parameters<typeof asil.rm>[1]) => {
       if (atomikDurum.rmKosulu?.(String(yol)) === true) {
@@ -46,6 +54,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         throw Object.assign(new Error('sert bağ simülasyonu'), { code: atomikDurum.linkKodu });
       }
       await asil.link(eski, yeni);
+    },
+    realpath: async (...argumanlar: Parameters<typeof asil.realpath>) => {
+      await atomikDurum.realpathOncesi?.(String(argumanlar[0]));
+      return asil.realpath(...argumanlar);
     },
     access: async (yol: Parameters<typeof asil.access>[0], mod?: number) => {
       if (atomikDurum.accessYokKosulu?.(String(yol)) === true) {
@@ -72,7 +84,9 @@ import {
   KosuSonucuSemasi,
   OneriSemasi,
   BundleIncomplete,
+  UnsafeBundlePath,
   PlanDosyasiSemasi,
+  depoyuBuda,
   SchemaError,
   TestKaydiSemasi,
   jsonOku,
@@ -93,7 +107,11 @@ afterEach(() => {
   atomikDurum.rmKosulu = undefined;
   atomikDurum.accessYokKosulu = undefined;
   atomikDurum.linkKodu = undefined;
+  atomikDurum.renameSonrasi = undefined;
+  atomikDurum.realpathOncesi = undefined;
 });
+
+const gizliDosyaModu = process.platform === 'win32' ? 0o666 : 0o600;
 
 const config: KobayConfig = {
   baseUrl: 'http://localhost:3000',
@@ -210,8 +228,8 @@ describe('KobayDizini', () => {
     await expect(readFile(dizin.yol('.gitignore'), 'utf8')).resolves.toBe(
       yonetilenGitignore,
     );
-    expect(((await stat(dizin.yol('credentials.json'))).mode & 0o777)).toBe(0o600);
-    expect(((await stat(dizin.storageStateYolu())).mode & 0o777)).toBe(0o600);
+    expect(((await stat(dizin.yol('credentials.json'))).mode & 0o777)).toBe(gizliDosyaModu);
+    expect(((await stat(dizin.storageStateYolu())).mode & 0o777)).toBe(gizliDosyaModu);
   });
 
   it('var olan gitignore satırlarını korur ve yalnız eksik korumaları ekler', async () => {
@@ -308,7 +326,8 @@ describe('KobayDizini', () => {
     await expect(access(yol)).resolves.toBeUndefined();
   });
 
-  it('gitignore yazılamayan dizinde komut düşmez, uyarı verir', async () => {
+  // Windows chmod ile dizini yazılamaz yapmadığı için bu POSIX izin davranışı atlanır.
+  it.skipIf(process.platform === 'win32')('gitignore yazılamayan dizinde komut düşmez, uyarı verir', async () => {
     if (process.getuid?.() === 0) return;
     const proje = await geciciDizin();
     const kobayDizini = join(proje, '.kobay');
@@ -401,6 +420,89 @@ describe('KobayDizini', () => {
     expect(yayimlanan.code).toBe(yayimlanan.snapshotId === 's_1' ? ilk.code : ikinci.code);
   });
 
+  it.skipIf(process.platform === 'win32')('hata paketi yazımı .kobay/failure symlink ise hiç başlamaz', async () => {
+    const dizin = await KobayDizini.ac(await geciciDizin(), config);
+    const dis = await geciciDizin();
+    await mkdir(join(dis, 't_abc12345'));
+    await writeFile(join(dis, 't_abc12345', 'kurban.txt'), 'dokunma');
+    await rm(dizin.yol('failure'), { recursive: true, force: true });
+    await symlink(dis, dizin.yol('failure'));
+
+    await expect(dizin.hataPaketiYaz(paket(), [])).rejects.toBeInstanceOf(UnsafeBundlePath);
+    await expect(readFile(join(dis, 't_abc12345', 'kurban.txt'), 'utf8')).resolves.toBe('dokunma');
+  });
+
+  it.skipIf(process.platform === 'win32')('hata paketi rename sonrası yol symlink olursa eski paketi silmez', async () => {
+    const dizin = await KobayDizini.ac(await geciciDizin(), config);
+    await dizin.hataPaketiYaz(paket(), []);
+    const tasinan = join(await geciciDizin(), 'failure-gercek');
+
+    // Yeni paket yerine konduktan hemen sonra, silmeden önce `.kobay/failure`
+    // dışarıdaki bir klasörü gösteren symlink'e çevrilir.
+    atomikDurum.renameSonrasi = async (eski, yeni) => {
+      if (!eski.includes('.tmp-') || yeni !== dizin.yol('failure', 't_abc12345')) return;
+      atomikDurum.renameSonrasi = undefined;
+      await rename(dizin.yol('failure'), tasinan);
+      await symlink(tasinan, dizin.yol('failure'));
+    };
+
+    await expect(dizin.hataPaketiYaz({ ...paket(), snapshotId: 's_2' }, []))
+      .rejects.toBeInstanceOf(UnsafeBundlePath);
+    const kalanlar = (await readdir(tasinan)).filter((ad) => ad.startsWith('.stale-t_abc12345-'));
+    expect(kalanlar).toHaveLength(1);
+    await expect(readFile(join(tasinan, kalanlar[0] ?? '', 'failure.json'), 'utf8')).resolves.toContain('"s_1"');
+  });
+
+  it('hata paketi yeniden denetiminde hedef başka yazıcının rename\'iyle kaybolursa hata vermez', async () => {
+    const dizin = await KobayDizini.ac(await geciciDizin(), config);
+    await dizin.hataPaketiYaz(paket(), []);
+    const hedef = dizin.yol('failure', 't_abc12345');
+    const rakipStale = dizin.yol('failure', '.stale-t_abc12345-rakip');
+
+    // Yeni paket yerine konduktan sonra, yeniden denetimin `lstat`'i hedefi
+    // görür; `realpath`'ten hemen önce rakip yazıcı hedefi `.stale-*`e taşır.
+    atomikDurum.renameSonrasi = async (eski, yeni) => {
+      if (!eski.includes('.tmp-') || yeni !== hedef) return;
+      atomikDurum.renameSonrasi = undefined;
+      atomikDurum.realpathOncesi = async (yol) => {
+        if (yol !== hedef) return;
+        atomikDurum.realpathOncesi = undefined;
+        await rename(hedef, rakipStale);
+      };
+    };
+
+    await expect(dizin.hataPaketiYaz({ ...paket(), snapshotId: 's_2' }, [])).resolves.toBe(hedef);
+    await expect(readFile(join(rakipStale, 'failure.json'), 'utf8')).resolves.toContain('"s_2"');
+  });
+
+  it.skipIf(process.platform === 'win32')('hata paketi yeniden denetiminde kaybolan hedefin yerine symlink gelirse reddeder', async () => {
+    const dizin = await KobayDizini.ac(await geciciDizin(), config);
+    await dizin.hataPaketiYaz(paket(), []);
+    const hedef = dizin.yol('failure', 't_abc12345');
+    const dis = await geciciDizin();
+    await writeFile(join(dis, 'kurban.txt'), 'dokunma');
+
+    // `realpath` hedefi yok görür (ENOENT); o arada hedefin yerine dışarıyı
+    // gösteren symlink konur. Yeniden bakış bunu yakalamalı.
+    atomikDurum.renameSonrasi = async (eski, yeni) => {
+      if (!eski.includes('.tmp-') || yeni !== hedef) return;
+      atomikDurum.renameSonrasi = undefined;
+      atomikDurum.realpathOncesi = async (yol) => {
+        if (yol !== hedef) return;
+        atomikDurum.realpathOncesi = undefined;
+        await rm(hedef, { recursive: true, force: true });
+        await symlink(dis, hedef);
+        throw Object.assign(new Error('realpath simülasyonu'), { code: 'ENOENT' });
+      };
+    };
+
+    await expect(dizin.hataPaketiYaz({ ...paket(), snapshotId: 's_2' }, []))
+      .rejects.toBeInstanceOf(UnsafeBundlePath);
+    await expect(readFile(join(dis, 'kurban.txt'), 'utf8')).resolves.toBe('dokunma');
+    const kalanlar = (await readdir(dizin.yol('failure'))).filter((ad) => ad.startsWith('.stale-t_abc12345-'));
+    expect(kalanlar).toHaveLength(1);
+  });
+
   it('yarıda kesilen hata paketi yazımı yayımlanmış paketi değiştirmez', async () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     const ilk = paket();
@@ -429,6 +531,38 @@ describe('KobayDizini', () => {
     }
   });
 
+  it('yayın sırasında kenara alınan eski paketi eşzamanlı budama mtime eski olsa da silmez', async () => {
+    const dizin = await KobayDizini.ac(await geciciDizin(), config);
+    await dizin.hataPaketiYaz(paket(), []);
+    const hedef = dizin.yol('failure', 't_abc12345');
+    const eskiAn = new Date('2026-01-01T00:00:00Z');
+    await utimes(hedef, eskiAn, eskiAn);
+
+    let budama: Awaited<ReturnType<typeof depoyuBuda>> | undefined;
+    let staleVardi = false;
+    // Eski paket `.stale-*` adına taşındığı an (geri alma için hâlâ gerekli) budama koşar.
+    atomikDurum.renameSonrasi = async (eski, yeni) => {
+      if (eski !== hedef || !yeni.includes('.stale-')) return;
+      atomikDurum.renameSonrasi = undefined;
+      budama = await depoyuBuda(dizin, { olderThanDays: 1 });
+      staleVardi = await access(yeni).then(() => true, () => false);
+    };
+
+    await expect(dizin.hataPaketiYaz({ ...paket(), snapshotId: 's_2' }, [])).resolves.toBe(hedef);
+    expect(budama?.deleted.filter((oge) => oge.kind === 'stale-failure-bundle')).toEqual([]);
+    expect(staleVardi).toBe(true);
+  });
+
+  it('ek dosyada içerik verilmişse kaynağı değil o içeriği yazar', async () => {
+    const kok = await geciciDizin();
+    const dizin = await KobayDizini.ac(kok, config);
+    const ek = join(kok, 'console.json');
+    await writeFile(ek, 'ham sk-ham');
+    await dizin.hataPaketiYaz(paket(), [{ kaynak: ek, hedefAd: 'console.json', icerik: 'maskeli' }]);
+    await expect(readFile(dizin.yol('failure', 't_abc12345', 'console.json'), 'utf8')).resolves.toBe('maskeli');
+    await expect(readFile(ek, 'utf8')).resolves.toBe('ham sk-ham');
+  });
+
   it('failure/ silinmişse hata paketi yazımı üst dizini kendisi açar', async () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     await rm(dizin.yol('failure'), { recursive: true, force: true });
@@ -444,12 +578,12 @@ describe('KobayDizini', () => {
     const dizin = await KobayDizini.ac(kok, config);
     const ek = join(kok, 'ek.txt');
     await writeFile(ek, 'ilk koşunun eki');
-    await dizin.hataPaketiYaz(paket(), [{ kaynak: ek, hedefAd: 'adim-1.png' }]);
+    await dizin.hataPaketiYaz(paket(), [{ kaynak: ek, hedefAd: 'step-1.png' }]);
     const hedef = hataPaketiCikisYolu(kok, 't_abc12345');
     expect(hedef).toBe(dizin.yol('failure-out', 't_abc12345'));
 
     await dizin.hataPaketiKopyala('t_abc12345', hedef);
-    expect(await readFile(join(hedef, 'adim-1.png'), 'utf8')).toBe('ilk koşunun eki');
+    expect(await readFile(join(hedef, 'step-1.png'), 'utf8')).toBe('ilk koşunun eki');
 
     // İkinci koşunun paketinde o ek yok: aynı yola yazılınca eskisinden iz kalmamalı.
     await dizin.hataPaketiYaz({ ...paket(), snapshotId: 's_2' }, []);
@@ -457,7 +591,7 @@ describe('KobayDizini', () => {
 
     const kopya = await jsonOku(join(hedef, 'failure.json'), HataPaketiSemasi);
     expect(kopya.snapshotId).toBe('s_2');
-    await expect(stat(join(hedef, 'adim-1.png'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(hedef, 'step-1.png'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('failure-out dışarıyı gösteren symlink ise varsayılan kopyalama reddedilir, dışarısı durur', async () => {
@@ -972,7 +1106,8 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await ikinci.kesinlestir();
   });
 
-  it('kenara alma yarıda düşerse o ana kadar taşınanlar hemen geri konur', async () => {
+  // Windows'ta chmod dizin yazmayı engellemez; senaryo POSIX'e özgü.
+  it.skipIf(process.platform === 'win32')('kenara alma yarıda düşerse o ana kadar taşınanlar hemen geri konur', async () => {
     const dizin = await kimlikliDizin();
     // İlk dosya taşınır, ikincisinde rename düşer. Yalnız kenara alma renameleri
     // sayılır; işaret dosyasının atomik yazımı bu sayıyı kaydırmasın.
@@ -1053,7 +1188,8 @@ describe('kimlik işlemi (geri alınabilir geçersiz kılma)', () => {
     await expect(stat(join(dizin.kok, '.credentials-txn'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('bayat kesinleşmemiş kurtarmada yedek geri konamazsa bul() fırlatır; kilit devralınmaz', async () => {
+  // Windows'ta chmod dizin yazmayı engellemez; senaryo POSIX'e özgü.
+  it.skipIf(process.platform === 'win32')('bayat kesinleşmemiş kurtarmada yedek geri konamazsa bul() fırlatır; kilit devralınmaz', async () => {
     const dizin = await kimlikliDizin();
     await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
     await isaretiBayatlat(dizin);
@@ -1382,7 +1518,7 @@ describe('0.1 → 0.2 göçü (Türkçe alan ve dosya adları)', () => {
     const ham = await readFile(dizin.yol('credentials.json'), 'utf8');
     expect(ham).toContain('"username"');
     expect(ham).not.toContain('"kullanici"');
-    expect((await stat(dizin.yol('credentials.json'))).mode & 0o777).toBe(0o600);
+    expect((await stat(dizin.yol('credentials.json'))).mode & 0o777).toBe(gizliDosyaModu);
   });
 
   it('hedef adı doluysa yeniden adlandırma yapılmaz; yeni dosya kazanır', async () => {
@@ -1498,7 +1634,8 @@ describe('0.1 → 0.2 göçü (Türkçe alan ve dosya adları)', () => {
     await expect(readFile(ikinci.yol('map.json'), 'utf8')).resolves.toContain('yeni.test');
   });
 
-  it('yazılamayan .kobay: göç uyarı verir, harita ve öneriler eski adından okunur', async () => {
+  // Windows chmod ile dizini yazılamaz yapmadığı için bu POSIX izin davranışı atlanır.
+  it.skipIf(process.platform === 'win32')('yazılamayan .kobay: göç uyarı verir, harita ve öneriler eski adından okunur', async () => {
     if (process.getuid?.() === 0) return;
     const kok = await eskiProje({ oneriler: true });
     const kobay = join(kok, '.kobay');

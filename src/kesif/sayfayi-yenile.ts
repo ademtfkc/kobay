@@ -2,6 +2,7 @@ import { access } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
 import type { Harita, Kimlik, Sayfa } from '../depo/index.js';
 import { girisFormuBul } from './giris.js';
+import { girisKorumasiKur, girisKorumasiSonDenetim } from './giris-korumasi.js';
 import { girisiGonder, kimlikOriginDogrula, loginUrlDogrula, oturumDurumunuYaz } from './oturum.js';
 import { sayfaOzeti } from './sayfa-ozeti.js';
 
@@ -46,9 +47,16 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
   const sayfaZamanAsimiMs = secenekler.sayfaZamanAsimiMs ?? 15_000;
   const tarayici = await chromium.launch({ headless: true });
   const oturumVar = await dosyaVarMi(secenekler.storageStateYolu);
-  const context = await tarayici.newContext(
-    oturumVar ? { storageState: secenekler.storageStateYolu } : {},
-  );
+  // Service worker istekleri context.route'a uğramaz; giriş korumasının dışında kalmasın diye
+  // kimlik verildiğinde kapalı. Kimliksiz yenilemede koruma yok, worker'lar çalışır.
+  const context = await tarayici.newContext({
+    serviceWorkers: secenekler.kimlik !== undefined ? 'block' : 'allow',
+    ...(oturumVar ? { storageState: secenekler.storageStateYolu } : {}),
+  });
+  // WebSocket yönlendirmesi yalnız sonra açılan belgelere işler; koruma ilk sayfadan önce kurulur.
+  if (secenekler.kimlik !== undefined) {
+    await girisKorumasiKur(context, secenekler.kimlik, new URL(secenekler.baseUrl).origin);
+  }
   const sayfa = await context.newPage();
 
   try {
@@ -72,7 +80,9 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
     if (gelenYol !== beklenenYol) {
       throw new Error(`Page could not be refreshed: asked for ${beklenenYol}, got ${gelenYol} (the session may have expired)`);
     }
-    return await sayfaOzeti(sayfa, new URL(secenekler.baseUrl).origin);
+    const ozet = await sayfaOzeti(sayfa, new URL(secenekler.baseUrl).origin);
+    girisKorumasiSonDenetim(context);
+    return ozet;
   } finally {
     await context.close();
     await tarayici.close();

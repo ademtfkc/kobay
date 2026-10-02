@@ -59,7 +59,7 @@ async function hazirProje(): Promise<string> {
   await dizin.testYaz(TEST_KAYDI);
   await dizin.kodYaz(TEST_KAYDI.id, '// hazır');
   const yanitlar = await mkdtemp(join(tmpdir(), 'kobay-mcp-yanit-'));
-  await yazAtomik(join(yanitlar, `analiz-${TEST_KAYDI.id}.json`), JSON.stringify({
+  await yazAtomik(join(yanitlar, `analysis-${TEST_KAYDI.id}.json`), JSON.stringify({
     rootCauseHypothesis: 'Başlık değişmiş', failureKind: 'product_bug',
     recommendedFixTarget: { kind: 'code', reference: 'ana sayfa', rationale: 'Beklenen başlık yok' }, evidence: [],
   }));

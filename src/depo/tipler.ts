@@ -174,9 +174,10 @@ export interface Kimlik {
 
 /** Elle yazılan plan dosyasının uygulama içi görünümü. */
 export interface PlanDosyasi {
-  projectId: string;
+  projectId?: string;
   type: 'frontend';
   name: string;
+  url?: string;
   description?: string;
   priority?: Oncelik;
   planSteps: PlanAdimi[];

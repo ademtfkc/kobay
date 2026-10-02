@@ -7,3 +7,6 @@ test-results/
 
 # npm pack çıktısı
 *.tgz
+
+# vitest artığı
+.vitest/

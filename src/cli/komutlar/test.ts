@@ -9,7 +9,7 @@ import {
   type TestKaydi,
   type Verdict,
 } from '../../depo/index.js';
-import { planDosyasindanTest, planYenile } from '../../plan/index.js';
+import { girisKuraliIhlali, planDosyasindanTest, planYenile } from '../../plan/index.js';
 import { kostur } from '../../kos/index.js';
 import { kodUret } from '../../uret/index.js';
 import { CIKIS, type CikisKodu } from '../cikis.js';
@@ -32,6 +32,37 @@ import {
   testOku,
 } from './ortak.js';
 
+/**
+ * Elle yazılan plan dosyasındaki sayfa adresi: `/yol` ya da hedefin kendi
+ * origin'inde tam adres. Başka origin'deki adres haritayla hiç eşleşmez;
+ * sessizce kaydetmek yerine kullanıcıya söylenir.
+ *
+ * Kısayol yok: her değer `new URL(url, baseUrl)` ile çözülür, yalnız http(s)
+ * kabul edilir ve origin çözülmüş adres üzerinden kıyaslanır. (`"/\\evil.test/x"`
+ * `/` ile başlasa da WHATWG çözümünde `http://evil.test/x` olur.) Kayda ham
+ * metin değil çözülmüş biçim yazılır: yol verildiyse yol+sorgu+parça, tam adres
+ * verildiyse normalleştirilmiş tam adres.
+ */
+export function planUrlDogrula(url: string, baseUrl: string): string {
+  const bicimHatasi = new UsageError(
+    `Plan file url must be a path like "/records" or a full address on ${baseUrl}: ${url}`,
+  );
+  const yolMu = url.startsWith('/');
+  // Yol olmayan göreli metin ("records") baseUrl'in yoluna göre farklı çözülür; belirsiz, kabul edilmez.
+  if (!yolMu && !/^[a-z][a-z\d+.-]*:/i.test(url)) throw bicimHatasi;
+  let adres: URL;
+  try {
+    adres = new URL(url, baseUrl);
+  } catch {
+    throw bicimHatasi;
+  }
+  if (adres.protocol !== 'http:' && adres.protocol !== 'https:') throw bicimHatasi;
+  if (adres.origin !== new URL(baseUrl).origin) {
+    throw new UsageError(`Plan file url is on a different origin than the project (${baseUrl}): ${url}`);
+  }
+  return yolMu ? `${adres.pathname}${adres.search}${adres.hash}` : adres.href;
+}
+
 export async function testCreate(a: { cwd: string; planPath: string }): Promise<KomutSonucu> {
   return komutCalistir(async () => {
     const dizin = await dizinBul(a.cwd);
@@ -45,6 +76,15 @@ export async function testCreate(a: { cwd: string; planPath: string }): Promise<
       throw hata;
     }
     const test = planDosyasindanTest(plan);
+    if (test.url !== undefined) test.url = planUrlDogrula(test.url, (await dizin.configOku()).baseUrl);
+    // Plan üretimiyle aynı kural: kayıtlı kimlik varsa oturum kobay'ın giriş adımıyla açılır ve test
+    // gerçek kimliği yazamaz. Anlamı değişmesin diye plan reddedilir, test yazılmaz.
+    const girisIhlali = girisKuraliIhlali(test.planSteps, (await dizin.kimlikOku()) !== null);
+    if (girisIhlali !== null) {
+      throw new UsageError(
+        `${girisIhlali}. Remove that step, or test the login flow only with invalid or empty values.`,
+      );
+    }
     await dizin.testYaz(test);
     // İnsan modunda test kaydının tamamı (plan adımları dahil) dökülmez; kimlik,
     // ad ve sayılar yeter. `--output json` aynı kaydı verir.

@@ -206,9 +206,14 @@ export const KimlikSemasi: v.GenericSchema<unknown, Kimlik> = v.pipe(
 
 /** schemas/plan.schema.json ile aynı zorunlu alanlar ve sınırlar. */
 export const PlanDosyasiSemasi: v.GenericSchema<unknown, PlanDosyasi> = v.looseObject({
-  projectId: v.pipe(v.string(), v.minLength(1), v.regex(/\S/)),
+  // Saklanmaz, projeyle eşlenmez; eski plan dosyaları bozulmasın diye yalnız
+  // verilirse biçimi denetlenir.
+  projectId: v.exactOptional(v.pipe(v.string(), v.minLength(1), v.regex(/\S/))),
   type: v.literal('frontend'),
   name: v.pipe(v.string(), v.minLength(1), v.regex(/\S/)),
+  // Testin sayfası: `/yol` ya da baseUrl origin'inde tam adres. Origin denetimi
+  // config'e bağlı olduğu için `test create` içinde yapılır.
+  url: v.exactOptional(v.pipe(v.string(), v.minLength(1), v.regex(/\S/))),
   description: v.exactOptional(v.string()),
   priority: v.exactOptional(OncelikSemasi),
   planSteps: v.pipe(v.array(v.object({

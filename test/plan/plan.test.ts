@@ -282,6 +282,13 @@ describe('test kaydı dönüşümü', () => {
     expect(test).toMatchObject({ name: 'Giriş yapılır', createdFrom: 'cli', priority: 'p0', status: 'draft' });
   });
 
+  it('elle plan dosyasındaki url alanını test kaydına taşır, yoksa alan hiç eklenmez', () => {
+    const adimlar = [{ type: 'action', description: 'Kayıtlar sayfasını aç' }];
+    expect(planDosyasindanTest({ type: 'frontend', name: 'Kayıt listesi', url: '/records', planSteps: adimlar }).url)
+      .toBe('/records');
+    expect('url' in planDosyasindanTest({ type: 'frontend', name: 'Kayıt listesi', planSteps: adimlar })).toBe(false);
+  });
+
   it('geçersiz öncelikte hangi alanın neden yanlış olduğunu söyler', () => {
     expect(() => planDosyasindanTest({
       projectId: 'proje-1', type: 'frontend', name: 'Giriş yapılır', priority: 'p9',

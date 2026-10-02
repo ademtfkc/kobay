@@ -23,6 +23,7 @@ import {
   projectCreate,
   projectGet,
   projectUpdate,
+  prune,
   setup,
   installBrowser,
   testCreate,
@@ -85,6 +86,12 @@ function beyinSecenekleri(
   return komut
     .addOption(new Option('--brain <adaptor>', `${aciklama} (alias: --beyin) (choices: ${secimMetni})`).argParser(denetle))
     .addOption(new Option('--beyin <adaptor>').argParser(denetle).hideHelp());
+}
+
+function pozitifOndalik(deger: string): number {
+  const sayi = Number(deger);
+  if (!Number.isFinite(sayi) || sayi <= 0) throw new InvalidArgumentError('Must be a positive number.');
+  return sayi;
 }
 
 async function acikSor(soru: string, akislar: CliAkislari): Promise<string> {
@@ -238,6 +245,18 @@ export function programOlustur(
   program.command('explore')
     .description('browses the target app and refreshes the exploration map (.kobay/map.json)')
     .action(async () => calistir(explore({ cwd: cwd() })));
+
+  program.command('prune')
+    .description('removes old runs, brain logs, and legacy artifacts without deleting protected evidence')
+    .option('--dry-run', 'shows what would be removed without changing files')
+    .option('--max-mb <mb>', 'maximum total size of run directories', pozitifOndalik)
+    .option('--older-than-days <days>', 'age threshold for brain logs and runs of deleted tests', pozitifOndalik)
+    .action(async (secenekler: { dryRun?: boolean; maxMb?: number; olderThanDays?: number }) => calistir(prune({
+      cwd: cwd(),
+      ...(secenekler.dryRun === undefined ? {} : { dryRun: secenekler.dryRun }),
+      ...(secenekler.maxMb === undefined ? {} : { maxMb: secenekler.maxMb }),
+      ...(secenekler.olderThanDays === undefined ? {} : { olderThanDays: secenekler.olderThanDays }),
+    })));
 
   const test = program.command('test').description('generate test plans, create and run tests, and get results or failure bundles');
   const plan = test.command('plan').description('generate and accept test proposals with the brain');

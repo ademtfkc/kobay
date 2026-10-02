@@ -1,5 +1,5 @@
 import { access, readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { yazAtomik } from '../depo/index.js';
 import { fixtureSablonu } from './fixture-sablonu.js';
@@ -25,12 +25,12 @@ function kaliciConfigMetni(): string {
   return [
     'export default {',
     "  testDir: 'tests',",
-    '  timeout: Number(process.env.KOBAY_TEST_ZAMAN_ASIMI_MS ?? 120000),',
+    '  timeout: Number(process.env.KOBAY_TEST_TIMEOUT_MS ?? 120000),',
     '  workers: 1,',
     '  retries: 0,',
-    "  reporter: [['json', { outputFile: process.env.KOBAY_RAPOR_DOSYASI }]],",
+    "  reporter: [['json', { outputFile: process.env.KOBAY_REPORT_FILE }]],",
     "  use: { baseURL: process.env.KOBAY_BASE_URL, trace: 'on', screenshot: 'only-on-failure', video: 'off' },",
-    "  outputDir: `${process.env.KOBAY_KOSU_DIZINI}/pw`,",
+    "  outputDir: `${process.env.KOBAY_RUN_DIR}/pw`,",
     '};',
     '',
   ].join('\n');
@@ -64,7 +64,7 @@ async function farkliysaYaz(yol: string, icerik: string): Promise<void> {
 export async function fixtureYenidenAktarimMetni(paketKoku: string = AKTIF_PAKET_KOKU): Promise<string> {
   for (const aday of FIXTURE_ADAYLARI) {
     const yol = join(paketKoku, aday);
-    if (await dosyaVarMi(yol)) return fixtureSablonu(yol);
+    if (await dosyaVarMi(yol)) return fixtureSablonu(yol.split(sep).join('/'));
   }
   throw new FixtureModuleMissing(paketKoku);
 }
