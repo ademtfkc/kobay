@@ -1,5 +1,5 @@
 import {
-  access, link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, unlink,
+  access, link, lstat, mkdir, open, readdir, readFile, rename, rm, stat, unlink,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -24,7 +24,10 @@ import {
 } from './semalar.js';
 import { FileNotFound, jsonOku, yazAtomik } from './dosya.js';
 import { eskiAnahtarVarMi, eskiIsaretineEsle, kalicidanEsle } from './anahtar-gocu.js';
-import { hataPaketiYolunuDenetle } from './paket-yolu.js';
+import {
+  UnsafeBundlePath, eskiDizinleriSil, guvenliKokuBul, hataPaketiYolunuDenetle, kokCocugunuDenetle,
+} from './paket-yolu.js';
+import { paketKilidiniAl, pidYasiyor, type PaketKilidi } from './paket-kilidi.js';
 
 export class BundleIncomplete extends Error {
   constructor(testId: string) {
@@ -328,16 +331,6 @@ function isaretYuruyorMu(isaret: KimlikIsareti): boolean {
   return !geriAlinamayanIslemler.has(isaret.txnId) && isaretTazeMi(isaret);
 }
 
-/** Süreç hâlâ duruyor mu; EPERM "var ama başkasının" demektir. */
-function pidYasiyor(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (hata: unknown) {
-    return hataKodu(hata) === 'EPERM';
-  }
-}
 
 const GITIGNORE_BASLANGICI = '# >>> kobay managed >>>';
 const GITIGNORE_BITISI = '# <<< kobay managed <<<';
@@ -363,6 +356,204 @@ function hataKodu(hata: unknown): string | undefined {
     return hata.code;
   }
   return undefined;
+}
+
+/**
+ * Yayımlama `rename`'i bu kodlarla düşerse neden ya yarışı kaybetmektir (Windows
+ * dolu klasörün üstüne taşımada `ENOTEMPTY` yerine EPERM verir) ya da geçici
+ * bir tutamak kilididir (antivirüs, dizinleyici). Hangisi olduğuna hedefe bakıp
+ * karar verilir.
+ */
+const KILIT_KODLARI = new Set(['EPERM', 'EACCES', 'EBUSY']);
+/** Hedef yokken kilit sanılan hatada aynı taşımanın bekleme adımları (toplam 630 ms). */
+const KILIT_BEKLEMELERI_MS = [10, 20, 40, 80, 160, 320] as const;
+const YAYIMLAMA_TURU = 10;
+
+function bekle(ms: number): Promise<void> {
+  return new Promise((coz) => setTimeout(coz, ms));
+}
+
+/** `lstat` ile yol var mı; ENOENT dışındaki hata fırlatılır. */
+async function yolVarMi(yol: string): Promise<boolean> {
+  try {
+    await lstat(yol);
+    return true;
+  } catch (hata: unknown) {
+    if (hataKodu(hata) === 'ENOENT') return false;
+    throw hata;
+  }
+}
+
+/**
+ * Yol, `hataPaketiOku`'nun kabul ettiği gibi tamam bir paket mi: symlink
+ * olmayan bir dizin, içinde `failure.json` dosyası var ve `.partial` işareti
+ * yok. Okunamayan her durum "tamam değil" sayılır.
+ */
+async function paketTamamMi(yol: string): Promise<boolean> {
+  try {
+    const dizin = await lstat(yol);
+    if (dizin.isSymbolicLink() || !dizin.isDirectory()) return false;
+    if (!(await lstat(join(yol, 'failure.json'))).isFile()) return false;
+    return !(await yolVarMi(join(yol, '.partial')));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Kilit kodlarında (`KILIT_KODLARI`) aynı işi artan aralıklarla yeniden dener;
+ * bekleme adımları biterse ya da hata başka türdense son hata fırlatılır.
+ */
+async function kilitteBekleyerek(is: () => Promise<void>): Promise<void> {
+  for (let sira = 0; ; sira += 1) {
+    try {
+      await is();
+      return;
+    } catch (hata: unknown) {
+      const kod = hataKodu(hata);
+      const ms = KILIT_BEKLEMELERI_MS[sira];
+      if (kod === undefined || !KILIT_KODLARI.has(kod) || ms === undefined) throw hata;
+      await bekle(ms);
+    }
+  }
+}
+
+/**
+ * Yayımlama vazgeçti ve ardından toparlama da tam yapılamadı: önceki kopya
+ * geri konamadı ya da geçici/eski klasör silinemedi. `errors[0]` asıl hatadır;
+ * `code` onun kodunu taşır. Geri konamayan kopya `keptAt` yolunda durur.
+ */
+export class PublishCleanupFailed extends AggregateError {
+  readonly code: string | undefined;
+  readonly keptAt: string | undefined;
+
+  constructor(asil: unknown, ikincil: unknown[], keptAt?: string) {
+    const ek = keptAt === undefined
+      ? 'clean-up after it also failed'
+      : `the previous copy could not be put back and is kept at ${keptAt}`;
+    super([asil, ...ikincil], `${hataMetni(asil)}; ${ek} (${ikincil.map(hataMetni).join(', ')})`);
+    this.name = 'PublishCleanupFailed';
+    this.code = hataKodu(asil);
+    this.keptAt = keptAt;
+  }
+}
+
+/** Geçici klasörü siler ve asıl hatayı fırlatır; silme de düşerse ikisi birlikte görünür. */
+async function geciciyiSilipFirlat(gecici: string, hata: unknown): Promise<never> {
+  try {
+    await rm(gecici, { recursive: true, force: true, maxRetries: 3 });
+  } catch (silmeHatasi: unknown) {
+    throw new PublishCleanupFailed(hata, [silmeHatasi]);
+  }
+  throw hata;
+}
+
+/**
+ * Hazır `kaynak` klasörünü `hedef` adına yayımlar: var olan hedef önce
+ * `eskiYolu()` adına kenara alınır, sonra kaynak taşınır. Başka bir yazıcı araya
+ * girip hedefi doldurduysa yeni tura geçilir. Kenara alma da kilit kodlarında
+ * kısa aralıklarla yeniden denenir. Başarıda kenara alınanlar döndürülür; onları
+ * yol yeniden denetlendikten sonra silmek çağıranın işidir.
+ *
+ * Vazgeçilen her yolda kaynak silinir, hedef boşsa kenara alınan son kopya geri
+ * konur (kilitte yeniden denenerek) ve geri kalan eski klasörler `eskileriSil`
+ * ile (yolları doğrulanarak) silinir; asıl hata fırlatılır. Geri koyma ya da
+ * temizlik de düşerse sessizce yutulmaz: `PublishCleanupFailed` fırlatılır,
+ * geri konamayan kopya silinmez.
+ */
+async function klasoruYayimla(secenek: {
+  kaynak: string;
+  hedef: string;
+  eskiYolu: () => string;
+  eskileriSil: (yollar: string[]) => Promise<void>;
+  /**
+   * Hedefe yayım rename'inden hemen önce kilidin hâlâ bizde olduğunu doğrular;
+   * fırlatırsa yayım yapılmaz, vazgeçme yolu (kendi geçici klasörünü silme,
+   * eski kopyayı geri koyma) işler.
+   */
+  sahiplikDenetle?: () => Promise<void>;
+  tukendi: () => Error;
+}): Promise<string[]> {
+  const { kaynak, hedef } = secenek;
+  const eskiDizinler: string[] = [];
+  let kilitBeklemesi = 0;
+  try {
+    for (let tur = 0; tur < YAYIMLAMA_TURU; tur += 1) {
+      const eskiDizin = secenek.eskiYolu();
+      try {
+        await kilitteBekleyerek(() => rename(hedef, eskiDizin));
+        eskiDizinler.push(eskiDizin);
+      } catch (hata: unknown) {
+        if (hataKodu(hata) !== 'ENOENT') throw hata;
+      }
+
+      for (;;) {
+        await secenek.sahiplikDenetle?.();
+        try {
+          await rename(kaynak, hedef);
+          return eskiDizinler;
+        } catch (hata: unknown) {
+          const kod = hataKodu(hata);
+          if (kod === 'EEXIST' || kod === 'ENOTEMPTY') break;
+          if (kod === undefined || !KILIT_KODLARI.has(kod)) throw hata;
+          // Hedef doluysa yarışı kaybettik (Windows'un ENOTEMPTY'si). Hedefe
+          // bakmadan yeni tura geçmek yasak: neden kilitse her tur yayımlanmış
+          // paketi kenara alır ve hedef sonunda boş kalırdı.
+          let hedefVar: boolean;
+          try {
+            hedefVar = await yolVarMi(hedef);
+          } catch {
+            throw hata;
+          }
+          if (hedefVar) break;
+          const ms = KILIT_BEKLEMELERI_MS[kilitBeklemesi];
+          if (ms === undefined) throw hata;
+          kilitBeklemesi += 1;
+          await bekle(ms);
+        }
+      }
+    }
+    throw secenek.tukendi();
+  } catch (hata: unknown) {
+    const ikincil: unknown[] = [];
+    let korunan: string | undefined;
+    // Kenara alınanlar arasında son tam paket geri konacak olandır; turlarda
+    // kenara alınan sonrakiler rakiplerin bıraktığı (belki yarım) klasörler olabilir.
+    const tamamlar = await Promise.all(eskiDizinler.map(paketTamamMi));
+    const geriKonacak = eskiDizinler.findLast((_yol, sira) => tamamlar[sira] === true) ?? eskiDizinler.at(-1);
+    if (geriKonacak !== undefined) {
+      let geriKondu = false;
+      let geriKoymaHatasi: unknown;
+      try {
+        // Hedef doluysa geri koyma yapılmaz (üstüne taşınamaz).
+        await kilitteBekleyerek(async () => {
+          if (await yolVarMi(hedef)) return;
+          await rename(geriKonacak, hedef);
+          geriKondu = true;
+        });
+      } catch (yakalanan: unknown) {
+        geriKoymaHatasi = yakalanan;
+      }
+      // Hedefte tam bir paket (başka yazıcınınki) yoksa son sağlam kopya silinmez:
+      // hedef boş, yarım ya da tanınmayan bir klasörse kenarda korunur ve yeri bildirilir.
+      if (!geriKondu && !(await paketTamamMi(hedef))) {
+        korunan = geriKonacak;
+        ikincil.push(geriKoymaHatasi ?? new Error(`Destination is not a complete bundle: ${hedef}`));
+      }
+    }
+    try {
+      await rm(kaynak, { recursive: true, force: true, maxRetries: 3 });
+    } catch (silmeHatasi: unknown) {
+      ikincil.push(silmeHatasi);
+    }
+    try {
+      await secenek.eskileriSil(eskiDizinler.filter((yol) => yol !== korunan));
+    } catch (silmeHatasi: unknown) {
+      ikincil.push(silmeHatasi);
+    }
+    if (ikincil.length > 0) throw new PublishCleanupFailed(hata, ikincil, korunan);
+    throw hata;
+  }
 }
 
 function jsonYaz(veri: unknown): string {
@@ -1538,6 +1729,27 @@ export class KobayDizini {
     kimlikDogrula(paket.result.runId, 'runId');
 
     const hataKoku = this.yol('failure');
+    const reddet = (yol: string, sebep: string): Error => new UnsafeBundlePath(yol, sebep);
+    // `.kobay` ve (varsa) `failure` symlink ya da `.kobay` dışı olmamalı; üst
+    // dizin silinmiş ya da hiç gelmemiş olabilir, doğrulamadan sonra açılır.
+    await guvenliKokuBul(this.kok, 'failure', reddet);
+    await mkdir(hataKoku, { recursive: true });
+    // Aynı test kimliği için yazan kobay çağrıları kilitle sıraya girer (en iyi
+    // çaba). Güvenlik kilide değil, aşağıdaki fail-closed yol denetimlerine dayanır.
+    const kilit = await paketKilidiniAl({ kobayKoku: this.kok, ad: 'failure', testId: paket.testId, reddet });
+    try {
+      return await this.hataPaketiniKilitAltindaYaz(paket, ekDosyalar, kilit);
+    } finally {
+      await kilit.birak();
+    }
+  }
+
+  private async hataPaketiniKilitAltindaYaz(
+    paket: HataPaketi,
+    ekDosyalar: Array<{ kaynak: string; hedefAd: string; icerik?: string }>,
+    kilit: PaketKilidi,
+  ): Promise<string> {
+    const hataKoku = this.yol('failure');
     const paketDizini = this.hataPaketiYolu(paket.testId);
     // Eski paket `rm -r` ile silineceği için `.kobay`, `failure` ve `<testId>`
     // symlink ya da `.kobay` dışı olmamalı (failure-out ile aynı disiplin).
@@ -1545,58 +1757,53 @@ export class KobayDizini {
     const rastgele = randomUUID();
     const geciciDizin = altYol(hataKoku, `.tmp-${paket.testId}-${rastgele}`);
     const partialYolu = altYol(geciciDizin, '.partial');
-    // Üst dizin silinmiş ya da hiç gelmemiş olabilir; recursive:false yalnız
-    // geçici dizinin benzersizliğini korumak için, üstü kendimiz açıyoruz.
-    await mkdir(hataKoku, { recursive: true });
+    // recursive:false yalnız geçici dizinin benzersizliğini korumak için.
     await mkdir(geciciDizin, { recursive: false });
-    await yazAtomik(partialYolu, '');
-
-    for (const ek of ekDosyalar) {
-      guvenliAd(ek.hedefAd);
-      // `icerik` verilmişse (maskelenmiş metin kanıtı) o yazılır; yoksa bayt bayt kopya.
-      await yazAtomik(altYol(geciciDizin, ek.hedefAd), ek.icerik ?? await readFile(ek.kaynak));
+    // Hazırlık yarıda düşerse (ek okunamadı, disk doldu…) geçici klasör kalmasın.
+    try {
+      await yazAtomik(partialYolu, '');
+      for (const ek of ekDosyalar) {
+        guvenliAd(ek.hedefAd);
+        // `icerik` verilmişse (maskelenmiş metin kanıtı) o yazılır; yoksa bayt bayt kopya.
+        await yazAtomik(altYol(geciciDizin, ek.hedefAd), ek.icerik ?? await readFile(ek.kaynak));
+      }
+      await yazAtomik(altYol(geciciDizin, 'failure.json'), jsonYaz(paket));
+      await yazAtomik(altYol(geciciDizin, 'code.ts'), paket.code);
+      await yazAtomik(altYol(geciciDizin, 'steps.json'), jsonYaz(paket.steps));
+      await yazAtomik(altYol(geciciDizin, 'meta.json'), jsonYaz({
+        snapshotId: paket.snapshotId,
+        testId: paket.testId,
+        runId: paket.runId,
+        writtenAt: new Date().toISOString(),
+      }));
+      await unlink(partialYolu);
+    } catch (hata: unknown) {
+      return geciciyiSilipFirlat(geciciDizin, hata);
     }
-    await yazAtomik(altYol(geciciDizin, 'failure.json'), jsonYaz(paket));
-    await yazAtomik(altYol(geciciDizin, 'code.ts'), paket.code);
-    await yazAtomik(altYol(geciciDizin, 'steps.json'), jsonYaz(paket.steps));
-    await yazAtomik(altYol(geciciDizin, 'meta.json'), jsonYaz({
-      snapshotId: paket.snapshotId,
-      testId: paket.testId,
-      runId: paket.runId,
-      writtenAt: new Date().toISOString(),
-    }));
-    await unlink(partialYolu);
 
-    const eskiDizinler: string[] = [];
-    for (let deneme = 0; deneme < 10; deneme += 1) {
+    const eskileriSil = (yollar: string[]): Promise<void> => eskiDizinleriSil({
+      kobayKoku: this.kok,
+      ad: 'failure',
+      yollar,
+      reddet: (yol, sebep) => new UnsafeBundlePath(yol, sebep),
+    });
+    const eskiDizinler = await klasoruYayimla({
+      kaynak: geciciDizin,
+      hedef: paketDizini,
       // Ad, kenara alınma anını taşır: rename dizinin mtime'ını yenilemez, budama
       // yaşı bu addan okur ki geri alma için bekleyen taze kopya "eski" sayılmasın.
-      const eskiDizin = altYol(hataKoku, `.stale-${paket.testId}-${Date.now()}-${randomUUID()}`);
-      try {
-        await rename(paketDizini, eskiDizin);
-        eskiDizinler.push(eskiDizin);
-      } catch (hata: unknown) {
-        if (!(typeof hata === 'object' && hata !== null && 'code' in hata && hata.code === 'ENOENT')) throw hata;
-      }
-
-      try {
-        await rename(geciciDizin, paketDizini);
-      } catch (hata: unknown) {
-        if (typeof hata === 'object' && hata !== null && 'code' in hata && (hata.code === 'EEXIST' || hata.code === 'ENOTEMPTY')) {
-          continue;
-        }
-        const geriYuklenecek = eskiDizinler.at(-1);
-        if (geriYuklenecek !== undefined) await rename(geriYuklenecek, paketDizini).catch(() => undefined);
-        throw hata;
-      }
-      // Denetim ile taşıma arasında yol symlink'e çevrilmiş olabilir: `rm` hangi
-      // klasörleri sileceğini bilmeden çalışmasın, önce yol yeniden doğrulanır.
-      // Doğrulama düşerse eskiler silinmez; iz kalır ama dışarısı silinmez.
-      await hataPaketiYolunuDenetle(this, paket.testId);
-      await Promise.all(eskiDizinler.map((yol) => rm(yol, { recursive: true, force: true })));
-      return paketDizini;
-    }
-    throw new Error(`Failure bundle could not be published: ${paket.testId}`);
+      eskiYolu: () => altYol(hataKoku, `.stale-${paket.testId}-${Date.now()}-${randomUUID()}`),
+      eskileriSil,
+      sahiplikDenetle: () => kilit.dogrula(),
+      tukendi: () => new Error(`Failure bundle could not be published: ${paket.testId}`),
+    });
+    // Denetim ile taşıma arasında yol symlink'e çevrilmiş olabilir: yayımlanan
+    // yol yeniden doğrulanır, sonra silinecek eski klasörlerin her biri ayrıca
+    // doğrulanır. Doğrulama düşerse eskiler silinmez; iz kalır ama dışarısı silinmez.
+    await hataPaketiYolunuDenetle(this, paket.testId);
+    if (eskiDizinler.length > 0) await kilit.dogrula();
+    await eskileriSil(eskiDizinler);
+    return paketDizini;
   }
 
   async hataPaketiOku(testId: string): Promise<HataPaketi> {
@@ -1635,45 +1842,48 @@ export class KobayDizini {
    * kalırsa var olan klasöre dokunulmamış olur.
    */
   private async hataPaketiniYerineKoy(testId: string, hedef: string): Promise<void> {
+    const reddet = (yol: string, sebep: string): Error => new UnsafeOutputPath(yol, sebep);
+    await this.cikisKokunuHazirla(reddet);
+    // `failure/` ile aynı kilit: aynı testin kopyalayıcıları sıraya girer (en iyi çaba).
+    const kilit = await paketKilidiniAl({ kobayKoku: this.kok, ad: 'failure-out', testId, reddet });
+    try {
+      await this.hataPaketiniKilitAltindaYerineKoy(testId, hedef, kilit);
+    } finally {
+      await kilit.birak();
+    }
+  }
+
+  private async hataPaketiniKilitAltindaYerineKoy(testId: string, hedef: string, kilit: PaketKilidi): Promise<void> {
     const cikisKoku = await this.varsayilanCikisiDogrula(hedef);
     const geciciDizin = altYol(cikisKoku, `.tmp-${testId}-${randomUUID()}`);
     await mkdir(geciciDizin, { recursive: false });
     try {
       await this.paketDosyalariniKopyala(testId, geciciDizin);
     } catch (hata: unknown) {
-      await rm(geciciDizin, { recursive: true, force: true });
-      throw hata;
+      await geciciyiSilipFirlat(geciciDizin, hata);
     }
 
-    const eskiDizinler: string[] = [];
-    for (let deneme = 0; deneme < 10; deneme += 1) {
-      const eskiDizin = altYol(cikisKoku, `.stale-${testId}-${randomUUID()}`);
-      try {
-        await rename(hedef, eskiDizin);
-        eskiDizinler.push(eskiDizin);
-      } catch (hata: unknown) {
-        if (hataKodu(hata) !== 'ENOENT') throw hata;
-      }
-
-      try {
-        await rename(geciciDizin, hedef);
-      } catch (hata: unknown) {
-        const kod = hataKodu(hata);
-        if (kod === 'EEXIST' || kod === 'ENOTEMPTY') continue;
-        const geriYuklenecek = eskiDizinler.at(-1);
-        if (geriYuklenecek !== undefined) await rename(geriYuklenecek, hedef).catch(() => undefined);
-        await rm(geciciDizin, { recursive: true, force: true });
-        throw hata;
-      }
-      // Denetim ile taşıma arasında yol symlink'e çevrilmiş olabilir: `rm` hangi
-      // klasörleri sileceğini bilmeden çalışmasın, önce yol yeniden doğrulanır.
-      // Doğrulama düşerse eskiler silinmez; iz kalır ama dışarısı silinmez.
-      await this.varsayilanCikisiDogrula(hedef);
-      await Promise.all(eskiDizinler.map((yol) => rm(yol, { recursive: true, force: true })));
-      return;
-    }
-    await rm(geciciDizin, { recursive: true, force: true });
-    throw new Error(`Failure bundle could not be copied: ${testId}`);
+    const eskileriSil = (yollar: string[]): Promise<void> => eskiDizinleriSil({
+      kobayKoku: this.kok,
+      ad: 'failure-out',
+      yollar,
+      reddet: (yol, sebep) => new UnsafeOutputPath(yol, sebep),
+    });
+    const eskiDizinler = await klasoruYayimla({
+      kaynak: geciciDizin,
+      hedef,
+      // `failure/` ile aynı biçim: ad kenara alınma anını taşır.
+      eskiYolu: () => altYol(cikisKoku, `.stale-${testId}-${Date.now()}-${randomUUID()}`),
+      eskileriSil,
+      sahiplikDenetle: () => kilit.dogrula(),
+      tukendi: () => new Error(`Failure bundle could not be copied: ${testId}`),
+    });
+    // Denetim ile taşıma arasında yol symlink'e çevrilmiş olabilir: yayımlanan
+    // yol yeniden doğrulanır, sonra silinecek eski klasörlerin her biri ayrıca
+    // doğrulanır. Doğrulama düşerse eskiler silinmez; iz kalır ama dışarısı silinmez.
+    await this.varsayilanCikisiDogrula(hedef);
+    if (eskiDizinler.length > 0) await kilit.dogrula();
+    await eskileriSil(eskiDizinler);
   }
 
   /**
@@ -1685,35 +1895,41 @@ export class KobayDizini {
    * üstündeki symlink'ler (macOS'ta `/var` → `/private/var`) sorun değildir;
    * karşılaştırma `.kobay`'ın gerçek yoluna göre yapılır.
    */
-  private async varsayilanCikisiDogrula(hedef: string): Promise<string> {
+  /**
+   * `.kobay` doğrulanır, `failure-out` yoksa açılır ve kökün gerçek yolu
+   * döndürülür; kök symlink ya da `.kobay` dışıysa reddedilir.
+   */
+  private async cikisKokunuHazirla(reddet: (yol: string, sebep: string) => Error): Promise<string> {
     const kobayDurumu = await lstat(this.kok);
     if (kobayDurumu.isSymbolicLink() || !kobayDurumu.isDirectory()) {
-      throw new UnsafeOutputPath(this.kok, '.kobay is not a directory, or is a symlink');
+      throw reddet(this.kok, '.kobay is not a directory, or is a symlink');
     }
-
     const cikisKoku = this.yol('failure-out');
     await mkdir(cikisKoku).catch((hata: unknown) => {
       if (hataKodu(hata) !== 'EEXIST') throw hata;
     });
-    const cikisDurumu = await lstat(cikisKoku);
-    if (cikisDurumu.isSymbolicLink() || !cikisDurumu.isDirectory()) {
-      throw new UnsafeOutputPath(cikisKoku, 'failure-out is not a directory, or is a symlink');
-    }
-    const gercekCikis = await realpath(cikisKoku);
-    if (gercekCikis !== join(await realpath(this.kok), 'failure-out')) {
-      throw new UnsafeOutputPath(cikisKoku, 'its real path is not under .kobay');
-    }
+    const gercekCikis = await guvenliKokuBul(this.kok, 'failure-out', reddet);
+    // Az önce açıldı; arada silindiyse yol güvenli sayılmaz, yeniden denensin.
+    if (gercekCikis === null) throw reddet(cikisKoku, 'failure-out vanished while being checked');
+    return gercekCikis;
+  }
 
-    const hedefDurumu = await lstat(hedef).catch((hata: unknown) => {
-      if (hataKodu(hata) === 'ENOENT') return null;
-      throw hata;
+  private async varsayilanCikisiDogrula(hedef: string): Promise<string> {
+    const reddet = (yol: string, sebep: string): Error => new UnsafeOutputPath(yol, sebep);
+    const cikisKoku = this.yol('failure-out');
+    const gercekCikis = await this.cikisKokunuHazirla(reddet);
+    if (dirname(hedef) !== cikisKoku) throw reddet(hedef, 'it is not directly under .kobay/failure-out');
+
+    // Aynı test için eşzamanlı başka bir kopyalayıcı hedefi `.stale-*` adına
+    // taşıyabilir; kardeş ad ya da ENOENT yalnız yeniden bakış başlatır.
+    await kokCocugunuDenetle({
+      kok: cikisKoku,
+      gercekKok: gercekCikis,
+      ad: basename(hedef),
+      reddet,
+      symlinkSebebi: 'the destination directory is a symlink',
+      disaridaSebebi: 'its real path is not under .kobay/failure-out',
     });
-    if (hedefDurumu !== null && hedefDurumu.isSymbolicLink()) {
-      throw new UnsafeOutputPath(hedef, 'the destination directory is a symlink');
-    }
-    if (hedefDurumu !== null && await realpath(hedef) !== join(gercekCikis, basename(hedef))) {
-      throw new UnsafeOutputPath(hedef, 'its real path is not under .kobay/failure-out');
-    }
     return cikisKoku;
   }
 

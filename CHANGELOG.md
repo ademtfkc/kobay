@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.1] - 2026-09-29
+## [0.2.1] - 2026-10-02
 
 ### Windows
 
@@ -91,9 +91,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the rollback copy of an old bundle. Flat files in `.kobay/failure-out/` with a
   known evidence name are only removed once older than `--older-than-days`;
   newer ones are kept and listed under `skipped` with reason `too-recent`.
-- Two concurrent writes of the same failure bundle no longer fail with `ENOENT`
-  during the post-rename safety check; the check re-inspects a path that
-  vanished mid-check and still rejects it if it came back as a symlink.
+- Concurrent kobay commands writing the same failure bundle (or copying it to
+  `failure-out`) now queue on a per-test lock file (`.lock-<testId>` inside
+  `.kobay/failure/` or `.kobay/failure-out/`), so they normally do not move
+  the bundle under each other while it is checked and published. This
+  addresses the false `UnsafeBundlePath` / `UnsafeOutputPath`, `ENOENT` and
+  Windows `EBADF` failures seen when two writers raced. The lock is
+  best-effort ordering, not the safety boundary: safety still rests on the
+  fail-closed path checks (symlinks and anything outside the folder are
+  rejected, set-aside folders are verified before they are deleted, a check
+  that keeps seeing a moving path gives up with an error that keeps the
+  original code).
+  A lock is taken over only when its process is gone, it is an unreleased
+  leftover of the same long-running process, or it is unreadable and old; a
+  live command's lock is never taken over, and a waiting write fails after
+  15 seconds with `BundleLockTimeout` naming the lock file and what to do.
+  If a takeover after a crash, or a lock whose writer stalled before writing
+  it, races with other writers, ordering can break. A writer checks that it
+  still holds the lock before each irreversible step (publishing, deleting
+  set-aside folders); one that has lost it fails with `BundleLockLost` (or
+  `BundleLockConflict`) before that next step, possibly after it has already
+  set the old bundle aside or published, and the published bundle stays
+  complete. A taken-over lock that may still belong to a live writer is kept
+  under a `.lock-<testId>-takeover-*` name rather than deleted. A symlink or
+  folder at the lock name is rejected and never followed.
+- On Windows, a write that finds the destination occupied (for example by an
+  older kobay that does not take the lock) no longer fails with `EPERM`; it
+  retries. A briefly locked folder (when moving the old one aside, publishing
+  or putting it back) is retried for up to about a second; a lock that lasts
+  longer still fails the write with the original `EPERM`, `EACCES` or `EBUSY`.
+  A write that gives up removes its temporary folder and puts the last complete
+  previous bundle back. If that copy cannot be put back, or the destination
+  holds something other than a complete bundle, the copy is kept in its
+  `.stale-*` folder on purpose and the write fails with `PublishCleanupFailed`
+  naming where it is; a `.tmp-*` or `.stale-*` folder whose clean-up fails is
+  also left in place and reported in that error.
 
 ### Security
 
