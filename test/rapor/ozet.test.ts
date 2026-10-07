@@ -139,7 +139,8 @@ describe('ozetMarkdown (kobay test report --summary)', () => {
     expect(detaylar(kucuk)).toHaveLength(2);
   });
 
-  it('a table too long on its own: names shrink first, then rows are cut with an explicit note, in linear-ish time', () => {
+  // Generous timeout for slow shared CI runners (Windows took ~50 s); the guard is the attempt counter, not time.
+  it('a table too long on its own: names shrink first, then rows are cut with an explicit note, with a logarithmic number of fit attempts', () => {
     const uzunAd = 'N'.repeat(200);
     const orta = Array.from({ length: 500 }, (_d, i) => test_(i, { id: `t_${String(i).padStart(8, '0')}`, name: `${uzunAd} ${i}`, verdict: 'passed', failureKind: undefined }));
     const md1 = ozetMarkdown(girdi(orta));
@@ -148,15 +149,18 @@ describe('ozetMarkdown (kobay test report --summary)', () => {
     expect(md1.match(/^\| t\\_/gm)).toHaveLength(500);
 
     const cok = Array.from({ length: 3000 }, (_d, i) => test_(i, { id: `t_${String(i).padStart(8, '0')}`, name: `${uzunAd} ${i}` }));
-    const bas = Date.now();
-    const md2 = ozetMarkdown(girdi(cok));
-    expect(Date.now() - bas).toBeLessThan(5_000);
+    // Deterministic guard instead of a wall-clock limit (CI runners are too noisy): the binary
+    // search must stay logarithmic. A linear scan would need about one build per row (~3000).
+    let kurulum = 0;
+    const md2 = ozetMarkdown(girdi(cok, { kurulumIzleyici: () => { kurulum += 1; } }));
+    expect(kurulum).toBeGreaterThan(0);
+    expect(kurulum).toBeLessThanOrEqual(40);
     expect(md2.length).toBeLessThanOrEqual(OZET_SINIRI);
     const satir = md2.match(/^\| t\\_/gm)?.length ?? 0;
     expect(satir).toBeGreaterThan(100);
     expect(md2).toContain(`Table truncated: ${3000 - satir} rows omitted — see the report artifact.`);
     expect(md2).toContain('| 0 | 3000 | 0 | 0 | 0 |');
-  });
+  }, 120_000);
 
   it('masks secrets and replaces local paths in the test name and in the prompts', () => {
     const testler = [

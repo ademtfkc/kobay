@@ -36,6 +36,8 @@ export interface OzetGirdisi {
   maxIstem?: number;
   /** Toplam karakter sınırı; varsayılan `OZET_SINIRI` (testler küçük sınır verebilir). */
   sinir?: number;
+  /** Yalnız test için: özet her kurulduğunda (sığma denemesi) bir kez çağrılır. */
+  kurulumIzleyici?: () => void;
 }
 
 /** Satır sonlarını boşluğa çevirip uzun değeri kısaltır. */
@@ -138,6 +140,7 @@ export function ozetMarkdown(g: OzetGirdisi): string {
     : istemBlogu(`Fix all ${dikkatSayisi} tests that need attention with your coding agent`, g.fixAllPrompt);
 
   const kur = (tablo: string[], istemSayisi: number, hepsi: boolean, kesildi: boolean): string => {
+    g.kurulumIzleyici?.();
     const parcalar = [bas, tablo.join('\n')];
     const secilen = istemBloklari.slice(0, istemSayisi);
     if (secilen.length > 0) parcalar.push(secilen.join('\n\n'));
