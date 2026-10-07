@@ -2,7 +2,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', '.kobay/**', 'test/kobay-demo/**', 'test/sahte-cli/**'] },
+  { ignores: ['dist/**', 'node_modules/**', '.kobay/**', 'test/kobay-demo/**', 'test/sahte-cli/**', 'reports/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -32,7 +32,7 @@ import {
 } from '../cli/komutlar/ortak.js';
 import type { KomutSonucu } from '../cli/komut.js';
 import { CIKIS } from '../cli/cikis.js';
-import { KobayDizini } from '../depo/index.js';
+import { KobayDizini, adresKimligiGizle, metindekiKimligiGizle } from '../depo/index.js';
 
 interface McpAyarlari {
   cwd: string;
@@ -64,7 +64,11 @@ function sonucDon(sonuc: KomutSonucu): {
 } {
   const aracHatasi = sonuc.exitCode !== CIKIS.GECTI && sonuc.exitCode !== CIKIS.DUSTU;
   const yanit = {
-    content: [{ type: 'text' as const, text: JSON.stringify(sonuc.json) ?? 'null' }] as [{ type: 'text'; text: string }],
+    // Yalnız hata zarfında mesaj metni arındırılır; başarılı sonuç gövdesi (makine sözleşmesi) aynen kalır.
+    content: [{
+      type: 'text' as const,
+      text: aracHatasi ? metindekiKimligiGizle(JSON.stringify(sonuc.json) ?? 'null') : JSON.stringify(sonuc.json) ?? 'null',
+    }] as [{ type: 'text'; text: string }],
     ...(aracHatasi ? { isError: true as const } : {}),
   };
   return yanit;
@@ -72,7 +76,7 @@ function sonucDon(sonuc: KomutSonucu): {
 
 function hataDon(hata: unknown): ReturnType<typeof sonucDon> {
   const mesaj = hata instanceof Error ? hata.message : String(hata);
-  return { content: [{ type: 'text', text: JSON.stringify({ error: mesaj }) }], isError: true };
+  return { content: [{ type: 'text', text: JSON.stringify({ error: metindekiKimligiGizle(mesaj) }) }], isError: true };
 }
 
 async function aracCalistir(islem: () => Promise<KomutSonucu>): Promise<ReturnType<typeof sonucDon>> {
@@ -159,12 +163,12 @@ function girisBilgisi(
   try {
     izinliOrigin = new URL(izinli).origin;
   } catch {
-    throw new Error(`KOBAY_LOGIN_ORIGIN is not a valid URL: ${izinli}`);
+    throw new Error(`KOBAY_LOGIN_ORIGIN is not a valid URL: ${adresKimligiGizle(izinli)}`);
   }
   try {
     hedefOrigin = new URL(url).origin;
   } catch {
-    throw new Error(`Invalid URL: ${url}`);
+    throw new Error(`Invalid URL: ${adresKimligiGizle(url)}`);
   }
   if (hedefOrigin !== izinliOrigin) {
     throw new Error(

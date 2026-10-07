@@ -179,6 +179,10 @@ const GITIGNORE_SATIRLARI = [
   'test-results/',
   'playwright-report/',
   'blob-report/',
+  // HTML koşu raporu: maskesiz ekran görüntüsü kopyalarını taşır. `.kobay-report-*`
+  // yayım sırasında yanında açılan geçici/kenara alınan klasördür.
+  'report/',
+  '.kobay-report-*',
 ];
 
 /**
@@ -461,11 +465,17 @@ async function geciciyiSilipFirlat(gecici: string, hata: unknown): Promise<never
  * temizlik de düşerse sessizce yutulmaz: `PublishCleanupFailed` fırlatılır,
  * geri konamayan kopya silinmez.
  */
-async function klasoruYayimla(secenek: {
+export async function klasoruYayimla(secenek: {
   kaynak: string;
   hedef: string;
   eskiYolu: () => string;
   eskileriSil: (yollar: string[]) => Promise<void>;
+  /**
+   * Vazgeçme yolunda "geri konacak tam kopya" sınaması. Verilmezse hata paketi
+   * ölçütü (`paketTamamMi`) kullanılır; başka tür klasör yayımlayan çağıran
+   * (ör. HTML rapor) kendi ölçütünü verir.
+   */
+  tamamMi?: (yol: string) => Promise<boolean>;
   /**
    * Hedefe yayım rename'inden hemen önce kilidin hâlâ bizde olduğunu doğrular;
    * fırlatırsa yayım yapılmaz, vazgeçme yolu (kendi geçici klasörünü silme,
@@ -519,7 +529,8 @@ async function klasoruYayimla(secenek: {
     let korunan: string | undefined;
     // Kenara alınanlar arasında son tam paket geri konacak olandır; turlarda
     // kenara alınan sonrakiler rakiplerin bıraktığı (belki yarım) klasörler olabilir.
-    const tamamlar = await Promise.all(eskiDizinler.map(paketTamamMi));
+    const tamamMi = secenek.tamamMi ?? paketTamamMi;
+    const tamamlar = await Promise.all(eskiDizinler.map(tamamMi));
     const geriKonacak = eskiDizinler.findLast((_yol, sira) => tamamlar[sira] === true) ?? eskiDizinler.at(-1);
     if (geriKonacak !== undefined) {
       let geriKondu = false;
@@ -536,7 +547,7 @@ async function klasoruYayimla(secenek: {
       }
       // Hedefte tam bir paket (başka yazıcınınki) yoksa son sağlam kopya silinmez:
       // hedef boş, yarım ya da tanınmayan bir klasörse kenarda korunur ve yeri bildirilir.
-      if (!geriKondu && !(await paketTamamMi(hedef))) {
+      if (!geriKondu && !(await tamamMi(hedef))) {
         korunan = geriKonacak;
         ikincil.push(geriKoymaHatasi ?? new Error(`Destination is not a complete bundle: ${hedef}`));
       }
@@ -626,13 +637,13 @@ function guvenliAd(ad: string): void {
   }
 }
 
-function kimlikDogrula(kimlik: string, tur: 'testId' | 'runId'): void {
+export function kimlikDogrula(kimlik: string, tur: 'testId' | 'runId'): void {
   const desen = tur === 'testId' ? TEST_KIMLIGI : KOSU_KIMLIGI;
   if (!desen.test(kimlik)) throw new InvalidId(kimlik, tur);
 }
 
 /** Çözümlenen yolun, beklenen depo alt dizininden dışarı çıkmadığını doğrular. */
-function altYol(kok: string, ...parcalar: string[]): string {
+export function altYol(kok: string, ...parcalar: string[]): string {
   const cozulmusKok = resolve(kok);
   const cozulmusYol = resolve(cozulmusKok, ...parcalar);
   const fark = relative(cozulmusKok, cozulmusYol);

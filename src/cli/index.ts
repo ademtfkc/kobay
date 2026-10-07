@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import type { Readable, Writable } from 'node:stream';
 import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
+import { metindekiKimligiGizle } from '../depo/adres.js';
 import type { BeyinAyari, Kimlik } from '../depo/index.js';
 import { CIKIS } from './cikis.js';
 import { ciktiYaz } from './cikti.js';
@@ -31,6 +32,7 @@ import {
   testGet,
   testList,
   testRefresh,
+  testReport,
   testRerun,
   testResult,
   testRun,
@@ -94,6 +96,11 @@ function pozitifOndalik(deger: string): number {
   return sayi;
 }
 
+function negatifOlmayanTamsayi(deger: string): number {
+  if (!/^\d{1,4}$/.test(deger.trim())) throw new InvalidArgumentError('Must be a whole number from 0 to 9999.');
+  return Number.parseInt(deger, 10);
+}
+
 async function acikSor(soru: string, akislar: CliAkislari): Promise<string> {
   const arayuz = createInterface({ input: akislar.input, output: akislar.stderr });
   try {
@@ -135,8 +142,8 @@ export function programOlustur(
     .showHelpAfterError()
     .exitOverride()
     .configureOutput({
-      writeOut: (metin) => akislar.stdout.write(metin),
-      writeErr: (metin) => akislar.stderr.write(metin),
+      writeOut: (metin) => akislar.stdout.write(metindekiKimligiGizle(metin)),
+      writeErr: (metin) => akislar.stderr.write(metindekiKimligiGizle(metin)),
     });
 
   const calistir = async (islem: Promise<KomutSonucu>): Promise<void> => {
@@ -298,11 +305,18 @@ export function programOlustur(
     .description('runs tests; generates missing code with the brain and prepares a failure bundle when one fails')
     .option('--all', 'run all saved tests')
     .option('--rerun', 'run existing code without generating it')
-    .action(async (ids: string[], secenekler: { all?: boolean; rerun?: boolean }) => calistir(testRun({
+    .option(
+      '--no-analysis',
+      'never call the brain (for CI): run existing code only; a test without code is blocked,'
+      + ' and a failure gets an evidence bundle with failure kind "unknown"',
+    )
+    .action(async (ids: string[], secenekler: { all?: boolean; rerun?: boolean; analysis?: boolean }) => calistir(testRun({
       cwd: cwd(),
       ...(ids.length === 0 ? {} : { ids }),
       ...(secenekler.all === undefined ? {} : { all: secenekler.all }),
       ...(secenekler.rerun === undefined ? {} : { rerun: secenekler.rerun }),
+      // Commander `--no-analysis` için `analysis: false` verir; varsayılan true.
+      ...(secenekler.analysis === false ? { noAnalysis: true } : {}),
     })));
   test.command('rerun <id>')
     .description('runs a test with its existing code without generating it again')
@@ -320,6 +334,25 @@ export function programOlustur(
     .action(async (id: string, secenekler: { history?: boolean }) => calistir(testResult({
       cwd: cwd(), id,
       ...(secenekler.history === undefined ? {} : { history: secenekler.history }),
+    })));
+  test.command('report [ids...]')
+    .description('writes a static HTML report of the latest run of each selected test (does not run tests)')
+    .option('--all', 'report all saved tests')
+    .option('--out <dir>', 'destination directory (default: .kobay/report); a non-empty directory is replaced only if it holds a kobay report')
+    .option(
+      '--summary <path>',
+      'also write a GitHub-flavored Markdown summary (for a pull request comment or job summary) to this file',
+    )
+    .option('--max-prompts <n>', 'maximum number of fix prompts in the --summary file (default: 5)', negatifOlmayanTamsayi)
+    .action(async (ids: string[], secenekler: {
+      all?: boolean; out?: string; summary?: string; maxPrompts?: number;
+    }) => calistir(testReport({
+      cwd: cwd(),
+      ...(ids.length === 0 ? {} : { ids }),
+      ...(secenekler.all === undefined ? {} : { all: secenekler.all }),
+      ...(secenekler.out === undefined ? {} : { out: secenekler.out }),
+      ...(secenekler.summary === undefined ? {} : { summary: secenekler.summary }),
+      ...(secenekler.maxPrompts === undefined ? {} : { maxPrompts: secenekler.maxPrompts }),
     })));
   const failure = test.command('failure').description('get the evidence bundle for a failed run');
   failure.command('get <id>')

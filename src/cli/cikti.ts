@@ -1,4 +1,5 @@
 import type { Writable } from 'node:stream';
+import { metindekiKimligiGizle } from '../depo/adres.js';
 import type { KomutSonucu } from './komut.js';
 
 export interface CiktiZarfi {
@@ -98,6 +99,11 @@ function insanCiktisi(veri: unknown): string {
   return `${JSON.stringify(veri, null, 2)}\n`;
 }
 
+/** Doğrudan stderr'e düşen uyarılar da insan çıktısı gibi adres kimliğinden arındırılır. */
+export function uyariYaz(metin: string, stderr: Writable = process.stderr): void {
+  stderr.write(metindekiKimligiGizle(metin));
+}
+
 export function ciktiYaz(
   sonuc: KomutSonucu,
   json: boolean,
@@ -108,11 +114,13 @@ export function ciktiYaz(
     stdout.write(`${JSON.stringify(ciktiZarfi(sonuc))}\n`);
     return;
   }
+  // İnsan modunda basılan her metin (hata mesajı ve kayıt dökümü dahil) adres kimliğinden arındırılır;
+  // `--output json` yukarıda aynen çıkar, makine sözleşmesi değişmez.
   if (sonuc.metin !== undefined) {
-    if (sonuc.exitCode === 0) stdout.write(`${sonuc.metin}\n`);
-    else stderr.write(`${sonuc.metin}\n`);
+    if (sonuc.exitCode === 0) stdout.write(`${metindekiKimligiGizle(sonuc.metin)}\n`);
+    else stderr.write(`${metindekiKimligiGizle(sonuc.metin)}\n`);
     return;
   }
-  if (sonuc.mesaj !== undefined) stderr.write(`${sonuc.mesaj}\n`);
-  if (sonuc.exitCode === 0) stdout.write(insanCiktisi(sonuc.json));
+  if (sonuc.mesaj !== undefined) stderr.write(`${metindekiKimligiGizle(sonuc.mesaj)}\n`);
+  if (sonuc.exitCode === 0) stdout.write(metindekiKimligiGizle(insanCiktisi(sonuc.json)));
 }

@@ -2,6 +2,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   FileNotFound,
+  adresKimligiGizle,
   KobayDizini,
   hataPaketiCikisYolu,
   type Harita,
@@ -148,6 +149,22 @@ export async function hataPaketiYoluDenetle(projeKoku: string, yol: string, alan
   await yolDenetle(projeKoku, yol, alan, 'kokDisiSerbest', HATA_PAKETI_DIZINI);
 }
 
+/** HTML raporun varsayılan klasörü; `.kobay` altında rapor için tek izinli yol. */
+export const RAPOR_DIZINI = ['.kobay', 'report'] as const;
+
+/**
+ * Rapor çıkış klasörünü denetler; `hataPaketiYoluDenetle` ile aynı kural ailesi:
+ * kök dışı serbest, gizli yol bileşeni yasak. `.kobay` altındaki tek istisna
+ * tam olarak `.kobay/report` (altı değil): oranın symlink denetimi yayımda
+ * yapılır. Dolu klasörün kobay raporu olup olmadığı yayım katmanında denetlenir.
+ */
+export async function raporYoluDenetle(projeKoku: string, yol: string, alan: string): Promise<void> {
+  const cozulmusKok = resolve(projeKoku);
+  const hedef = isAbsolute(yol) ? resolve(yol) : resolve(cozulmusKok, yol);
+  if (hedef === resolve(cozulmusKok, ...RAPOR_DIZINI)) return;
+  await yolDenetle(cozulmusKok, hedef, alan, 'kokDisiSerbest');
+}
+
 /**
  * Varsayılan hata paketi klasörü: `.kobay/failure-out/<id>`. Aynı test için her
  * çağrıda aynı yol; paket orada güvenle yenilenir, çöp klasör birikmez.
@@ -175,7 +192,7 @@ function kimlikHedefeUyar(kimlik: Kimlik, config: KobayConfig): void {
   } catch (hata: unknown) {
     if (!(hata instanceof CredentialOriginError)) throw hata;
     throw new PermissionError(
-      `${hata.message} Re-enter the credentials for this address: \`kobay project create --url ${config.baseUrl}`
+      `${hata.message} Re-enter the credentials for this address: \`kobay project create --url ${adresKimligiGizle(config.baseUrl)}`
       + ' --login --force` (use --login-url when the login page differs)',
     );
   }
@@ -197,7 +214,7 @@ export async function testOku(dizin: KobayDizini, id: string): Promise<TestKaydi
 async function hedefiDogrula(baseUrl: string): Promise<void> {
   if (await hedefAyaktaMi(baseUrl)) return;
   throw new TargetUnreachableError(
-    `Target app is not reachable: ${baseUrl}; start the app`
+    `Target app is not reachable: ${adresKimligiGizle(baseUrl)}; start the app`
     + ' or fix the address with `kobay project update --base-url <URL>`',
   );
 }
@@ -209,7 +226,7 @@ function agHatasiniCevir(hata: unknown, baseUrl: string): never {
   const metin = hata instanceof Error ? hata.message : String(hata);
   if (AG_HATASI_DESENI.test(metin)) {
     throw new TargetUnreachableError(
-      `Target app is not reachable: ${baseUrl}; start the app and run the command again`,
+      `Target app is not reachable: ${adresKimligiGizle(baseUrl)}; start the app and run the command again`,
     );
   }
   throw hata;

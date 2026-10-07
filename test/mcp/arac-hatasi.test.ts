@@ -130,4 +130,26 @@ describe('MCP isError yalnız gerçek araç hatalarında', () => {
       await baglanti.kapat();
     }
   });
+
+  it('hata zarfında adres kimliği maskelenir, başarı gövdesinde baseUrl ham kalır', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-kimlik-'));
+    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
+    await KobayDizini.ac(cwd, { baseUrl: kimlikli, beyin: { adaptor: 'sahte' } });
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const hata = await baglanti.istemci.callTool({
+        name: 'test_get', arguments: { id: 'http://admin:Hunter2Pass@host.test/x' },
+      });
+      expect(hata.isError).toBe(true);
+      const metin = JSON.stringify(govde(hata));
+      expect(metin).not.toContain('Hunter2Pass');
+      expect(metin).toContain('http://[redacted]@host.test/x');
+
+      const basari = await baglanti.istemci.callTool({ name: 'project_get', arguments: {} });
+      expect(basari.isError).toBeUndefined();
+      expect(govde(basari)).toMatchObject({ config: { baseUrl: kimlikli } });
+    } finally {
+      await baglanti.kapat();
+    }
+  });
 });

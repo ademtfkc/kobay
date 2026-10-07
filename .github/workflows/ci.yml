@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # macOS/Windows runners are billed at 10x/2x, so only the public repo gets them.
+        # The private mirror runs ubuntu only; the runner is never started there.
+        os: ${{ fromJSON(github.repository == 'ademtfkc/kobay' && '["ubuntu-latest","macos-latest","windows-latest"]' || '["ubuntu-latest"]') }}
         node: [22, 24]
     runs-on: ${{ matrix.os }}
     steps:
@@ -40,6 +42,8 @@ jobs:
 
   windows-duman:
     name: Windows smoke test
+    # Public repo only (Windows minutes are billed on the private mirror).
+    if: github.repository == 'ademtfkc/kobay'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -61,3 +65,75 @@ jobs:
         timeout-minutes: 10
         run: npm run duman
         shell: bash
+
+  action-smoke:
+    name: GitHub Action smoke test
+    runs-on: ubuntu-latest
+    # pull-requests: write lets the action post its PR comment (github-token defaults to github.token).
+    permissions:
+      contents: read
+      pull-requests: write
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack kobay from this commit (the action installs it instead of npm)
+        id: pack
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pkg"
+          npm pack --pack-destination "$RUNNER_TEMP/pkg" > /dev/null
+          tgz="$(ls "$RUNNER_TEMP"/pkg/*.tgz)"
+          echo "tgz=$tgz" >> "$GITHUB_OUTPUT"
+      - name: Start the demo app and create a project with one passing test
+        run: |
+          set -euo pipefail
+          node dist/cli/index.js demo --port 3000 > "$RUNNER_TEMP/demo.log" 2>&1 &
+          proje="$RUNNER_TEMP/kobay-proje"
+          mkdir -p "$proje"
+          node dist/cli/index.js project create --cwd "$proje" --url http://127.0.0.1:3000 --brain sahte
+          cat > "$proje/plan.json" <<'JSON'
+          {"type": "frontend", "name": "shows the login heading", "url": "/login", "planSteps": [
+            {"type": "action", "description": "Open the login page"},
+            {"type": "assertion", "description": "See the login heading"}]}
+          JSON
+          id="$(node dist/cli/index.js test create --cwd "$proje" --plan "$proje/plan.json" --output json \
+            | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d;}).on("end",()=>{process.stdout.write(JSON.parse(s).data.id);});')"
+          cat > "$proje/.kobay/tests/$id.spec.ts" <<'TS'
+          import { test, expect } from './_fixture';
+          test('shows the login heading', async ({ page }) => {
+            await test.step('0: Open the login page', async () => {
+              await page.goto('/login');
+            });
+            await test.step('1: See the login heading', async () => {
+              await expect(page.getByRole('heading', { name: 'Login' })).toBeVisible();
+            });
+          });
+          TS
+          # Same as a test generated locally with a brain and committed: status "ready", code version 1.
+          node -e 'const fs=require("fs");const y=process.argv[1];const t=JSON.parse(fs.readFileSync(y,"utf8"));t.status="ready";t.codeVersion=1;fs.writeFileSync(y,JSON.stringify(t,null,2)+"\n");' "$proje/.kobay/tests/$id.json"
+      - name: Run the action from this repository
+        id: kobay
+        uses: ./
+        with:
+          version: ${{ steps.pack.outputs.tgz }}
+          working-directory: ${{ runner.temp }}/kobay-proje
+          wait-timeout: "60"
+      - name: Check the action outputs
+        env:
+          KOBAY_EXIT: ${{ steps.kobay.outputs.exit-code }}
+          KOBAY_SUMMARY: ${{ steps.kobay.outputs.summary-path }}
+          KOBAY_REPORT: ${{ steps.kobay.outputs.report-dir }}
+        run: |
+          set -euo pipefail
+          test "$KOBAY_EXIT" = "0"
+          test -s "$KOBAY_SUMMARY"
+          head -n 1 "$KOBAY_SUMMARY" | grep -qx '<!-- kobay-report -->'
+          grep -q '| 1 | 0 | 0 | 0 | 0 |' "$KOBAY_SUMMARY"
+          test -f "$KOBAY_REPORT/index.html"
+          echo "action outputs OK"

@@ -92,6 +92,25 @@ describe('CLI çıktı sınırı', () => {
     }
   });
 
+  it('Commander hata çıktısında adres kimliği maskelenir (metin ve JSON modu)', async () => {
+    for (const bayrak of [[], ['--output', 'json']]) {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const cikti = metinTopla(stdout);
+      const hata = metinTopla(stderr);
+
+      const exitCode = await main([
+        'node', 'kobay', ...bayrak, 'project', 'create', '--url', 'http://uygulama.test',
+        '--brain', 'http://admin:Hunter2Pass@host.test',
+      ], { input: Readable.from([]), stdout, stderr });
+
+      expect(exitCode, bayrak.join(' ')).toBe(2);
+      expect(hata.oku(), bayrak.join(' ')).not.toContain('Hunter2Pass');
+      expect(hata.oku(), bayrak.join(' ')).toContain('http://[redacted]@host.test');
+      if (bayrak.length === 0) expect(cikti.oku()).not.toContain('Hunter2Pass');
+    }
+  });
+
   it('--output json ile stdouta yalnız ayrıştırılabilir tek JSON yazar', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'kobay-cli-cikti-'));
     const stdout = new PassThrough();

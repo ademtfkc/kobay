@@ -22,7 +22,7 @@ leave your machine to reach it; see [Cost and data](#cost-and-data).
 click buttons, submit forms and create records.
 
 [Status](#status) · [Requirements](#requirements) · [Install](#install) ·
-[Quick start](#quick-start) · [From your coding agent](#use-it-from-your-coding-agent) ·
+[Quick start](#quick-start) · [From your coding agent](#use-it-from-your-coding-agent) · [CI](#ci-github-actions) ·
 [How it works](#how-it-works) · [Commands](#commands) · [Output and failures](#output-and-failures) ·
 [Cost and data](#cost-and-data) · [`.kobay/`](#the-kobay-directory) · [Security](#security-model) ·
 [Limitations](#known-limitations) · [Roadmap](#roadmap) · [Development](#development)
@@ -413,6 +413,126 @@ origin. A login saved for another origin cannot be moved over MCP; run
 `kobay project create --url <URL> --login --force` in a terminal. Keep these
 variables out of `.mcp.json`, which is usually committed.
 
+## CI (GitHub Actions)
+
+kobay can run the tests you generated locally and committed in `.kobay/` on
+every pull request. CI has no brain: tests run with
+`kobay test run --no-analysis`, which never calls an LLM, so no API key or brain
+CLI is needed. The action then posts the result in three places:
+
+- the **job summary** of the workflow run,
+- one **pull request comment** with a counts table, one row per test and a
+  copy-ready **Fix with your coding agent** prompt for each failed, blocked or
+  inconclusive test (masked text only, no screenshots), updated in place on every
+  push,
+- the **`kobay-report` artifact**: the HTML report from `.kobay/report`.
+
+Generate and run the tests locally first (`kobay test run` with a brain), then
+commit `.kobay/` (the managed `.gitignore` keeps credentials, runs, failure
+bundles and the report out of git). Start your app in an earlier step; the
+action waits for it.
+
+```yaml
+name: kobay
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write   # only for the pull request comment
+
+jobs:
+  kobay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Start the app in the background
+        run: npm run dev > app.log 2>&1 &
+      - uses: ademtfkc/kobay@v0.3.0
+        with:
+          wait-for-url: http://localhost:3000
+```
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `version` | `latest` | `@ademtfkc/kobay` version to install; a path to a local `.tgz` also works. |
+| `node-version` | `22` | Node.js for `actions/setup-node`. |
+| `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
+| `tests` | empty | Space-separated test IDs; empty runs `--all`. |
+| `wait-for-url` | empty | Polled until the app answers with any HTTP status; empty uses the project's `baseUrl`. |
+| `wait-timeout` | `120` | Seconds to wait; then the step fails with exit code `3` ("target not reachable"). |
+| `install-browser-deps` | `true` | `kobay install-browser --with-deps` (Linux system libraries). |
+| `comment` | `true` | On `pull_request` events, create or update one sticky comment. |
+| `upload-report` | `true` | Upload `.kobay/report` as the `kobay-report` artifact. |
+| `max-prompts` | `5` | Fix prompts in the comment; the rest are counted in one line. |
+| `github-token` | `${{ github.token }}` | Used only to read and write the comment. |
+
+Outputs: `exit-code` (of `test run`), `report-dir`, `summary-path`.
+
+**Pass or fail.** The last step of the action exits with the exit code of
+`kobay test run`: `0` all passed, `1` a test failed, `3` a test was blocked (the
+app was not reachable, or a test has no generated code yet), `4` engine error.
+The report and comment are written first, so a red check still has its summary.
+With `--no-analysis` a failed test gets failure kind `unknown` and its evidence
+bundle is still written; run the test locally with a brain for the root-cause
+analysis. A test without generated code, or a draft whose plan changed after its
+code was generated, is `blocked` with the hint to run `kobay test run <ID>`
+locally and commit `.kobay/`; this blocked run is recorded, so the report counts
+it and its prompt says what to do. The action checks its inputs first
+(`wait-timeout` 1–3600 seconds, `wait-for-url` and the project's base URL must
+be `http(s)://`, test IDs only) and stops with exit code `2` otherwise.
+
+**The summary file.** The comment is the output of
+`kobay test report --summary <path> [--max-prompts <n>]`: GitHub-flavored
+Markdown that starts with `<!-- kobay-report -->` (the key used to find and
+update the comment), stays under 60,000 characters (the fix-all prompt is
+dropped first, then single prompts from the end; the table is kept), and holds
+text only: each value is secret-masked on its own, credentials in addresses
+become `[redacted]`, local paths become `[project]`, `[kobay]` and `~`, other
+absolute file paths (under `/opt`, `/usr`, `/tmp`, `C:\` …) become
+`[path]/<file name>` (app routes such as `/records/new` stay; app routes that start with a system root name, such as `/opt/x`, are also masked), table cells are escaped, and prompts sit in a
+fenced block longer than any backtick run inside them. `--summary` takes the
+same path rules as `--out`, and in addition it cannot point into `.kobay/` or
+into the report folder; a refused path exits `2`. The HTML report is still
+written.
+
+**Apps that need a login.** The action takes no username or password input, and
+`.kobay/credentials.json` and the session file are never committed. Without
+them, tests run signed out. To sign in, add a step before the action that saves
+the login from two repository secrets and explores once (this writes the
+session file in the CI checkout only):
+
+```yaml
+      - name: Sign kobay in
+        run: |
+          npx --yes @ademtfkc/kobay project create --force --url http://localhost:3000 --login --login-url http://localhost:3000/login
+          npx --yes @ademtfkc/kobay install-browser --with-deps
+          npx --yes @ademtfkc/kobay explore
+        env:
+          KOBAY_LOGIN_USER: ${{ secrets.KOBAY_LOGIN_USER }}
+          KOBAY_LOGIN_PASS: ${{ secrets.KOBAY_LOGIN_PASS }}
+```
+
+`project create --force` rewrites only the config (the brain settings are kept)
+and does not touch tests or runs; `explore` refreshes `map.json` in the
+checkout. Verified with the demo app: signed out the test failed, after these
+three commands it passed.
+
+**Forks and tokens.** Pull requests from forks get a read-only token: the action
+skips the comment with a warning and the job summary still has the report. Do
+not switch to `pull_request_target` to get around this: it runs the fork's code
+with your repository's secrets. The sticky comment is the one written by
+`github-actions[bot]` that starts with the marker; with your own
+`github-token` the comment is posted under that account and a new one is added
+on every run.
+
+**Artifact warning.** The HTML report contains unmasked screenshots; in a
+public repository workflow artifacts are visible to anyone who is signed in to
+GitHub. Set `upload-report: false` if that matters.
+
 ## How it works
 
 ```
@@ -439,7 +559,9 @@ adapts the plan steps, regenerates the code and runs it under the same test ID;
 
 ## Commands
 
-Verified against `kobay --help` and every subcommand's `--help` in 0.2.0.
+Verified against `kobay --help` and every subcommand's `--help` in 0.2.1;
+`test report`, `test run --no-analysis` and `test report --summary` are new and
+not in a release yet.
 
 | Command | What it does |
 | --- | --- |
@@ -458,14 +580,46 @@ Verified against `kobay --help` and every subcommand's `--help` in 0.2.0.
 | `test get <id>` | One test's record and plan steps. |
 | `test code get <id>` | Prints the generated Playwright code. |
 | `test delete <id>` | Deletes a test record and its generated code. |
-| `test run [ids...] [--all] [--rerun]` | Generates missing code, then runs. `--rerun` skips generation. |
+| `test run [ids...] [--all] [--rerun] [--no-analysis]` | Generates missing code, then runs. `--rerun` skips generation. `--no-analysis` (for CI) never calls the brain: it runs existing code only, a test without code (or a draft) is `blocked` (exit `3`), and a failure gets a bundle with failure kind `unknown`. |
 | `test rerun <id>` | Runs existing code without regenerating it. |
 | `test refresh <id> [--no-run]` | For `product_changed`: re-explore, adapt the plan, regenerate and run. |
 | `test result <id> [--history]` | Last run result, or every run still on disk. |
 | `test failure get <id> [--out <dir>]` | Copies the failure bundle. Default `.kobay/failure-out/<id>/`, refreshed in place. |
+| `test report [ids...] [--all] [--out <dir>] [--summary <path>] [--max-prompts <n>]` | Writes a static HTML report of each selected test's latest run (steps, screenshots, error, failure analysis, generated code). Reads only what is on disk; runs nothing. Default `.kobay/report/`, replaced as a whole each time. Exits `0` even when tests failed. `--summary` also writes a Markdown summary for a pull request comment (text only, at most `--max-prompts` fix prompts, default 5). |
 | `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Removes old runs, brain logs, stale failure bundles and known leftovers from older versions. Unknown `failure-out/` files are skipped. Never removes the last failed run or a current failure bundle. The CLI deletes by default; `--dry-run` only previews. `--max-mb` caps `runs/` (default 500), and `--older-than-days` sets the age threshold (default 7). |
 | `agent install --target <claude\|codex\|cursor>` | Installs the agent skill here; for `claude` also registers the MCP server in `.mcp.json`. |
 | `mcp` | Starts the stdio MCP server. |
+
+**HTML report.** `kobay test report --all` writes `.kobay/report/index.html`
+from the latest run of every test; open it in a browser. It opens with a summary
+(run bar, pass rate, total run time), puts failed, blocked and inconclusive tests
+first with their steps, screenshots and failure analysis, and folds passed tests
+away. Every test that needs attention carries a **Fix with your coding agent**
+prompt to paste into Claude Code, Codex or Cursor: it states the failure kind,
+quotes the error and analysis as untrusted data, and lists the kobay commands to
+get the evidence, fix and verify (`test failure get`, `test rerun`, or
+`test refresh` for `product_changed`). With two or more such tests the report
+also has one prompt that covers them all. Each quoted value is secret-masked on
+its own before it goes into the prompt, and error output longer than 2,000
+characters is cut, with a pointer to the full bundle. Click a prompt to select
+it, then copy.
+`--output json` returns the same prompts as `fixPrompts` and `fixAllPrompt`. The folder is
+self-contained (screenshots are copied in), so you can move it or upload it as a
+CI artifact. The page has no scripts and no external resources, and every text
+in it is secret-masked and HTML-escaped; the project root, kobay's own
+installation (stack frames) and your home directory are shown as `[project]`,
+`[kobay]` and `~`. **Screenshots are not redacted:**
+they show whatever your app displayed, so review them before sharing the report.
+With `--out <dir>` the report goes elsewhere (outside the project is allowed,
+dot-prefixed paths are not). A non-empty folder is replaced only if it is
+entirely a kobay report: a valid `kobay-report.json`, `index.html`, and nothing
+else but `assets/<runId>/step-<n>.png`. A single other entry (`notes.txt`,
+`.DS_Store`) makes the command exit `2` and name that entry, touching nothing.
+The old report is removed file by file, never with a recursive delete; anything
+unexpected is left in place and its path is printed. The report reads
+`.kobay/tests`, `runs`, `failure` and `config.json` without following symlinks
+or hard links: linked data is left out. A test whose run record cannot be read shows as `inconclusive` with a
+note; a test whose run folder is gone shows as `not run`.
 
 `prune --dry-run` prints a summary (example from a real run on a demo project):
 
@@ -630,6 +784,7 @@ All project state lives in `.kobay/` at your app's root:
 | `runs/r_*/` | One folder per run: `result.json`, step `.png`/`.html`, `console.json`, `network.json`, `trace.zip`. |
 | `failure/<testId>/` | Latest failure bundle per test, written atomically. |
 | `failure-out/<testId>/` | Default destination of `test failure get`, refreshed in place (git-ignored). |
+| `report/` | Latest HTML report from `test report`: `index.html`, `kobay-report.json` and `assets/<runId>/step-<n>.png` (git-ignored). |
 | `logs/` | Brain call logs. |
 | `playwright.config.ts` | Generated runner config. Edit it by hand and kobay leaves it alone, with a warning. |
 | `.credentials-txn` | Marker of a running credential change; `.stale-*` holds the set-aside copies. Both git-ignored. |
@@ -677,9 +832,12 @@ tests/_fixture.ts
 test-results/
 playwright-report/
 blob-report/
+report/
+.kobay-report-*
 ```
 
-`.eski-*` and `.kimlik-islemi*` are the 0.1 spellings, still listed so a
+`.kobay-report-*` is the temporary folder `test report` writes next to the
+report before swapping it in. `.eski-*` and `.kimlik-islemi*` are the 0.1 spellings, still listed so a
 leftover from an older version stays out of git. Commit the rest — config, map,
 tests — to share them with your team. The block is
 re-synced on every kobay command, so older projects pick up new rules
@@ -769,6 +927,10 @@ Read this before pointing kobay at anything that matters.
   when copied into the bundle, but screenshots and `trace.zip` cannot be: they
   may contain secrets visible on screen or in network traces, so treat the whole
   bundle as sensitive (`.kobay/failure-out/` is git-ignored).
+- **HTML report screenshots are not redacted.** `test report` masks and escapes
+  every text it writes, but copies step screenshots as they are. Do not publish
+  a report before looking at them. `.kobay/report/` is git-ignored; if you write
+  the report elsewhere with `--out`, git-ignore that folder too.
 - **Path limits.** File arguments (`--docs`, `--docs-path`, `--plan`; `docs`,
   `docsPath`, `planPath`, `out` over MCP) must stay inside the project; `..` and
   symlink escapes are rejected, as are paths under `.kobay/` or with any
@@ -788,6 +950,10 @@ Read this before pointing kobay at anything that matters.
   cases are orphan-process cleanup, rename-on-open-file `EPERM`, 8.3 and UNC
   paths, and the `claude` CLI's Git Bash requirement. Please report issues.
 - **No sandbox for generated tests.** See [Security model](#security-model).
+- **HTML report race window.** `test report` checks a folder and then renames or
+  deletes it; a local process that swaps that folder at the same moment can
+  still win the race. On Windows, junctions and other reparse points are only
+  partly covered by the symlink checks.
 - **Browser tests only.** No API or backend tests.
 - **Always headless.** No visible browser window; use `trace.zip` instead.
 - **Simple login only.** A username/password HTML form. SSO (a login on a

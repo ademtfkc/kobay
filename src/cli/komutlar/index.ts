@@ -19,5 +19,6 @@ export { doctor } from './doctor.js';
 export { demo } from './demo.js';
 export { installBrowser } from './install-browser.js';
 export { prune } from './prune.js';
+export { testReport } from './report.js';
 export { mcp } from './mcp.js';
 export type { KomutSonucu } from '../komut.js';

@@ -421,9 +421,37 @@ export function domTemizle(html: string, maxKarakter = 30_000): string {
   return temiz.length > maxKarakter ? `${temiz.slice(0, maxKarakter)}…[truncated]` : temiz;
 }
 
-/** Başarısız koşunun kanıtlarını beyinle yorumlayıp atomik hata paketi olarak yazar. */
+/** `--no-analysis` koşusunda beynin dolduracağı alanlara yazılan sabit metin. */
+export const ANALIZ_ATLANDI = 'analysis skipped (--no-analysis)';
+
+/**
+ * `--no-analysis` koşusunda kodsuz/taslak test için diske yazılan engel kaydının
+ * hata metni öneki. Rapor istemi bu önekten engelin "uygulamaya ulaşılamadı"
+ * değil "kod yok" olduğunu anlar.
+ */
+export const KODSUZ_ENGEL_ONEKI = 'kobay --no-analysis: ';
+
+/**
+ * Beyin yokken (`--no-analysis`) paketin analiz kısmı: sınıf `unknown`, beyin
+ * ürünü metin alanları sabit. Kanıt listesi boş başlar; düşen adımın ekran
+ * görüntüsü ve DOM'u yerel kanıt olarak yine eklenir.
+ */
+function analizsizSonuc(): BeyindenGelenHataAnalizi {
+  return {
+    rootCauseHypothesis: ANALIZ_ATLANDI,
+    failureKind: 'unknown',
+    recommendedFixTarget: { kind: 'unknown', reference: ANALIZ_ATLANDI, rationale: ANALIZ_ATLANDI },
+    evidence: [],
+  };
+}
+
+/**
+ * Başarısız koşunun kanıtlarını beyinle yorumlayıp atomik hata paketi olarak yazar.
+ * `beyin` null ise (`--no-analysis`) beyin hiç çağrılmaz: yerel sınıflama (`kobay:`
+ * öneki) tutarsa o, tutmazsa `unknown` sınıflı, sabit metinli paket yazılır.
+ */
 export async function hataAnalizEt(
-  beyin: Beyin,
+  beyin: Beyin | null,
   dizin: KobayDizini,
   test: TestKaydi,
   sonuc: KosuSonucu,
@@ -478,7 +506,10 @@ export async function hataAnalizEt(
 
   // `kobay:` önekli bilinçli düşüş yerelde sınıflanır; beyin çağrılmaz (maliyet yok).
   const yerelSiniflama = yerelOnSiniflama(maskeliHataMetni, maskeliDusenAdim.stepIndex);
-  const beyinYaniti = yerelSiniflama !== null ? { json: yerelSiniflama } : await beyin.sor<BeyindenGelenHataAnalizi>({
+  // Beyin yoksa (`--no-analysis`) analiz alanları sabit metinle doldurulur; çağrı yapılmaz.
+  const beyinYaniti = yerelSiniflama !== null
+    ? { json: yerelSiniflama }
+    : beyin === null ? { json: analizsizSonuc() } : await beyin.sor<BeyindenGelenHataAnalizi>({
     gorev: `analysis-${test.id}`,
     sistem: analizSistemIstemiOlustur(),
     kullanici: analizKullaniciIstemiOlustur({
