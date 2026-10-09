@@ -1,7 +1,7 @@
 import { hedefAyaktaMi } from '../../kos/index.js';
 import { basariliMetin, type KomutSonucu } from '../komut.js';
 import { chromiumVarMi, komutVarMi } from './setup.js';
-import { KobayDizini } from '../../depo/index.js';
+import { KobayDizini, adresKimligiGizle } from '../../depo/index.js';
 
 /** Doctor satırı: `oneri` yalnız `ok: false` iken bulunur. */
 export interface Kontrol {
@@ -63,7 +63,7 @@ export async function doctor(a: { cwd: string }): Promise<KomutSonucu> {
       ok: hedef,
       oneri: dizin === null
         ? 'no project; run `kobay project create --url <URL>` first'
-        : `${baseUrl ?? 'target'} is not reachable; start the app or fix the address with \`kobay project update --base-url <URL>\``,
+        : `${baseUrl === undefined ? 'target' : adresKimligiGizle(baseUrl)} is not reachable; start the app or fix the address with \`kobay project update --base-url <URL>\``,
     },
   ];
   const metin = ham

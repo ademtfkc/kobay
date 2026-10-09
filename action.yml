@@ -1,0 +1,280 @@
+name: kobay
+description: >-
+  Run the kobay tests committed in .kobay/ without an AI brain, post a Markdown
+  summary with fix prompts to the pull request and upload the HTML report.
+author: ademtfkc
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  version:
+    description: >-
+      @ademtfkc/kobay version to install from npm ("latest", "0.3.0", ...).
+      A path to a local .tgz package or a file: spec is installed as it is.
+    required: false
+    default: latest
+  node-version:
+    description: Node.js version for actions/setup-node (kobay needs 22.12 or newer).
+    required: false
+    default: "22"
+  working-directory:
+    description: Project directory that holds .kobay/ (the project root), passed to kobay as --cwd.
+    required: false
+    default: "."
+  tests:
+    description: Space-separated test IDs to run. Empty runs all saved tests (--all).
+    required: false
+    default: ""
+  wait-for-url:
+    description: >-
+      Address polled until the app answers with any HTTP response. Empty uses
+      the project's base URL from .kobay/config.json.
+    required: false
+    default: ""
+  wait-timeout:
+    description: Seconds to wait for the app before the step fails with exit code 3.
+    required: false
+    default: "120"
+  install-browser-deps:
+    description: Also install Linux system libraries for Chromium (kobay install-browser --with-deps).
+    required: false
+    default: "true"
+  comment:
+    description: On pull_request events, create or update one sticky pull request comment with the summary.
+    required: false
+    default: "true"
+  upload-report:
+    description: >-
+      Upload .kobay/report as the "kobay-report" workflow artifact. The HTML
+      report contains unmasked screenshots.
+    required: false
+    default: "true"
+  max-prompts:
+    description: Maximum number of per-test fix prompts in the summary.
+    required: false
+    default: "5"
+  github-token:
+    description: Token used only to read and write the pull request comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: "Exit code of kobay test run: 0 passed, 1 failed, 3 blocked or target not reachable, 4 engine error."
+    value: ${{ steps.run.outputs.exit-code }}
+  report-dir:
+    description: Absolute path of the HTML report directory.
+    value: ${{ steps.report.outputs.report-dir }}
+  summary-path:
+    description: Absolute path of the Markdown summary file.
+    value: ${{ steps.report.outputs.summary-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check inputs
+      shell: bash
+      env:
+        KOBAY_WD: ${{ inputs.working-directory }}
+        KOBAY_TESTS: ${{ inputs.tests }}
+        KOBAY_WAIT_URL: ${{ inputs.wait-for-url }}
+        KOBAY_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+        KOBAY_MAX_PROMPTS: ${{ inputs.max-prompts }}
+      run: |
+        set -euo pipefail
+        hata() { echo "::error::kobay: $1"; exit 2; }
+        # Inputs reach shell arithmetic, curl and $GITHUB_OUTPUT: only plain, expected values pass.
+        case "$KOBAY_WD" in *[[:cntrl:]]*) hata "working-directory must not contain control characters" ;; esac
+        [ -d "$KOBAY_WD" ] || hata "working-directory is not a directory"
+        [[ "$KOBAY_WAIT_TIMEOUT" =~ ^[0-9]{1,4}$ ]] && [ "$((10#$KOBAY_WAIT_TIMEOUT))" -ge 1 ] && [ "$((10#$KOBAY_WAIT_TIMEOUT))" -le 3600 ] \
+          || hata "wait-timeout must be a whole number of seconds from 1 to 3600"
+        [[ "$KOBAY_MAX_PROMPTS" =~ ^[0-9]{1,4}$ ]] || hata "max-prompts must be a whole number from 0 to 9999"
+        [[ "$KOBAY_TESTS" =~ ^[A-Za-z0-9_\ ]*$ ]] || hata "tests must be test IDs separated by spaces"
+        if [ -n "$KOBAY_WAIT_URL" ]; then
+          [[ "$KOBAY_WAIT_URL" =~ ^https?://[^[:space:][:cntrl:]]+$ ]] || hata "wait-for-url must be an http:// or https:// address"
+        fi
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install kobay
+      shell: bash
+      env:
+        KOBAY_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$KOBAY_VERSION" in
+          *.tgz | file:*) paket="$KOBAY_VERSION" ;;
+          *) paket="@ademtfkc/kobay@$KOBAY_VERSION" ;;
+        esac
+        npm install -g --no-audit --no-fund "$paket"
+        kobay --version
+
+    - name: Install Chromium
+      shell: bash
+      env:
+        KOBAY_WITH_DEPS: ${{ inputs.install-browser-deps }}
+      run: |
+        set -euo pipefail
+        if [ "$KOBAY_WITH_DEPS" = "true" ]; then
+          kobay install-browser --with-deps
+        else
+          kobay install-browser
+        fi
+
+    - name: Wait for the app
+      shell: bash
+      env:
+        KOBAY_WD: ${{ inputs.working-directory }}
+        KOBAY_WAIT_URL: ${{ inputs.wait-for-url }}
+        KOBAY_WAIT_TIMEOUT: ${{ inputs.wait-timeout }}
+      run: |
+        set -euo pipefail
+        adres="$KOBAY_WAIT_URL"
+        if [ -z "$adres" ]; then
+          adres="$(kobay project get --output json --cwd "$KOBAY_WD" \
+            | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d;}).on("end",()=>{process.stdout.write(JSON.parse(s).data.config.baseUrl);});')"
+        fi
+        # The base URL comes from a committed file: only an http(s) address without spaces or
+        # control characters is polled, and `--` keeps it from being read as a curl option.
+        [[ "$adres" =~ ^https?://[^[:space:][:cntrl:]]+$ ]] \
+          || { echo "::error::kobay: the address to wait for is not an http:// or https:// address"; exit 2; }
+        [[ "$KOBAY_WAIT_TIMEOUT" =~ ^[0-9]{1,4}$ ]] || { echo "::error::kobay: invalid wait-timeout"; exit 2; }
+        # The address may carry credentials: it is never printed.
+        bitis=$((SECONDS + 10#$KOBAY_WAIT_TIMEOUT))
+        until curl --silent --output /dev/null --max-time 5 -- "$adres"; do
+          if [ "$SECONDS" -ge "$bitis" ]; then
+            echo "::error::kobay: target not reachable after ${KOBAY_WAIT_TIMEOUT}s; start the app in an earlier step or set wait-for-url"
+            exit 3
+          fi
+          sleep 2
+        done
+        echo "The app answered."
+
+    - name: Run kobay tests (no analysis)
+      id: run
+      shell: bash
+      env:
+        KOBAY_WD: ${{ inputs.working-directory }}
+        KOBAY_TESTS: ${{ inputs.tests }}
+      run: |
+        set -uo pipefail
+        secim=()
+        if [ -n "$KOBAY_TESTS" ]; then
+          read -r -a secim <<< "$KOBAY_TESTS"
+        else
+          secim=(--all)
+        fi
+        # The exit code is captured, not raised: the last step ends the job with it.
+        kod=0
+        kobay test run "${secim[@]}" --no-analysis --cwd "$KOBAY_WD" || kod=$?
+        echo "exit-code=$kod" >> "$GITHUB_OUTPUT"
+        echo "KOBAY_EXIT_CODE=$kod" >> "$GITHUB_ENV"
+        echo "kobay test run exit code: $kod"
+
+    - name: Write the kobay report and summary
+      id: report
+      shell: bash
+      env:
+        KOBAY_WD: ${{ inputs.working-directory }}
+        KOBAY_TESTS: ${{ inputs.tests }}
+        KOBAY_MAX_PROMPTS: ${{ inputs.max-prompts }}
+      run: |
+        set -euo pipefail
+        secim=()
+        if [ -n "$KOBAY_TESTS" ]; then
+          read -r -a secim <<< "$KOBAY_TESTS"
+        else
+          secim=(--all)
+        fi
+        ozet="$RUNNER_TEMP/kobay-summary.md"
+        kobay test report "${secim[@]}" --summary "$ozet" --max-prompts "$KOBAY_MAX_PROMPTS" \
+          --output json --cwd "$KOBAY_WD" > "$RUNNER_TEMP/kobay-report.json"
+        # The report path goes to $GITHUB_OUTPUT and to the artifact upload: its real path must
+        # equal realpath(working-directory)/.kobay/report and be a directory, with no control
+        # characters; anything else stops the job.
+        # shellcheck disable=SC2016 # JavaScript template literal, not a shell expansion.
+        rapor="$(node -e '
+          const fs = require("fs"); const path = require("path");
+          const dur = (m) => { process.stderr.write(`::error::kobay: ${m}\n`); process.exit(1); };
+          const ham = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).data.reportDir;
+          if (typeof ham !== "string" || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(ham)) dur("unexpected report path");
+          // Expected path is derived from working-directory alone, never from the reported path.
+          const beklenen = path.join(fs.realpathSync(process.argv[2]), ".kobay", "report");
+          let gercek;
+          try { gercek = fs.realpathSync(ham); } catch { dur("report path does not exist"); }
+          if (gercek !== beklenen) dur("report path is not <working-directory>/.kobay/report");
+          if (!fs.statSync(gercek).isDirectory()) dur("report path is not a directory");
+          if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(gercek)) dur("unexpected report path");
+          process.stdout.write(gercek);
+        ' "$RUNNER_TEMP/kobay-report.json" "$KOBAY_WD")"
+        echo "report-dir=$rapor" >> "$GITHUB_OUTPUT"
+        echo "summary-path=$ozet" >> "$GITHUB_OUTPUT"
+        echo "Report: $rapor"
+
+    - name: Add the summary to the job summary
+      shell: bash
+      env:
+        KOBAY_SUMMARY: ${{ steps.report.outputs.summary-path }}
+      run: |
+        set -euo pipefail
+        cat "$KOBAY_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Post the summary as a pull request comment
+      if: github.event_name == 'pull_request' && inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        KOBAY_SUMMARY: ${{ steps.report.outputs.summary-path }}
+        KOBAY_PR: ${{ github.event.pull_request.number }}
+        KOBAY_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: |
+        set -euo pipefail
+        uyar() {
+          echo "::warning::kobay: the pull request comment was skipped ($1). The job summary still has the report."
+          exit 0
+        }
+        if [ "$KOBAY_HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+          uyar "pull requests from forks get a read-only token"
+        fi
+        govde="$RUNNER_TEMP/kobay-comment.json"
+        node -e 'process.stdout.write(JSON.stringify({ body: require("fs").readFileSync(process.argv[1], "utf8") }))' "$KOBAY_SUMMARY" > "$govde"
+        # Only a comment of github-actions[bot] that starts with the kobay marker is ever edited.
+        bulunan="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$KOBAY_PR/comments" \
+          --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- kobay-report -->"))) | .id' \
+          2> "$RUNNER_TEMP/kobay-comment.err")" || uyar "could not list comments: $(head -n 1 "$RUNNER_TEMP/kobay-comment.err")"
+        yorum="$(printf '%s\n' "$bulunan" | head -n 1)"
+        if [ -n "$yorum" ]; then
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$yorum" --input "$govde" > /dev/null \
+            2> "$RUNNER_TEMP/kobay-comment.err" || uyar "could not update the comment: $(head -n 1 "$RUNNER_TEMP/kobay-comment.err")"
+          echo "Updated the kobay comment."
+        else
+          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$KOBAY_PR/comments" --input "$govde" > /dev/null \
+            2> "$RUNNER_TEMP/kobay-comment.err" || uyar "could not create the comment: $(head -n 1 "$RUNNER_TEMP/kobay-comment.err")"
+          echo "Created the kobay comment."
+        fi
+
+    - name: Upload the HTML report
+      if: inputs.upload-report == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: kobay-report
+        path: ${{ steps.report.outputs.report-dir }}
+        # The path is under the hidden .kobay directory; the report itself has no hidden files.
+        include-hidden-files: true
+        if-no-files-found: warn
+
+    - name: Finish with the kobay test run exit code
+      shell: bash
+      run: |
+        kod="${KOBAY_EXIT_CODE:-4}"
+        case "$kod" in
+          0) echo "kobay: all selected tests passed." ;;
+          1) echo "::error::kobay: at least one test failed (exit code 1)." ;;
+          3) echo "::error::kobay: at least one test was blocked: the app was not reachable or a test has no generated code (exit code 3)." ;;
+          *) echo "::error::kobay: the run did not finish cleanly (exit code $kod)." ;;
+        esac
+        exit "$kod"

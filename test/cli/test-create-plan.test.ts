@@ -52,6 +52,22 @@ describe('test create: elle yazılan plan dosyası', () => {
     }
   });
 
+  it('url hatasında baseUrl ve plan url kimliği maskelenir', async () => {
+    const kimlikli = 'http://admin:Hunter2Pass@uygulama.test';
+    const dizin = await mkdtemp(join(tmpdir(), 'kobay-test-create-'));
+    await KobayDizini.ac(dizin, { baseUrl: kimlikli, beyin: { adaptor: 'sahte' } });
+    for (const url of ['http://root:Hunter2Pass@kotu.test/x', 'records:Hunter2Pass@x', '//root:Hunter2Pass@kotu.test']) {
+      await writeFile(join(dizin, 'plan.json'), JSON.stringify({
+        type: 'frontend', name: 'Kayıtlar listelenir', url,
+        planSteps: [{ type: 'action', description: 'a' }, { type: 'assertion', description: 'b' }],
+      }));
+      const sonuc = await testCreate({ cwd: dizin, planPath: 'plan.json' });
+      expect(sonuc.exitCode, url).toBe(2);
+      expect(JSON.stringify(sonuc), url).not.toContain('Hunter2Pass');
+    }
+    expect(() => planUrlDogrula('http://root:Hunter2Pass@kotu.test/x', kimlikli)).toThrow(/\[redacted\]@kotu\.test/);
+  });
+
   it('ters bölü, //host, javascript: ve başka origin exit 2; kısayol yok (denetim P1)', async () => {
     for (const url of ['/\\evil.test/path', '/\\\\evil.test/path', '//evil.test/path', '/\t/evil.test/path', 'javascript:alert(1)', 'http://evil.test/records', 'ftp://uygulama.test/records']) {
       const { cwd, dizin } = await proje({ url });

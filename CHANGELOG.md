@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `kobay test report [ids...] [--all] [--out <dir>]` writes a static HTML report
+  of each selected test's latest run: summary counts, steps with screenshots,
+  error message, the failure analysis when the published bundle belongs to that
+  run, and the generated code. It reads only what is on disk and exits `0` even
+  when tests failed. The default folder `.kobay/report/` is replaced atomically
+  as a whole and is git-ignored; the folder is self-contained, so it can be moved
+  or uploaded as a CI artifact. The page has no scripts or external resources
+  and a strict Content-Security-Policy; every text is secret-masked and
+  HTML-escaped, and the project root and home directory are replaced with
+  `[project]` and `~`. Screenshots are copied unredacted, and the report says so.
+  A non-empty destination is replaced only if it is entirely a kobay report
+  (valid `kobay-report.json`, `index.html`, `assets/<runId>/step-<n>.png` and
+  nothing else); any other entry exits `2` and is named. Old reports are removed
+  file by file, never recursively. Report data under `.kobay/tests`, `runs` and
+  `failure` (and `config.json`) is read without following symlinks or hard links. An unreadable run record shows as
+  `inconclusive` with a note.
+  The report opens with a summary (run bar, pass rate, total run time), lists
+  tests that need attention first and folds passed tests away. Each failed,
+  blocked or inconclusive test has a "Fix with your coding agent" prompt for
+  Claude Code, Codex or Cursor, routed by failure kind and quoting run text as
+  untrusted data; two or more such tests also get one fix-all prompt. JSON output
+  adds the optional `fixPrompts` and `fixAllPrompt` fields. Each quoted value is
+  masked on its own, so masking can never break the prompt's frame; long error
+  output is cut at 2,000 characters. Test names in the JSON output are
+  secret-masked, and times are shown as UTC (`2026-10-05 22:27 UTC`).
+- `kobay test run --no-analysis` runs tests without ever calling the brain, for
+  CI: it runs existing code only (like `--rerun`); a test without generated code,
+  or a draft whose plan changed after its code was generated, is `blocked`
+  (exit `3`) with a hint to run it locally and commit `.kobay/`; a failed test
+  still gets its evidence bundle, with failure kind `unknown` (or the local
+  `kobay:` classification) and "analysis skipped (--no-analysis)" in the analysis
+  fields. Without the flag nothing changes.
+- `kobay test report --summary <path> [--max-prompts <n>]` also writes a
+  GitHub-flavored Markdown summary for a pull request comment or job summary:
+  a `<!-- kobay-report -->` marker line, counts, one row per test, up to `n`
+  (default 5) fix prompts in `<details>` blocks plus the fix-all prompt, and a
+  footer. Text only; every value is masked on its own, table cells are escaped,
+  prompts sit in a fence longer than any backtick run inside them, and the file
+  stays under 60,000 characters. JSON output adds `summaryPath`. The path follows
+  the `--out` rules and may not point into `.kobay/` or the report folder.
+- MCP: `test_run` gains `noAnalysis` (same as `--no-analysis`), and the new
+  `test_report` tool takes the same inputs (`ids`, `all`, `out`, `summary`,
+  `maxPrompts`) and returns the same output as `kobay test report`; over MCP,
+  `out` and `summary` must stay inside the project root.
+- GitHub Action (`action.yml`, composite): installs kobay, waits for the app,
+  runs `test run --no-analysis`, writes the job summary, creates or updates one
+  sticky pull request comment, uploads `.kobay/report` as the `kobay-report`
+  artifact and ends with the exit code of the test run. Fork pull requests skip
+  the comment with a warning. The default `version` input is `latest` until the
+  first release that contains these flags.
+- Reports (HTML, JSON prompts and the summary) show kobay's own installation
+  path in stack frames as `[kobay]`, so a global install outside the home
+  directory (as on CI runners) does not leak an absolute path.
+  Credentials in free-text addresses (`http://user:pass@host`) become
+  `[redacted]`, and other absolute file paths under system roots (`/opt`,
+  `/usr`, `/tmp`, CI roots such as `/agent` and `/codebuild`, any letter case,
+  `C:\` and UNC paths like `\\server\share\…`, including long `\\?\` / `\\.\` and Volume-GUID forms …) become `[path]/<file name>`; app routes such as
+  `/records/new` are kept. A `--no-analysis` failure's prompt says the run had no
+  analysis and suggests a local `kobay test rerun`; a no-code block is recorded
+  as a blocked run and its prompt asks for local code generation.
+
+### Fixed
+
+- Text-mode CLI output and error messages (and MCP error messages) now redact URL userinfo:
+  `http://admin:secret@localhost:3000` is shown as `http://[redacted]@localhost:3000`.
+  `--output json` fields, including `baseUrl`, are unchanged.
+- Fixed a same-process race in the failure bundle lock: inspecting or taking over
+  a lock and releasing it are now serialized per lock within a process, keyed by
+  the lock's real path, so `BundleLockLost` is no longer raised spuriously when
+  concurrent writers in one process hand the lock over. Time spent waiting in
+  this queue counts toward the lock timeout; the limit covers only the
+  inspection while taking the lock, and releasing (including cleanup after a
+  failed attempt) always waits its turn, since it is a short file operation.
+
 ## [0.2.1] - 2026-10-03
 
 ### Windows

@@ -216,6 +216,8 @@ tests/_fixture.ts
 test-results/
 playwright-report/
 blob-report/
+report/
+.kobay-report-*
 # <<< kobay managed <<<
 `;
 

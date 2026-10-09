@@ -22,6 +22,7 @@ import {
   testList,
   testRefresh,
   testResult,
+  testReport,
   testRerun,
   testRun,
 } from '../cli/komutlar/index.js';
@@ -32,7 +33,7 @@ import {
 } from '../cli/komutlar/ortak.js';
 import type { KomutSonucu } from '../cli/komut.js';
 import { CIKIS } from '../cli/cikis.js';
-import { KobayDizini } from '../depo/index.js';
+import { KobayDizini, adresKimligiGizle, metindekiKimligiGizle } from '../depo/index.js';
 
 interface McpAyarlari {
   cwd: string;
@@ -43,7 +44,7 @@ const require = createRequire(import.meta.url);
 const { version: KOBAY_SURUMU } = require('../../package.json') as { version: string };
 const PROJE_DIZINI_SEMASI = { projectDir: z.string().min(1).optional() };
 
-export const MCP_INSTRUCTIONS = 'Use project_create once to initialize a target, then explore, plan_generate, and plan_accept. Use test_run to generate and run tests; inspect failures with failure_get, fix product code for product_bug, use test_refresh only for product_changed, and confirm with test_rerun. The prune tool previews by default; pass confirm true only after reviewing the preview. Pass projectDir when the server is not started inside the target Kobay project.';
+export const MCP_INSTRUCTIONS = 'Use project_create once to initialize a target, then explore, plan_generate, and plan_accept. Use test_run to generate and run tests; inspect failures with failure_get, fix product code for product_bug, use test_refresh only for product_changed, and confirm with test_rerun. Finish with test_report to write the HTML report and, with summary, a Markdown summary of fix prompts. The prune tool previews by default; pass confirm true only after reviewing the preview. Pass projectDir when the server is not started inside the target Kobay project.';
 
 /** MCP kökleri ve adayları aynı native realpath uygulamasıyla kanonikleştirilir. */
 export function mcpGercekYol(yol: string): string {
@@ -64,7 +65,11 @@ function sonucDon(sonuc: KomutSonucu): {
 } {
   const aracHatasi = sonuc.exitCode !== CIKIS.GECTI && sonuc.exitCode !== CIKIS.DUSTU;
   const yanit = {
-    content: [{ type: 'text' as const, text: JSON.stringify(sonuc.json) ?? 'null' }] as [{ type: 'text'; text: string }],
+    // Yalnız hata zarfında mesaj metni arındırılır; başarılı sonuç gövdesi (makine sözleşmesi) aynen kalır.
+    content: [{
+      type: 'text' as const,
+      text: aracHatasi ? metindekiKimligiGizle(JSON.stringify(sonuc.json) ?? 'null') : JSON.stringify(sonuc.json) ?? 'null',
+    }] as [{ type: 'text'; text: string }],
     ...(aracHatasi ? { isError: true as const } : {}),
   };
   return yanit;
@@ -72,7 +77,7 @@ function sonucDon(sonuc: KomutSonucu): {
 
 function hataDon(hata: unknown): ReturnType<typeof sonucDon> {
   const mesaj = hata instanceof Error ? hata.message : String(hata);
-  return { content: [{ type: 'text', text: JSON.stringify({ error: mesaj }) }], isError: true };
+  return { content: [{ type: 'text', text: JSON.stringify({ error: metindekiKimligiGizle(mesaj) }) }], isError: true };
 }
 
 async function aracCalistir(islem: () => Promise<KomutSonucu>): Promise<ReturnType<typeof sonucDon>> {
@@ -159,12 +164,12 @@ function girisBilgisi(
   try {
     izinliOrigin = new URL(izinli).origin;
   } catch {
-    throw new Error(`KOBAY_LOGIN_ORIGIN is not a valid URL: ${izinli}`);
+    throw new Error(`KOBAY_LOGIN_ORIGIN is not a valid URL: ${adresKimligiGizle(izinli)}`);
   }
   try {
     hedefOrigin = new URL(url).origin;
   } catch {
-    throw new Error(`Invalid URL: ${url}`);
+    throw new Error(`Invalid URL: ${adresKimligiGizle(url)}`);
   }
   if (hedefOrigin !== izinliOrigin) {
     throw new Error(
@@ -340,19 +345,52 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
   }, async ({ projectDir, id }) => aracCalistir(async () => testDelete({ cwd: await projeSec(projectDir), id })));
 
   sunucu.registerTool('test_run', {
-    description: 'Generates the code when missing, runs the test, and analyzes a failure; exit 1 = test failed, 3 = target down, 4 = engine.',
+    description: 'Generates the code when missing, runs the test, and analyzes a failure; exit 1 = test failed, 3 = target down, 4 = engine.'
+      + ' With noAnalysis: true it never calls the brain and runs existing code only; a test without generated code is blocked (exit 3),'
+      + ' and a failure gets failure kind unknown.',
     inputSchema: {
       ...PROJE_DIZINI_SEMASI,
       ids: z.array(z.string()).optional(),
       all: z.boolean().optional(),
       rerun: z.boolean().optional(),
+      noAnalysis: z.boolean().optional(),
     },
-  }, async ({ projectDir, ids, all, rerun }) => aracCalistir(async () => testRun({
+  }, async ({ projectDir, ids, all, rerun, noAnalysis }) => aracCalistir(async () => testRun({
     cwd: await projeSec(projectDir),
     ...(ids === undefined ? {} : { ids }),
     ...(all === undefined ? {} : { all }),
     ...(rerun === undefined ? {} : { rerun }),
+    ...(noAnalysis === true ? { noAnalysis: true } : {}),
   })));
+
+  sunucu.registerTool('test_report', {
+    description: 'Writes a static HTML report of the selected tests\' latest runs (default .kobay/report/) and, with summary,'
+      + ' a Markdown summary with up to maxPrompts fix prompts. Reads only what is on disk; failed tests do not make it an error.'
+      + ' Relative out and summary paths resolve against projectDir and must stay inside the project root. Screenshots are not redacted.',
+    inputSchema: {
+      ...PROJE_DIZINI_SEMASI,
+      ids: z.array(z.string()).optional(),
+      all: z.boolean().optional(),
+      out: z.string().optional(),
+      summary: z.string().optional(),
+      maxPrompts: z.number().int().nonnegative().optional(),
+    },
+  }, async ({ projectDir, ids, all, out, summary, maxPrompts }) => aracCalistir(async () => {
+    const projeKoku = await projeSec(projectDir);
+    // CLI `--cwd` gibi: göreli yollar verilen dizine göre çözülür (proje kökü onun üstünde olabilir).
+    const cwd = mcpGercekYol(resolve(s.cwd, projectDir ?? '.'));
+    // MCP'de yazma hedefi proje kökünde kalır (failure_get ile aynı); gizli dizin kuralı testReport'ta.
+    const hedef = out === undefined ? undefined : await projeIciYol(projeKoku, resolve(cwd, out), 'out');
+    const ozet = summary === undefined ? undefined : await projeIciYol(projeKoku, resolve(cwd, summary), 'summary');
+    return testReport({
+      cwd,
+      ...(ids === undefined ? {} : { ids }),
+      ...(all === undefined ? {} : { all }),
+      ...(hedef === undefined ? {} : { out: hedef }),
+      ...(ozet === undefined ? {} : { summary: ozet }),
+      ...(maxPrompts === undefined ? {} : { maxPrompts }),
+    });
+  }));
 
   sunucu.registerTool('test_rerun', {
     description: 'Runs the existing test code again.',

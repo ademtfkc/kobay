@@ -919,6 +919,47 @@ describe('hata mesajları eyleme yönlendirir', () => {
     expect(sonuc.json).toEqual({ error: expect.objectContaining({ code: 'TargetUnreachableError' }) });
   });
 
+  it('hedef adresindeki kullanıcı:parola mesajlarda maskelenir (reachable, project create/update)', async () => {
+    const cwd = await bosProje();
+    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
+    const olustur = await projectCreate({ cwd, url: kimlikli, force: true, beyin: { adaptor: 'sahte' } });
+    const guncelle = await projectUpdate({ cwd, url: kimlikli });
+    for (const sonuc of [olustur, guncelle]) {
+      expect(sonuc.exitCode).toBe(0);
+      expect(sonuc.metin).not.toContain('Hunter2Pass');
+      expect(sonuc.metin).toContain('Target: http://[redacted]@localhost:3000\n');
+    }
+
+    sahteler.hedefAyakta = false;
+    const yok = await explore({ cwd });
+    expect(yok.exitCode).toBe(3);
+    expect(yok.mesaj).toContain('Target app is not reachable: http://[redacted]@localhost:3000;');
+    expect(yok.mesaj).not.toContain('Hunter2Pass');
+  });
+
+  it('project get: insan modunda parola yok, --output json baseUrl ham kalır', async () => {
+    const cwd = await bosProje();
+    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
+    const loginUrl = 'http://admin:Hunter2Pass@localhost:3000/giris';
+    const olustur = await projectCreate({ cwd, url: kimlikli, loginUrl, force: true, beyin: { adaptor: 'sahte' } });
+    const al = await projectGet({ cwd });
+    for (const sonuc of [olustur, al]) {
+      expect(JSON.stringify(sonuc.json)).toContain(kimlikli);
+      const cikti = (json: boolean): { stdout: string; stderr: string } => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        ciktiYaz(sonuc, json, stdout, stderr);
+        return { stdout: String(stdout.read() ?? ''), stderr: String(stderr.read() ?? '') };
+      };
+      const insan = cikti(false);
+      expect(insan.stdout + insan.stderr).not.toContain('Hunter2Pass');
+      expect(insan.stdout).toContain('http://[redacted]@localhost:3000');
+      expect(cikti(true).stdout).toContain(kimlikli);
+    }
+    const gecersiz = await projectUpdate({ cwd, url: 'http://admin:Hunter2Pass@' });
+    expect(gecersiz.mesaj ?? '').not.toContain('Hunter2Pass');
+  });
+
   it('hata paketi yokken hangi komutun paket ürettiğini söyler', async () => {
     const cwd = await bosProje();
 

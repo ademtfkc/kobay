@@ -239,11 +239,119 @@ Sunucu (`kobay mcp`, stdio) şu araçları sunar:
 project_create  project_update  project_get  explore       plan_generate
 plan_accept     test_create     test_list    test_get      code_get
 test_delete     test_run        test_rerun   test_refresh  test_result
-failure_get     doctor          prune
+failure_get     test_report     doctor       prune
 ```
 
 Her araç isteğe bağlı `projectDir` alır ve yalnız sunucunun başladığı dizinin
 altında olabilir; ek kökler `KOBAY_MCP_ROOTS` ile.
+
+## CI (GitHub Actions)
+
+Yerelde üretip `.kobay/` altında commit ettiğin testler her pull request'te
+koşabilir. CI'da beyin yoktur: testler `kobay test run --no-analysis` ile koşar,
+hiçbir LLM çağrılmaz; API anahtarı ya da beyin CLI'ı gerekmez. Action sonucu üç
+yere yazar:
+
+- iş akışının **iş özeti** (job summary),
+- tek bir **PR yorumu**: sayı tablosu, test başına bir satır ve düşen, engellenen
+  ya da sonuçsuz her test için kopyalanmaya hazır **Fix with your coding agent**
+  istemi (yalnız maskeli metin, ekran görüntüsü yok); her push'ta aynı yorum
+  güncellenir,
+- **`kobay-report` artifact'i**: `.kobay/report` altındaki HTML rapor.
+
+Önce testleri yerelde beyinle üret ve koştur (`kobay test run`), sonra `.kobay/`
+klasörünü commit et (yönetilen `.gitignore` kimlik bilgisini, koşuları, hata
+paketlerini ve raporu git dışında tutar). Uygulamanı önceki bir adımda başlat;
+Action onu bekler.
+
+```yaml
+name: kobay
+on: pull_request
+
+permissions:
+  contents: read
+  pull-requests: write   # yalnız PR yorumu için
+
+jobs:
+  kobay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Uygulamayı arka planda başlat
+        run: npm run dev > app.log 2>&1 &
+      - uses: ademtfkc/kobay@v0.3.0
+        with:
+          wait-for-url: http://localhost:3000
+```
+
+Girdiler (hepsi isteğe bağlı): `version` (varsayılan `latest`; yerel `.tgz` yolu
+da olur), `node-version` (`22`), `working-directory` (`.`; `.kobay/`'ı taşıyan proje kökü,
+`--cwd` olarak geçer), `tests` (boşlukla ayrılmış test kimlikleri; boşsa `--all`),
+`wait-for-url` (herhangi bir HTTP cevabı gelene kadar yoklanır; boşsa projenin
+`baseUrl`'i), `wait-timeout` (`120` saniye; dolarsa adım çıkış `3` ile düşer),
+`install-browser-deps` (`true`), `comment` (`true`), `upload-report` (`true`),
+`max-prompts` (`5`), `github-token` (yalnız yorum için). Çıktılar: `exit-code`,
+`report-dir`, `summary-path`. Tablo: [README.md#ci-github-actions](README.md#ci-github-actions).
+
+**Geçti mi düştü mü.** Action'ın son adımı `kobay test run`'ın çıkış koduyla
+biter: `0` hepsi geçti, `1` bir test düştü, `3` bir test engellendi (uygulamaya
+ulaşılamadı ya da testin üretilmiş kodu yok), `4` motor hatası. Rapor ve yorum
+önce yazılır; kırmızı sonuçta da özet durur. `--no-analysis` ile düşen testin
+sınıfı `unknown` olur, kanıt paketi yine yazılır; kök neden analizi için testi
+yerelde beyinle koştur. Kodu olmayan ya da kodu üretildikten sonra planı değişmiş
+(taslak) test `blocked` olur ve `kobay test run <ID>`'yi yerelde koşturup
+`.kobay/`'ı commit etmeni söyler; bu engel kaydedilir, rapor onu sayar ve istem
+ne yapılacağını söyler. Action önce girdilerini denetler (`wait-timeout` 1–3600
+saniye, `wait-for-url` ve projenin base URL'i `http(s)://`, `tests` yalnız
+kimlik); uymazsa çıkış `2` ile durur.
+
+**Özet dosyası.** Yorum, `kobay test report --summary <yol> [--max-prompts <n>]`
+çıktısıdır: `<!-- kobay-report -->` ile başlayan (yorumu bulup güncellemenin
+anahtarı) GitHub-flavored Markdown. 60.000 karakteri geçmez (önce hepsini
+düzelt istemi, sonra sondan başlayarak tekil istemler düşer; tablo kalır).
+Yalnız metindir: her değer tek başına maskelenir, adreslerdeki kimlik bilgisi
+`[redacted]`, yerel yollar `[project]`, `[kobay]` ve `~`, diğer mutlak dosya
+yolları (`/opt`, `/usr`, `/tmp`, `C:\` …) `[path]/<dosya adı>` olur (`/records/new`
+gibi uygulama rotaları kalır; `/opt/x` gibi sistem kökü adıyla başlayan rotalar da maskelenir), tablo hücreleri kaçışlanır, istemler içlerindeki her
+backtick dizisinden uzun bir çitle sarılır. `--summary` yolu `--out` ile aynı
+kurala uyar, ayrıca `.kobay/` ve rapor klasörü içini gösteremez; reddedilen yol
+çıkış `2` verir. HTML rapor yine yazılır.
+
+**Giriş gerektiren uygulama.** Action kullanıcı adı ya da parola girdisi almaz;
+`.kobay/credentials.json` ve oturum dosyası hiç commit edilmez. Bunlar olmadan
+testler oturumsuz koşar. Oturum için Action'dan önce, iki depo secret'ından
+girişi kaydeden ve bir kez keşif yapan bir adım ekle (oturum dosyası yalnız CI
+checkout'unda yazılır):
+
+```yaml
+      - name: kobay girişi
+        run: |
+          npx --yes @ademtfkc/kobay project create --force --url http://localhost:3000 --login --login-url http://localhost:3000/login
+          npx --yes @ademtfkc/kobay install-browser --with-deps
+          npx --yes @ademtfkc/kobay explore
+        env:
+          KOBAY_LOGIN_USER: ${{ secrets.KOBAY_LOGIN_USER }}
+          KOBAY_LOGIN_PASS: ${{ secrets.KOBAY_LOGIN_PASS }}
+```
+
+`project create --force` yalnız config'i yeniden yazar (beyin ayarı korunur),
+testlere ve koşulara dokunmaz; `explore` checkout'taki `map.json`'ı yeniler.
+Demo uygulamayla denendi: oturumsuz düşen test bu üç komuttan sonra geçti.
+
+**Fork ve token.** Fork'tan gelen PR salt okunur token alır: Action yorumu bir
+uyarıyla atlar, iş özeti yine raporu taşır. Bunu aşmak için
+`pull_request_target`'a geçme: fork'un kodunu deponun secret'larıyla koşturur.
+Güncellenen yorum, `github-actions[bot]`'un yazdığı ve işaretle başlayan
+yorumdur; kendi `github-token`'ını verirsen yorum o hesapla yazılır ve her
+koşuda yeni yorum açılır.
+
+**Artifact uyarısı.** HTML rapor maskelenmemiş ekran görüntüleri taşır; açık
+(public) depoda iş akışı artifact'lerini GitHub'a giriş yapmış herkes görebilir.
+Bu önemliyse `upload-report: false` ver.
 
 ## Nasıl çalışır
 
@@ -289,6 +397,41 @@ başarısız koşuya ve güncel hata paketine dokunmaz. CLI varsayılan olarak s
 `estimate: true` taşır; gerçek silmede koşu alanı yeniden ölçülür. MCP aracı
 varsayılan olarak önizler, yalnız `confirm: true` ile siler ve `dryRun: true`
 her durumda önizlemeyi zorlar.
+
+`kobay test report [ID...] [--all] [--out <klasör>] [--summary <yol>] [--max-prompts <n>]` seçilen testlerin son
+koşusundan statik bir HTML rapor yazar (adımlar, ekran görüntüleri, hata, hata
+analizi, üretilen kod). Rapor bir özetle açılır (koşu çubuğu, geçme oranı, toplam
+süre); düşen, engellenen ve sonuçsuz testler üstte, geçenler kapalı durur.
+Dikkat isteyen her testte Claude Code, Codex ya da Cursor'a yapıştırılacak bir
+**Fix with your coding agent** istemi vardır: hata türünü söyler, hata metnini ve
+analizi güvenilmez veri olarak alıntılar, kanıt, düzeltme ve doğrulama için kobay
+komutlarını verir. İki ya da daha çok böyle test varsa hepsini kapsayan tek bir
+istem de eklenir. Alıntılanan her değer isteme girmeden önce tek başına
+maskelenir; 2.000 karakteri aşan hata çıktısı kesilir ve tam paketin yolu
+söylenir. İsteme tıklamak tamamını seçer. `--output json` aynı istemleri
+`fixPrompts` ve `fixAllPrompt` alanlarında verir. Yalnız diskte olanı okur, hiçbir şey koşturmaz; testler
+düşmüş olsa da çıkış `0`'dır. Varsayılan yer `.kobay/report/` (git dışı) ve her
+üretimde bütünüyle yenisiyle değişir. Klasör kendi içinde taşınabilir (ekran
+görüntüleri içine kopyalanır), CI artifact'i olarak yüklenebilir. Sayfada betik
+ve dış kaynak yok; her metin maskelenir ve HTML kaçışından geçer, proje kökü,
+kobay'ın kendi kurulumu (hata yığını satırları) ve ev dizini `[project]`,
+`[kobay]` ve `~` olarak görünür. **Ekran
+görüntüleri maskelenmez:** uygulamanın ekranda gösterdiği her şeyi taşıyabilir,
+raporu paylaşmadan önce onlara bak. `--out` proje dışını gösterebilir, nokta ile
+başlayan yol bileşeni gösteremez. Dolu bir klasör yalnız bütünüyle kobay
+raporuysa değiştirilir: geçerli `kobay-report.json`, `index.html` ve
+`assets/<runId>/step-<n>.png` dışında hiçbir şey yok. Tek bir başka girdi
+(`notes.txt`, `.DS_Store`) varsa komut çıkış `2` verir, girdiyi adıyla söyler ve
+içeriğe dokunmaz. Eski rapor özyinelemeli silmeyle değil, dosya dosya kaldırılır;
+beklenmeyen bir şey yerinde bırakılır ve yolu yazılır. Rapor `.kobay/tests`,
+`runs`, `failure` altını ve `config.json`'ı symlink ya da sert bağ izlemeden
+okur; bağla gelen veri rapora girmez. Koşu kaydı okunamayan test `inconclusive` ve bir notla, koşu klasörü
+silinmiş test `not run` olarak görünür.
+
+`--summary` aynı veriden PR yorumuna hazır Markdown özet de yazar (bkz.
+[CI](#ci-github-actions)). `kobay test run --no-analysis` beyni hiç çağırmaz:
+yalnız var olan kodu koşturur, kodsuz ya da taslak test `blocked` (çıkış `3`)
+olur, düşen test `unknown` sınıflı kanıt paketi alır.
 
 Komutların tamamı ve bayrakları: [README.md#commands](README.md#commands).
 
@@ -353,7 +496,7 @@ girmez).
 Projenin bütün durumu uygulamanın kökündeki `.kobay/` altında: `config.json`,
 `credentials.json` ve `storageState.json` (0600, git dışı), `map.json`,
 `plan/proposals.json`, `tests/`, `runs/`, `failure/`, `failure-out/`, `logs/`,
-`playwright.config.ts`. Dökümün tamamı:
+`report/` (son HTML rapor, git dışı), `playwright.config.ts`. Dökümün tamamı:
 [README.md#the-kobay-directory](README.md#the-kobay-directory).
 
 Config, harita ve testleri commit et; gerisini kobay'ın yönettiği
@@ -385,6 +528,10 @@ komutunu yeniden çalıştır** ki kurulu beceri ajana yeni adları öğretsin.
   görüntüleri ve `trace.zip` maskelenemez: ekranda ya da ağ izinde görünen
   gizli değerleri taşıyabilirler; paketin tamamını hassas say
   (`.kobay/failure-out/` git dışıdır).
+- `test report` HTML raporundaki her metni maskeler ve kaçışlar, ama ekran
+  görüntülerini olduğu gibi kopyalar: raporu yayımlamadan önce görüntülere bak.
+  `.kobay/report/` git dışıdır; `--out` ile başka yere yazdıysan o klasörü de
+  git dışı bırak.
 - Giriş sayfası `baseUrl` ile tam aynı origin'de olmalı; formun `action` hedefi
   ise aşağıdaki aynı-site kuralına uyar (`app.example.com` formu
   `api.example.com`'a gönderebilir), başka siteye gönderen formda parola hiç
@@ -437,6 +584,10 @@ Tamamı: [README.md#security-model](README.md#security-model).
   `.kobay` depolamasını (bütün testlerin koşuları, beyin günlükleri, eski
   sürümlerden kalanlar) `kobay prune` süpürür. `test delete` kaydı ve kodu
   siler, `failure/<id>/` ile eski koşuları bırakır.
+- `test report` bir klasörü denetleyip sonra taşır ya da siler; aynı anda o
+  klasörü değiştiren yerel bir süreç bu yarışı yine kazanabilir. Windows'ta
+  junction ve diğer yeniden ayrıştırma noktaları symlink denetimiyle yalnız
+  kısmen kapsanır.
 - kobay SIGKILL ile öldürülürse süreç ağacı (Playwright worker'ı ve Chromium)
   kalır; SIGTERM/SIGINT'te temizlenir.
 

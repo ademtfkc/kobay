@@ -31,12 +31,13 @@ If `mcp__kobay__*` tools are available, use them. Otherwise use the `kobay` CLI
 | Accept proposals | `plan_accept` (`ids`) | `kobay test plan accept --ids <P1,P2> --output json` |
 | Test from a plan file (`type`, `name`, `planSteps`; optional `url` on the project's origin) | `test_create` (`planPath`) | `kobay test create --plan <FILE> --output json` |
 | List tests | `test_list` | `kobay test list --output json` |
-| Run tests | `test_run` (`ids` or `all: true`) | `kobay test run <ID...> --output json` / `kobay test run --all --output json` |
+| Run tests | `test_run` (`ids` or `all: true`; `noAnalysis` for CI) | `kobay test run <ID...> --output json` / `kobay test run --all --output json` |
 | Re-run existing code | `test_rerun` | `kobay test rerun <ID> --output json` |
 | Adapt to a changed UI | `test_refresh` | `kobay test refresh <ID> --output json` |
 | Last result | `test_result` | `kobay test result <ID> --output json` |
 | Failure bundle | `failure_get` (`id`, `out`) | `kobay test failure get <ID> --out <DIR> --output json` |
 | Generated code | `code_get` | `kobay test code get <ID> --output json` |
+| HTML run report for a human (latest run per test) | `test_report` (`ids` or `all: true`, `out`, `summary`, `maxPrompts`) | `kobay test report <ID...> --output json` / `kobay test report --all --output json` |
 | Delete a test | `test_delete` | `kobay test delete <ID> --output json` |
 | Clean up old runs and logs | `prune` (`confirm`, `dryRun`, `maxMb`, `olderThanDays`; preview by default) | `kobay prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>] --output json` |
 

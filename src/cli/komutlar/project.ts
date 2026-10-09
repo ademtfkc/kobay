@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   KobayDizini,
+  adresKimligiGizle,
   type BeyinAyari,
   type Kimlik,
   type KimlikIslemi,
@@ -43,7 +44,7 @@ function urlDogrula(url: string): void {
   try {
     new URL(url);
   } catch {
-    throw new UsageError(`Invalid URL: ${url}`);
+    throw new UsageError(`Invalid URL: ${adresKimligiGizle(url)}`);
   }
 }
 
@@ -112,9 +113,9 @@ function projeOzeti(a: {
   ];
   return [
     `${a.baslik}: ${a.kok}`,
-    `Target: ${a.config.baseUrl}`,
+    `Target: ${adresKimligiGizle(a.config.baseUrl)}`,
     `Brain: ${a.config.brain.adaptor}${beyinAyrintisi.length === 0 ? '' : ` (${beyinAyrintisi.join(', ')})`}`,
-    ...(a.config.loginUrl === undefined ? [] : [`Login page: ${a.config.loginUrl}`]),
+    ...(a.config.loginUrl === undefined ? [] : [`Login page: ${adresKimligiGizle(a.config.loginUrl)}`]),
     ...(a.config.docsPath === undefined ? [] : [`Document: ${a.config.docsPath}`]),
     ...(a.ekSatirlar ?? []),
     ...(a.silinen.length === 0 ? [] : [`Invalidated: ${a.silinen.join(', ')}${silinmeNotu(a.silinen)}`]),
