@@ -27,6 +27,19 @@ export const PAKET_KILIDI = {
   yazimPayiMs: 5_000,
 };
 
+/**
+ * Yalnız testler için (`paketKilidiniAl` seçeneği): yarış sıralamasını zorlamak
+ * üzere incelemenin iki noktasında beklenir — gövde okunup karar verilmeden
+ * önce (`incele-okundu`) ve devralma taşımasından hemen sonra (`devir-tasindi`).
+ * `olay` eşzamanlı bildirimdir: inceleme ya da bırakma süreç içi sıraya girdi
+ * (`*-sirada`) ve sırası gelip işe başladı (`*-basladi`). Üretim çağıranları
+ * vermez.
+ */
+export interface PaketKilidiKancasi {
+  gecikme?: (asama: 'incele-okundu' | 'devir-tasindi') => Promise<void>;
+  olay?: (olay: 'incele-sirada' | 'incele-basladi' | 'birak-sirada' | 'birak-basladi') => void;
+}
+
 const ILK_BEKLEME_MS = 5;
 const AZAMI_BEKLEME_MS = 100;
 
@@ -51,10 +64,11 @@ const tutulanKilitler = new Set<string>();
 export class BundleLockTimeout extends Error {
   readonly code: string | undefined;
 
-  constructor(yol: string, sahip: KilitGovdesi | null, sonHata: unknown) {
+  constructor(yol: string, sahip: KilitGovdesi | null, sonHata: unknown, sirada = false) {
     const kod = hataKodu(sonHata);
     super(
       `Timed out waiting for the failure bundle lock: ${yol}`
+      + (sirada ? ' (still queued behind another operation on this lock in the same process)' : '')
       + (sahip === null ? '' : ` (held by pid ${sahip.pid} since ${sahip.startedAt})`)
       + (typeof kod === 'string' ? ` (last error: ${kod})` : '')
       + '. Another kobay command may still be writing this bundle; try again when it finishes.'
@@ -206,6 +220,8 @@ export async function paketKilidiniAl(secenek: {
   ad: string;
   testId: string;
   reddet: YolReddi;
+  /** Yalnız testler; bkz. `PaketKilidiKancasi`. */
+  kanca?: PaketKilidiKancasi;
 }): Promise<PaketKilidi> {
   const kok = join(secenek.kobayKoku, secenek.ad);
   const yol = join(kok, `.lock-${secenek.testId}`);
@@ -217,6 +233,9 @@ export async function paketKilidiniAl(secenek: {
   for (;;) {
     const gercekKok = await guvenliKokuBul(secenek.kobayKoku, secenek.ad, secenek.reddet);
     if (gercekKok === null) throw secenek.reddet(kok, `${secenek.ad} vanished while taking the bundle lock`);
+    // Süreç içi sıranın anahtarı gerçek yoldur: aynı dizine takma ad (symlink,
+    // harf farkı) üzerinden gelen çağrılar da aynı sıraya girer.
+    const anahtar = join(gercekKok, `.lock-${secenek.testId}`);
 
     const token = randomUUID();
     const govde = JSON.stringify({ pid: process.pid, token, startedAt: new Date().toISOString() });
@@ -231,7 +250,14 @@ export async function paketKilidiniAl(secenek: {
           throw denetimHatasi;
         });
         if (durum === 'var') {
-          const sonuc = await kilidiIncele(yol, kok, secenek.testId);
+          const sonuc = await siraIle(anahtar, () => {
+            secenek.kanca?.olay?.('incele-basladi');
+            return kilidiIncele(yol, kok, secenek.testId, secenek.kanca);
+          }, {
+            bitis,
+            hata: () => new BundleLockTimeout(yol, sonSahip, sonHata, true),
+            sirada: () => secenek.kanca?.olay?.('incele-sirada'),
+          });
           // Devralındı: hemen `O_EXCL`'e dönülür (son söz onun). Süre yine sınırlı.
           if (sonuc === 'devralindi' && Date.now() < bitis) continue;
           if (sonuc !== 'devralindi' && sonuc !== 'yok') sonSahip = sonuc;
@@ -291,21 +317,85 @@ export async function paketKilidiniAl(secenek: {
       return {
         yol,
         dogrula: () => sahiplikDogrula(yol, token),
-        birak: () => kilidiBirak(yol, kok, secenek.testId, token, (ham) => isaretiTasiyor(ham, token)),
+        birak: () => siraIle(anahtar, () => {
+          secenek.kanca?.olay?.('birak-basladi');
+          return kilidiBirak(yol, kok, secenek.testId, token, (ham) => isaretiTasiyor(ham, token));
+        }, { sirada: () => secenek.kanca?.olay?.('birak-sirada') }),
       };
     } catch (hata: unknown) {
       // Yalnız kesin bizim olan dosya kaldırılır: gövde tam yazıldıysa birebir
       // aynısı; yazım yarıda kaldıysa boş olmayan bir baş parçası; boşsa ancak
       // yazım payı dolmadan (rakipler boş kilidi o süre devralmaz).
-      await kilidiBirak(yol, kok, secenek.testId, token, (ham) => {
+      await siraIle(anahtar, () => kilidiBirak(yol, kok, secenek.testId, token, (ham) => {
         if (yazildi) return ham === govde;
         if (ham.length > 0) return govde.startsWith(ham);
         return Date.now() - acilisAni < PAKET_KILIDI.yazimPayiMs;
-      });
+      }));
       throw hata;
     } finally {
       if (!teslimEdildi) tutulanKilitler.delete(token);
     }
+  }
+}
+
+/**
+ * Bu süreçte kilit başına (gerçek yol anahtarıyla) sıra: inceleme/devralma ile bırakma aynı kilit
+ * için birbirinin arasına girmez. Aksi hâlde bir inceleme bu sürecin tuttuğu
+ * bir kilidin gövdesini okuduktan sonra o kilit bırakılıp yeniden alınabilir;
+ * inceleme artık kayıtta olmayan eski işarete bakıp yeni sahibin taze kilidini
+ * "bayat" diye taşır, sahibi o arada `BundleLockLost` alırdı. Sıra içindeyken
+ * okunan işaret, inceleme bitene dek kayıttan düşemez.
+ *
+ * Açış ve gövde yazımı bilerek sıra dışındadır: gövdesini yazamadan takılan bir
+ * yazıcı, aynı süreçteki ötekilerin boş kilidini yazım payından sonra
+ * devralmasını engellememeli. Kayıt (`tutulanKilitler`) gövde yazılmadan önce
+ * yapıldığı için gövdesi okunan her kilidin işareti bu sırada güvenilirdir.
+ * Ayrı süreçler etkilenmez, gecikme de görmez; onların sırası yine `O_EXCL` ve
+ * pid canlılığıdır.
+ */
+const kilitSiralari = new Map<string, Promise<void>>();
+
+/**
+ * `bitis` ve `hata` verilirse sırada bekleme alımın kalan süresiyle sınırlıdır;
+ * dolarsa iş koşmadan `hata()` atılır ve sıradaki yer hemen bırakılır. Bırakma
+ * (ve alım hatasının temizliği) sınırsız bekler: atlanırsa kilit dosyası ya da
+ * kayıt kalırdı. Sıradaki işler yalnız kısa dosya işlemleridir.
+ */
+async function siraIle<T>(
+  anahtar: string,
+  is: () => Promise<T>,
+  ayar: { bitis?: number; hata?: () => Error; sirada?: () => void } = {},
+): Promise<T> {
+  const onceki = kilitSiralari.get(anahtar) ?? Promise.resolve();
+  let sirayiBirak!: () => void;
+  const benimki = new Promise<void>((coz) => { sirayiBirak = coz; });
+  const zincir = onceki.then(() => benimki);
+  kilitSiralari.set(anahtar, zincir);
+  // Girdi, zincir (öncekiler ve bu iş) çözülünce temizlenir; bekleyicinin
+  // kendisi silmez. Süresi dolup erken çıkan bekleyici silseydi, önündeki iş
+  // hâlâ koşarken sonraki çağrı boş sıra görüp onunla aynı anda koşardı.
+  void zincir.then(() => {
+    if (kilitSiralari.get(anahtar) === zincir) kilitSiralari.delete(anahtar);
+  });
+  const { bitis, hata } = ayar;
+  try {
+    ayar.sirada?.();
+    if (bitis === undefined || hata === undefined) {
+      await onceki;
+    } else {
+      let zamanlayici: ReturnType<typeof setTimeout> | undefined;
+      const doldu = await Promise.race([
+        onceki.then(() => false),
+        new Promise<boolean>((coz) => {
+          zamanlayici = setTimeout(() => coz(true), Math.max(0, bitis - Date.now()));
+        }),
+      ]);
+      clearTimeout(zamanlayici);
+      if (doldu) throw hata();
+    }
+    return await is();
+  } finally {
+    sirayiBirak();
   }
 }
 
@@ -366,7 +456,12 @@ async function sahiplikDogrula(yol: string, token: string): Promise<void> {
  * başka bir süreç kendi kilidini koymuşsa) yerine konur — üstüne yazmayan
  * `link` ile — ve devralma sayılmaz.
  */
-async function kilidiIncele(yol: string, kok: string, testId: string): Promise<KilitGovdesi | 'devralindi' | 'yok'> {
+async function kilidiIncele(
+  yol: string,
+  kok: string,
+  testId: string,
+  kanca: PaketKilidiKancasi | undefined,
+): Promise<KilitGovdesi | 'devralindi' | 'yok'> {
   let ham: string;
   let mtimeMs: number;
   try {
@@ -377,6 +472,7 @@ async function kilidiIncele(yol: string, kok: string, testId: string): Promise<K
     if (mesgulMu(hata)) return { pid: 0, token: '', startedAt: 'unknown' };
     throw hata;
   }
+  await kanca?.gecikme?.('incele-okundu');
   const govde = govdeyiAyristir(ham);
   if (!bayatMi(govde, mtimeMs)) return govde ?? { pid: 0, token: '', startedAt: 'unknown' };
 
@@ -387,6 +483,7 @@ async function kilidiIncele(yol: string, kok: string, testId: string): Promise<K
     if (hataKodu(hata) === 'ENOENT' || mesgulMu(hata)) return 'yok';
     throw hata;
   }
+  await kanca?.gecikme?.('devir-tasindi');
   const alinan = await readFile(devir, 'utf8').catch(() => null);
   if (alinan === ham) {
     // Gövdesi okunamayan kilit, gövdesini hâlâ yazmakta olan yavaş ama canlı bir

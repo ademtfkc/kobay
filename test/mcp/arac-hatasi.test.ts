@@ -1,6 +1,5 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -54,11 +53,11 @@ async function bagliMcp(cwd: string): Promise<{ istemci: Client; kapat: () => Pr
 
 /** Kodu hazır, düşecek bir testi olan proje. */
 async function hazirProje(): Promise<string> {
-  const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-hata-'));
+  const cwd = await geciciDizinAc('kobay-mcp-hata-');
   const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
   await dizin.testYaz(TEST_KAYDI);
   await dizin.kodYaz(TEST_KAYDI.id, '// hazır');
-  const yanitlar = await mkdtemp(join(tmpdir(), 'kobay-mcp-yanit-'));
+  const yanitlar = await geciciDizinAc('kobay-mcp-yanit-');
   await yazAtomik(join(yanitlar, `analysis-${TEST_KAYDI.id}.json`), JSON.stringify({
     rootCauseHypothesis: 'Başlık değişmiş', failureKind: 'product_bug',
     recommendedFixTarget: { kind: 'code', reference: 'ana sayfa', rationale: 'Beklenen başlık yok' }, evidence: [],
@@ -107,13 +106,20 @@ describe('MCP isError yalnız gerçek araç hatalarında', () => {
     }
   });
 
-  it('hedef kapalı (3) ve motor hatası (4) araç hatası sayılır', async () => {
+  it('hedef kapalı (3) ve motor hatası (4) araç hatası sayılır, gövde yine verdict\'li satır dizisidir', async () => {
     for (const verdict of ['blocked', 'inconclusive'] as const) {
       sahteler.verdict = verdict;
       const baglanti = await bagliMcp(await hazirProje());
       try {
-        const sonuc = await baglanti.istemci.callTool({ name: 'test_run', arguments: { ids: [TEST_KAYDI.id] } });
-        expect(sonuc.isError, verdict).toBe(true);
+        for (const arac of ['test_run', 'test_rerun']) {
+          const sonuc = await baglanti.istemci.callTool({
+            name: arac,
+            arguments: arac === 'test_run' ? { ids: [TEST_KAYDI.id] } : { id: TEST_KAYDI.id },
+          });
+          expect(sonuc.isError, `${arac} ${verdict}`).toBe(true);
+          // Beceri sözleşmesi: isError olsa da gövde `{error}` değil, satır dizisi; ajan verdict'i okur.
+          expect(govde(sonuc), `${arac} ${verdict}`).toEqual([expect.objectContaining({ id: TEST_KAYDI.id, verdict })]);
+        }
       } finally {
         await baglanti.kapat();
       }
@@ -126,6 +132,28 @@ describe('MCP isError yalnız gerçek araç hatalarında', () => {
       const sonuc = await baglanti.istemci.callTool({ name: 'test_run', arguments: { ids: ['t_yok12345'] } });
       expect(sonuc.isError).toBe(true);
       expect(JSON.stringify(govde(sonuc))).toContain('Test not found');
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
+  it('hata zarfında adres kimliği maskelenir, başarı gövdesinde baseUrl ham kalır', async () => {
+    const cwd = await geciciDizinAc('kobay-mcp-kimlik-');
+    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
+    await KobayDizini.ac(cwd, { baseUrl: kimlikli, beyin: { adaptor: 'sahte' } });
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const hata = await baglanti.istemci.callTool({
+        name: 'test_get', arguments: { id: 'http://admin:Hunter2Pass@host.test/x' },
+      });
+      expect(hata.isError).toBe(true);
+      const metin = JSON.stringify(govde(hata));
+      expect(metin).not.toContain('Hunter2Pass');
+      expect(metin).toContain('http://[redacted]@host.test/x');
+
+      const basari = await baglanti.istemci.callTool({ name: 'project_get', arguments: {} });
+      expect(basari.isError).toBeUndefined();
+      expect(govde(basari)).toMatchObject({ config: { baseUrl: kimlikli } });
     } finally {
       await baglanti.kapat();
     }

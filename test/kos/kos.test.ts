@@ -1,5 +1,5 @@
-import { access, mkdir, mkdtemp, readFile, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, readFile, stat } from 'node:fs/promises';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { dirname, join, sep } from 'node:path';
 import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
@@ -37,7 +37,7 @@ function playwrightMumkun(context: TestContext): boolean {
 }
 
 async function geciciDizin(baseUrl: string): Promise<KobayDizini> {
-  return KobayDizini.ac(await mkdtemp(join(tmpdir(), 'kobay-kos-')), { baseUrl, beyin: { adaptor: 'sahte' } });
+  return KobayDizini.ac(await geciciDizinAc('kobay-kos-'), { baseUrl, beyin: { adaptor: 'sahte' } });
 }
 
 function testKaydi(id: string, planSteps: PlanAdimi[], status: TestKaydi['status'] = 'ready'): TestKaydi {
@@ -85,7 +85,7 @@ describe('hedefAyaktaMi', () => {
 
 describe('raporuAyristir', () => {
   it('iç içe adımları düzleştirir, ANSI hatayı temizler ve olmayanı skipped yapar', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-rapor-'));
+    const kok = await geciciDizinAc('kobay-rapor-');
     await yazAtomik(join(kok, 'step-0.png'), 'png');
     const rapor = {
       suites: [{ specs: [{ tests: [{ results: [{ status: 'failed', error: { message: '\u001b[31mdoğrulama düştü\u001b[0m' }, steps: [
@@ -109,7 +109,7 @@ describe('raporuAyristir', () => {
 
 describe('raporuAyristir — sahte yeşil koruması', () => {
   it('rapor hata taşıyor ve hiç test koşmadıysa motor hatası bildirir', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-rapor-'));
+    const kok = await geciciDizinAc('kobay-rapor-');
     // Gerçek koşudan alınmış biçim: iki ayrı @playwright/test kopyası, sıfır test.
     const rapor = {
       stats: { expected: 0, unexpected: 0, skipped: 0, flaky: 0 },
@@ -128,7 +128,7 @@ describe('raporuAyristir — sahte yeşil koruması', () => {
   });
 
   it('istatistik sıfırsa hata listesi boş olsa da motor hatası bildirir', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-rapor-'));
+    const kok = await geciciDizinAc('kobay-rapor-');
     const sonuc = await raporuAyristir(
       { stats: { expected: 0, unexpected: 0, skipped: 3, flaky: 0 }, errors: [], suites: [] },
       [{ type: 'action', description: 'Sayfayı aç' }],
@@ -138,7 +138,7 @@ describe('raporuAyristir — sahte yeşil koruması', () => {
   });
 
   it('test geçti görünse bile hiçbir adım koşmadıysa motor hatası bildirir', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-rapor-'));
+    const kok = await geciciDizinAc('kobay-rapor-');
     const sonuc = await raporuAyristir(
       {
         stats: { expected: 1, unexpected: 0, skipped: 0, flaky: 0 },
@@ -153,7 +153,7 @@ describe('raporuAyristir — sahte yeşil koruması', () => {
   });
 
   it('gerçekten koşan rapora motor hatası uydurmaz', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-rapor-'));
+    const kok = await geciciDizinAc('kobay-rapor-');
     const sonuc = await raporuAyristir(
       {
         stats: { expected: 1, unexpected: 0, skipped: 0, flaky: 0 },
@@ -170,7 +170,7 @@ describe('raporuAyristir — sahte yeşil koruması', () => {
 
 describe('kaliciCalismaAlaniHazirla', () => {
   it('kalıcı yapılandırmayı ve fixture yolunu yazar, aynı içerikte yeniden yazmaz', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-calisma-alani-'));
+    const kok = await geciciDizinAc('kobay-calisma-alani-');
     const ilk = await kaliciCalismaAlaniHazirla(kok);
     const once = await stat(ilk.configYolu);
     const fixtureOnce = await stat(ilk.fixtureYolu);
@@ -184,7 +184,7 @@ describe('kaliciCalismaAlaniHazirla', () => {
   });
 
   it('bayat fixture yolunu aktif kobay paketine göre yeniden yazar', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-calisma-alani-'));
+    const kok = await geciciDizinAc('kobay-calisma-alani-');
     const fixtureYolu = join(kok, 'tests', '_fixture.ts');
     await yazAtomik(fixtureYolu, 'export * from "/eski/kurulum/kobay/dist/kos/fixture.js";\n');
     await kaliciCalismaAlaniHazirla(kok);
@@ -194,8 +194,8 @@ describe('kaliciCalismaAlaniHazirla', () => {
   });
 
   it('paketin fixture modülü yoksa açık hata atar ve fixture yazmaz', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-calisma-alani-'));
-    const sahtePaket = await mkdtemp(join(tmpdir(), 'kobay-sahte-paket-'));
+    const kok = await geciciDizinAc('kobay-calisma-alani-');
+    const sahtePaket = await geciciDizinAc('kobay-sahte-paket-');
     await expect(fixtureYenidenAktarimMetni(sahtePaket)).rejects.toThrow(FixtureModuleMissing);
     await expect(fixtureYenidenAktarimMetni(sahtePaket)).rejects.toThrow(/npm run build/);
     await expect(kaliciCalismaAlaniHazirla(kok, sahtePaket)).rejects.toThrow(FixtureModuleMissing);
@@ -203,7 +203,7 @@ describe('kaliciCalismaAlaniHazirla', () => {
   });
 
   it('derlenmiş modül varsa onu yeniden dışa aktarır', async () => {
-    const sahtePaket = await mkdtemp(join(tmpdir(), 'kobay-sahte-paket-'));
+    const sahtePaket = await geciciDizinAc('kobay-sahte-paket-');
     await yazAtomik(join(sahtePaket, 'dist', 'kos', 'fixture.js'), 'export const test = 1;\n');
     const beklenenYol = join(sahtePaket, 'dist', 'kos', 'fixture.js').split(sep).join('/');
     expect(await fixtureYenidenAktarimMetni(sahtePaket))

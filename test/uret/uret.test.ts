@@ -1,4 +1,5 @@
-import { access, mkdtemp, readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -37,7 +38,7 @@ function playwrightMumkun(context: TestContext): boolean {
 }
 
 async function geciciKobay(): Promise<string> {
-  const kok = await mkdtemp(join(tmpdir(), 'kobay-uret-'));
+  const kok = await geciciDizinAc('kobay-uret-');
   await calismaAlaniHazirla(kok);
   return kok;
 }
@@ -441,7 +442,7 @@ describe('geçici Playwright config', () => {
   });
 
   it('birebir eski şablon tazelenir, kalıcı config korunur', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-uret-config-'));
+    const kok = await geciciDizinAc('kobay-uret-config-');
     const configYolu = join(kok, 'playwright.config.ts');
 
     await yazAtomik(configYolu, ESKI_SABLON);
@@ -456,7 +457,7 @@ describe('geçici Playwright config', () => {
   });
 
   it('elle düzenlenmiş config ezilmez; uyarı basılır', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-uret-config-ozel-'));
+    const kok = await geciciDizinAc('kobay-uret-config-ozel-');
     const configYolu = join(kok, 'playwright.config.ts');
     // Eski şablon + kullanıcının kendi eklediği satır: artık kobay'ın dosyası değil.
     const ozel = ESKI_SABLON.replace("  workers: 1,\n", "  workers: 1,\n  retries: 2,\n");

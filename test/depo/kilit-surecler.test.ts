@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { BundleIncomplete, KobayDizini, type HataPaketi, type KobayConfig } from '../../src/depo/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 /**
  * Aynı test kimliğine ayrı Node süreçlerinden yazan kobay çağrıları. Süreç içi
@@ -50,7 +50,7 @@ function kostur(betik: string, argumanlar: string[]): Promise<{ kod: number | nu
 }
 
 async function betikYaz(ad: string, govde: string): Promise<string> {
-  const dizin = await mkdtemp(join(tmpdir(), 'kobay-kilit-betik-'));
+  const dizin = await geciciDizinAc('kobay-kilit-betik-');
   const yol = join(dizin, ad);
   await writeFile(yol, govde);
   return yol;
@@ -60,7 +60,7 @@ const depoUrl = (dosya: string): string => pathToFileURL(join(DEPO, dosya)).href
 
 describe('hata paketi kilidi, ayrı süreçler', () => {
   it('üç ayrı süreç aynı testin paketini 15\'er kez yazar: hepsi başarır, paket eksiksiz, artık yok', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-kilit-'));
+    const kok = await geciciDizinAc('kobay-kilit-');
     const dizin = await KobayDizini.ac(kok, config);
     await dizin.hataPaketiYaz(paket('s_0'), []);
     const betik = await betikYaz('yazici.mts', `
@@ -91,7 +91,7 @@ describe('hata paketi kilidi, ayrı süreçler', () => {
   }, 120_000);
 
   it('kilidi tutan süreç yayım ortasında ölürse: yarım paket kabul edilmez, sonraki yazım kilidi devralır', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-kilit-'));
+    const kok = await geciciDizinAc('kobay-kilit-');
     const dizin = await KobayDizini.ac(kok, config);
     await dizin.hataPaketiYaz(paket('s_1'), []);
     // Ölen süreç: kilidi alır, hedefe yarım (`.partial` işaretli) bir paket bırakır, bırakmadan çıkar.

@@ -1,5 +1,5 @@
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, chmod, mkdir, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { basename, dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -167,7 +167,7 @@ import { BundleLockConflict, BundleLockLost, BundleLockTimeout, PAKET_KILIDI } f
 const YENIDEN_BAKIS = 10;
 
 async function geciciDizin(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'kobay-depo-'));
+  return geciciDizinAc('kobay-depo-');
 }
 
 const PAKET_KILIDI_VARSAYILAN = { ...PAKET_KILIDI };
@@ -216,6 +216,8 @@ tests/_fixture.ts
 test-results/
 playwright-report/
 blob-report/
+report/
+.kobay-report-*
 # <<< kobay managed <<<
 `;
 

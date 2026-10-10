@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -19,6 +19,8 @@ const posix = process.platform !== 'win32';
 let tarayiciEngeli: unknown;
 let demo: { url: string; kapat: () => Promise<void> } | undefined;
 const temizlenecek: number[] = [];
+// SIGKILL ile öldürülen Chromium kendi profil klasörünü silemez; yolunu betik kaydeder, afterAll siler.
+const profiller: string[] = [];
 
 beforeAll(async () => {
   try {
@@ -35,6 +37,8 @@ afterAll(async () => {
   for (const pid of temizlenecek) {
     try { process.kill(pid, 'SIGKILL'); } catch { /* zaten ölü */ }
   }
+  await new Promise<void>((coz) => { setTimeout(coz, 300); });
+  for (const yol of profiller) await rm(yol, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
 });
 
 function mumkun(context: TestContext): boolean {
@@ -54,7 +58,8 @@ function testKaydi(id: string): TestKaydi {
 }
 
 function askiKod(pidYolu: string): string {
-  return `import { writeFileSync } from 'node:fs';
+  return `import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { chromium } from ${JSON.stringify(playwrightYolu)};
 import { test } from './_fixture';
 
@@ -62,7 +67,15 @@ test('hangs the worker in a busy loop', async ({ page }) => {
   test.setTimeout(0);
   await page.goto('data:text/html,<title>hang</title>');
   const server = await chromium.launchServer({ headless: true });
-  writeFileSync(${JSON.stringify(pidYolu)}, JSON.stringify({ workerPid: process.pid, chromiumPid: server.process().pid }));
+  // Hem launchServer'ın hem de fixture tarayıcısının (worker'ın çocuğu) profil klasörleri: SIGKILL'den sonra kalırlar.
+  const profilArgs = [server.process().spawnargs.find((arg) => arg.startsWith('--user-data-dir='))];
+  for (const satir of execFileSync('ps', ['-axo', 'ppid=,command='], { encoding: 'utf8' }).split('\\n')) {
+    if (satir.trim().startsWith(String(process.pid) + ' ')) profilArgs.push(/--user-data-dir=(\\S+)/.exec(satir)?.[0]);
+  }
+  const profilDizinleri = profilArgs.filter((arg) => arg !== undefined).map((arg) => arg.slice('--user-data-dir='.length));
+  writeFileSync(${JSON.stringify(pidYolu)}, JSON.stringify({
+    workerPid: process.pid, chromiumPid: server.process().pid, profilDizinleri,
+  }));
   for (;;) { /* blocks the event loop: no IPC, no signal handler */ }
 });
 `;
@@ -71,9 +84,10 @@ test('hangs the worker in a busy loop', async ({ page }) => {
 async function pidKaydiBekle(yol: string): Promise<{ workerPid: number; chromiumPid: number }> {
   for (let deneme = 0; deneme < 300; deneme += 1) {
     try {
-      const kayit = JSON.parse(await readFile(yol, 'utf8')) as Partial<{ workerPid: number; chromiumPid: number }>;
+      const kayit = JSON.parse(await readFile(yol, 'utf8')) as Partial<{ workerPid: number; chromiumPid: number; profilDizinleri: string[] }>;
       if (Number.isInteger(kayit.workerPid) && Number.isInteger(kayit.chromiumPid)) {
         temizlenecek.push(kayit.workerPid!, kayit.chromiumPid!);
+        if (Array.isArray(kayit.profilDizinleri)) profiller.push(...kayit.profilDizinleri);
         return { workerPid: kayit.workerPid!, chromiumPid: kayit.chromiumPid! };
       }
     } catch { /* dosya henüz yok ya da yarım yazıldı */ }
@@ -96,7 +110,7 @@ async function pidOlduMu(pid: number, sureMs: number): Promise<boolean> {
 }
 
 async function hazirla(id: string): Promise<{ kok: string; dizin: KobayDizini; test: TestKaydi; pidYolu: string }> {
-  const kok = await mkdtemp(join(tmpdir(), 'kobay-asili-worker-'));
+  const kok = await geciciDizinAc('kobay-asili-worker-');
   const dizin = await KobayDizini.ac(kok, { baseUrl: demo!.url, beyin: { adaptor: 'sahte' } });
   const test = testKaydi(id);
   const pidYolu = join(kok, 'child-pids.json');

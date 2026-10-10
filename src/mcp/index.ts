@@ -22,6 +22,7 @@ import {
   testList,
   testRefresh,
   testResult,
+  testReport,
   testRerun,
   testRun,
 } from '../cli/komutlar/index.js';
@@ -30,9 +31,9 @@ import {
   hataPaketiVarsayilanYol,
   hataPaketiYoluDenetle,
 } from '../cli/komutlar/ortak.js';
-import type { KomutSonucu } from '../cli/komut.js';
+import { PermissionError, UsageError, hataBilgisi, type KomutSonucu } from '../cli/komut.js';
 import { CIKIS } from '../cli/cikis.js';
-import { KobayDizini } from '../depo/index.js';
+import { KobayDizini, adresKimligiGizle, metindekiKimligiGizle } from '../depo/index.js';
 
 interface McpAyarlari {
   cwd: string;
@@ -43,7 +44,7 @@ const require = createRequire(import.meta.url);
 const { version: KOBAY_SURUMU } = require('../../package.json') as { version: string };
 const PROJE_DIZINI_SEMASI = { projectDir: z.string().min(1).optional() };
 
-export const MCP_INSTRUCTIONS = 'Use project_create once to initialize a target, then explore, plan_generate, and plan_accept. Use test_run to generate and run tests; inspect failures with failure_get, fix product code for product_bug, use test_refresh only for product_changed, and confirm with test_rerun. The prune tool previews by default; pass confirm true only after reviewing the preview. Pass projectDir when the server is not started inside the target Kobay project.';
+export const MCP_INSTRUCTIONS = 'Use project_create once to initialize a target, then explore, plan_generate, and plan_accept. Use test_run to generate and run tests; inspect failures with failure_get, fix product code for product_bug, use test_refresh only for product_changed, and confirm with test_rerun. Finish with test_report to write the HTML report and, with summary, a Markdown summary of fix prompts. The prune tool previews by default; pass confirm true only after reviewing the preview. Pass projectDir when the server is not started inside the target Kobay project.';
 
 /** MCP kökleri ve adayları aynı native realpath uygulamasıyla kanonikleştirilir. */
 export function mcpGercekYol(yol: string): string {
@@ -55,8 +56,10 @@ export function mcpGercekYol(yol: string): string {
  * "Test düştü" (exit 1) geçerli bir yürütme sonucudur: bazı istemciler
  * `isError`'ı akış kesen hata sayıp verdict'i ajana hiç göstermez. Bu yüzden
  * yalnız exit 0 ve 1 hatasız döner; kullanım (2), hedef yok (3), motor/beyin
- * (4) ve yetki (5) gerçek araç hatasıdır — hiçbiri bir verdict taşımaz, hepsi
- * ajanın koşudan önce düzeltmesi gereken bir durumu anlatır.
+ * (4) ve yetki (5) gerçek araç hatasıdır; hepsi ajanın koşudan önce düzeltmesi
+ * gereken bir durumu anlatır. Gövde çoğunlukla `{error}` zarfıdır, ama
+ * `test_run`/`test_rerun` `blocked` (3) ve `inconclusive` (4) sonucu verdict'li
+ * satır dizisiyle döner; beceri ajana bu durumda da verdict'i okumasını söyler.
  */
 function sonucDon(sonuc: KomutSonucu): {
   content: [{ type: 'text'; text: string }];
@@ -64,15 +67,26 @@ function sonucDon(sonuc: KomutSonucu): {
 } {
   const aracHatasi = sonuc.exitCode !== CIKIS.GECTI && sonuc.exitCode !== CIKIS.DUSTU;
   const yanit = {
-    content: [{ type: 'text' as const, text: JSON.stringify(sonuc.json) ?? 'null' }] as [{ type: 'text'; text: string }],
+    // Yalnız hata zarfında mesaj metni arındırılır; başarılı sonuç gövdesi (makine sözleşmesi) aynen kalır.
+    content: [{
+      type: 'text' as const,
+      text: aracHatasi ? metindekiKimligiGizle(JSON.stringify(sonuc.json) ?? 'null') : JSON.stringify(sonuc.json) ?? 'null',
+    }] as [{ type: 'text'; text: string }],
     ...(aracHatasi ? { isError: true as const } : {}),
   };
   return yanit;
 }
 
+/**
+ * Aracın kendi denetimlerinden (proje kökü, yol, giriş origin'i) atılan hata da
+ * komut hatalarıyla aynı zarfı taşır: `{"error": {"code", "message"}}`.
+ */
 function hataDon(hata: unknown): ReturnType<typeof sonucDon> {
-  const mesaj = hata instanceof Error ? hata.message : String(hata);
-  return { content: [{ type: 'text', text: JSON.stringify({ error: mesaj }) }], isError: true };
+  const { code, message } = hataBilgisi(hata);
+  return {
+    content: [{ type: 'text', text: JSON.stringify({ error: { code, message: metindekiKimligiGizle(message) } }) }],
+    isError: true,
+  };
 }
 
 async function aracCalistir(islem: () => Promise<KomutSonucu>): Promise<ReturnType<typeof sonucDon>> {
@@ -92,12 +106,12 @@ function yolKokIcindeMi(kok: string, yol: string): boolean {
 async function projeIciYol(projeKoku: string, giris: string, alan: string): Promise<string> {
   const cozulmusKok = resolve(projeKoku);
   const hedef = isAbsolute(giris) ? resolve(giris) : resolve(cozulmusKok, giris);
-  if (!yolKokIcindeMi(cozulmusKok, hedef)) throw new Error(`${alan} cannot be outside the project root`);
+  if (!yolKokIcindeMi(cozulmusKok, hedef)) throw new UsageError(`${alan} cannot be outside the project root`);
 
   const varolan = await enYakinVarolanYol(hedef);
   const gercekKok = mcpGercekYol(cozulmusKok);
   const gercekVarolan = mcpGercekYol(varolan);
-  if (!yolKokIcindeMi(gercekKok, gercekVarolan)) throw new Error(`${alan} cannot be outside the project root`);
+  if (!yolKokIcindeMi(gercekKok, gercekVarolan)) throw new UsageError(`${alan} cannot be outside the project root`);
   return hedef;
 }
 
@@ -105,14 +119,14 @@ function mcpKokleriniDondur(cwd: string, env: NodeJS.ProcessEnv): string[] {
   const girdiler = [cwd, ...(env.KOBAY_MCP_ROOTS ?? '').split(delimiter).filter((yol) => yol !== '')];
   return girdiler.map((girdi) => {
     const kok = mcpGercekYol(resolve(cwd, girdi));
-    if (!statSync(kok).isDirectory()) throw new Error(`MCP root is not a directory: ${girdi}`);
+    if (!statSync(kok).isDirectory()) throw new UsageError(`MCP root is not a directory: ${girdi}`);
     return kok;
   });
 }
 
 function mcpKokundeDogrula(izinliKokler: string[], yol: string): void {
   if (!izinliKokler.some((kok) => yolKokIcindeMi(kok, yol))) {
-    throw new Error(`projectDir is outside the allowed MCP roots: ${yol}`);
+    throw new UsageError(`projectDir is outside the allowed MCP roots: ${yol}`);
   }
 }
 
@@ -124,13 +138,13 @@ async function projeKokuSec(
 ): Promise<string> {
   const aday = resolve(cwd, projectDir ?? '.');
   const bilgi = await stat(aday).catch(() => null);
-  if (bilgi === null || !bilgi.isDirectory()) throw new Error(`Project directory not found: ${aday}`);
+  if (bilgi === null || !bilgi.isDirectory()) throw new UsageError(`Project directory not found: ${aday}`);
   const gercekAday = mcpGercekYol(aday);
   mcpKokundeDogrula(izinliKokler, gercekAday);
   if (olusturulacak) return gercekAday;
 
   const dizin = await KobayDizini.bul(gercekAday);
-  if (dizin === null) throw new Error(`Directory is not inside a Kobay project: ${aday}`);
+  if (dizin === null) throw new UsageError(`Directory is not inside a Kobay project: ${aday}`);
   await dizin.configOku();
   mcpKokundeDogrula(izinliKokler, dizin.projeKoku);
   return dizin.projeKoku;
@@ -149,7 +163,7 @@ function girisBilgisi(
   if (loginUser === undefined) return {};
   const izinli = env.KOBAY_LOGIN_ORIGIN;
   if (izinli === undefined || izinli === '') {
-    throw new Error(
+    throw new UsageError(
       'KOBAY_LOGIN_ORIGIN is not set for loginUser: set the address the password may be sent to'
       + ' (for example http://localhost:3000) as KOBAY_LOGIN_ORIGIN in the environment that starts the MCP server',
     );
@@ -159,22 +173,22 @@ function girisBilgisi(
   try {
     izinliOrigin = new URL(izinli).origin;
   } catch {
-    throw new Error(`KOBAY_LOGIN_ORIGIN is not a valid URL: ${izinli}`);
+    throw new UsageError(`KOBAY_LOGIN_ORIGIN is not a valid URL: ${adresKimligiGizle(izinli)}`);
   }
   try {
     hedefOrigin = new URL(url).origin;
   } catch {
-    throw new Error(`Invalid URL: ${url}`);
+    throw new UsageError(`Invalid URL: ${adresKimligiGizle(url)}`);
   }
   if (hedefOrigin !== izinliOrigin) {
-    throw new Error(
+    throw new PermissionError(
       `Credentials may only be given for KOBAY_LOGIN_ORIGIN (${izinliOrigin}); ${hedefOrigin} was requested.`
       + ' If that address is correct, change KOBAY_LOGIN_ORIGIN in the MCP server environment',
     );
   }
   const parola = env.KOBAY_LOGIN_PASS;
   if (parola === undefined || parola === '') {
-    throw new Error('The password environment variable is not set: KOBAY_LOGIN_PASS');
+    throw new UsageError('The password environment variable is not set: KOBAY_LOGIN_PASS');
   }
   return { login: { username: loginUser, password: parola } };
 }
@@ -195,12 +209,23 @@ async function kimlikBaskaOrigineTasinmaz(cwd: string, url: string): Promise<voi
     return; // Geçersiz URL'yi projectCreate açık hatayla reddeder.
   }
   if (kimlik !== null && kimlik.origin !== yeniOrigin) {
-    throw new Error(
+    throw new PermissionError(
       `The saved credentials belong to ${kimlik.origin ?? 'an unknown address'}; they cannot be moved to`
       + ` ${yeniOrigin} over MCP. The user must run \`kobay project create --url <URL> --login --force\` in a terminal`,
     );
   }
 }
+
+/**
+ * MCP araç ipuçları (istemci onay arayüzü için). Hiçbir araç salt-okuma
+ * işaretlenmez: `KobayDizini.bul()` her çağrıda `.kobay` bakımı yapabilir
+ * (`.gitignore` senkronu, dizin oluşturma, bayat dosya silme, kimlik işlemi
+ * kurtarma, göç). Var olan veriyi silen ya da geçersiz kılanlar yıkıcıdır:
+ * `test_delete`, `prune`, `project_update` ve `project_create` (origin
+ * değişiminde kimlik/oturum dosyaları düşer, `force` config'i ezer).
+ */
+const YIKICI = { readOnlyHint: false, destructiveHint: true } as const;
+const YAZAR = { readOnlyHint: false, destructiveHint: false } as const;
 
 /** MCP araçlarını oluşturur; transport bağlamaz, testlerde doğrudan kullanılabilir. */
 export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
@@ -216,6 +241,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('project_create', {
     description: 'Creates the Kobay directory for a target project, plus optional login credentials.',
+    annotations: YIKICI,
     inputSchema: z.strictObject({
       ...PROJE_DIZINI_SEMASI,
       url: z.string(),
@@ -241,6 +267,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('project_update', {
     description: 'Updates only the given fields in the existing Kobay project configuration.',
+    annotations: YIKICI,
     inputSchema: {
       ...PROJE_DIZINI_SEMASI,
       baseUrl: z.string().optional(),
@@ -270,11 +297,13 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('project_get', {
     description: 'Returns the configuration and status summary of the current Kobay project.',
+    annotations: YAZAR,
     inputSchema: PROJE_DIZINI_SEMASI,
   }, async ({ projectDir }) => aracCalistir(async () => projectGet({ cwd: await projeSec(projectDir) })));
 
   sunucu.registerTool('prune', {
     description: 'Previews removal of old runs, brain logs, and legacy artifacts by default. Pass confirm: true to delete; dryRun: true always forces a preview, even with confirmation.',
+    annotations: YIKICI,
     inputSchema: z.strictObject({
       ...PROJE_DIZINI_SEMASI,
       dryRun: z.boolean().optional(),
@@ -291,11 +320,13 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('explore', {
     description: 'Explores the target app and updates the page map.',
+    annotations: YAZAR,
     inputSchema: PROJE_DIZINI_SEMASI,
   }, async ({ projectDir }) => aracCalistir(async () => explore({ cwd: await projeSec(projectDir) })));
 
   sunucu.registerTool('plan_generate', {
     description: 'Generates test proposals from the exploration data.',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, hint: z.string().optional() },
   }, async ({ projectDir, hint }) => aracCalistir(async () => planGenerate({
     cwd: await projeSec(projectDir),
@@ -304,6 +335,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('plan_accept', {
     description: 'Accepts all of the generated test proposals, or the selected ones.',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, all: z.boolean().optional(), ids: z.array(z.string()).optional() },
   }, async ({ projectDir, all, ids }) => aracCalistir(async () => planAccept({
     cwd: await projeSec(projectDir),
@@ -313,6 +345,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('test_create', {
     description: 'Creates a test record from a plan JSON file.',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, planPath: z.string() },
   }, async ({ projectDir, planPath }) => aracCalistir(async () => {
     const cwd = await projeSec(projectDir);
@@ -321,46 +354,87 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('test_list', {
     description: 'Lists the tests saved in the project.',
+    annotations: YAZAR,
     inputSchema: PROJE_DIZINI_SEMASI,
   }, async ({ projectDir }) => aracCalistir(async () => testList({ cwd: await projeSec(projectDir) })));
 
   sunucu.registerTool('test_get', {
     description: 'Returns the given test record.',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string() },
   }, async ({ projectDir, id }) => aracCalistir(async () => testGet({ cwd: await projeSec(projectDir), id })));
 
   sunucu.registerTool('code_get', {
     description: 'Returns the generated Playwright code of a test; when there is no code, generate it with test_run.',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string() },
   }, async ({ projectDir, id }) => aracCalistir(async () => codeGet({ cwd: await projeSec(projectDir), id })));
 
   sunucu.registerTool('test_delete', {
     description: 'Deletes a test record and its generated code.',
+    annotations: YIKICI,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string() },
   }, async ({ projectDir, id }) => aracCalistir(async () => testDelete({ cwd: await projeSec(projectDir), id })));
 
   sunucu.registerTool('test_run', {
-    description: 'Generates the code when missing, runs the test, and analyzes a failure; exit 1 = test failed, 3 = target down, 4 = engine.',
+    description: 'Generates the code when missing, runs the test, and analyzes a failure; exit 1 = test failed, 3 = target down, 4 = engine.'
+      + ' With noAnalysis: true it never calls the brain and runs existing code only; a test without generated code is blocked (exit 3),'
+      + ' and a failure gets failure kind unknown.',
+    annotations: YAZAR,
     inputSchema: {
       ...PROJE_DIZINI_SEMASI,
       ids: z.array(z.string()).optional(),
       all: z.boolean().optional(),
       rerun: z.boolean().optional(),
+      noAnalysis: z.boolean().optional(),
     },
-  }, async ({ projectDir, ids, all, rerun }) => aracCalistir(async () => testRun({
+  }, async ({ projectDir, ids, all, rerun, noAnalysis }) => aracCalistir(async () => testRun({
     cwd: await projeSec(projectDir),
     ...(ids === undefined ? {} : { ids }),
     ...(all === undefined ? {} : { all }),
     ...(rerun === undefined ? {} : { rerun }),
+    ...(noAnalysis === true ? { noAnalysis: true } : {}),
   })));
+
+  sunucu.registerTool('test_report', {
+    description: 'Writes a static HTML report of the selected tests\' latest runs (default .kobay/report/) and, with summary,'
+      + ' a Markdown summary with up to maxPrompts fix prompts. Reads only what is on disk; failed tests do not make it an error.'
+      + ' Relative out and summary paths resolve against projectDir and must stay inside the project root. Screenshots are not redacted.',
+    annotations: YAZAR,
+    inputSchema: {
+      ...PROJE_DIZINI_SEMASI,
+      ids: z.array(z.string()).optional(),
+      all: z.boolean().optional(),
+      out: z.string().optional(),
+      summary: z.string().optional(),
+      maxPrompts: z.number().int().nonnegative().optional(),
+    },
+  }, async ({ projectDir, ids, all, out, summary, maxPrompts }) => aracCalistir(async () => {
+    const projeKoku = await projeSec(projectDir);
+    // CLI `--cwd` gibi: göreli yollar verilen dizine göre çözülür (proje kökü onun üstünde olabilir).
+    const cwd = mcpGercekYol(resolve(s.cwd, projectDir ?? '.'));
+    // MCP'de yazma hedefi proje kökünde kalır (failure_get ile aynı); gizli dizin kuralı testReport'ta.
+    const hedef = out === undefined ? undefined : await projeIciYol(projeKoku, resolve(cwd, out), 'out');
+    const ozet = summary === undefined ? undefined : await projeIciYol(projeKoku, resolve(cwd, summary), 'summary');
+    return testReport({
+      cwd,
+      ...(ids === undefined ? {} : { ids }),
+      ...(all === undefined ? {} : { all }),
+      ...(hedef === undefined ? {} : { out: hedef }),
+      ...(ozet === undefined ? {} : { summary: ozet }),
+      ...(maxPrompts === undefined ? {} : { maxPrompts }),
+    });
+  }));
 
   sunucu.registerTool('test_rerun', {
     description: 'Runs the existing test code again.',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string() },
   }, async ({ projectDir, id }) => aracCalistir(async () => testRerun({ cwd: await projeSec(projectDir), id })));
 
   sunucu.registerTool('test_refresh', {
     description: 'For failureKind product_changed: re-explores the test page, updates the map in place, adapts the plan steps to the new UI, moves the test back to draft, and (unless run is false) regenerates and runs it.',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string(), run: z.boolean().optional() },
   }, async ({ projectDir, id, run }) => aracCalistir(async () => testRefresh({
     cwd: await projeSec(projectDir),
@@ -370,6 +444,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('test_result', {
     description: 'Returns the latest run result, or the run history, of a test.',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string(), history: z.boolean().optional() },
   }, async ({ projectDir, id, history }) => aracCalistir(async () => testResult({
     cwd: await projeSec(projectDir),
@@ -379,6 +454,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('failure_get', {
     description: 'Copies the failure bundle of a test into the given directory; without out, .kobay/failure-out/<id> (a fixed path per test, refreshed in place).',
+    annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string(), out: z.string().optional() },
   }, async ({ projectDir, id, out }) => aracCalistir(async () => {
     const cwd = await projeSec(projectDir);
@@ -391,6 +467,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
 
   sunucu.registerTool('doctor', {
     description: 'Checks the Kobay installation, the target, and the working environment.',
+    annotations: YAZAR,
     inputSchema: PROJE_DIZINI_SEMASI,
   }, async ({ projectDir }) => aracCalistir(async () => doctor({ cwd: await projeSec(projectDir) })));
 

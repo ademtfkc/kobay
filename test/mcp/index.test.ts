@@ -1,12 +1,17 @@
-import { access, mkdir, mkdtemp, readFile, readdir, realpath, rename, symlink, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, realpath, rename, symlink, utimes, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { describe, expect, it } from 'vitest';
-import { KobayDizini, type Harita, type HataPaketi, type TestKaydi } from '../../src/depo/index.js';
+import { chromium } from '@playwright/test';
+import { afterAll, afterEach, beforeAll, describe, expect, it, type TestContext } from 'vitest';
+import { ANALIZ_ATLANDI } from '../../src/analiz/index.js';
+import { beceriMetni } from '../../src/beceri/index.js';
+import { KobayDizini, yazAtomik, type Harita, type HataPaketi, type TestKaydi } from '../../src/depo/index.js';
 import { mcpSunucusuOlustur } from '../../src/mcp/index.js';
+import { baslat } from '../kobay-demo/sunucu.mjs';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 async function bagliMcp(cwd: string, env?: NodeJS.ProcessEnv): Promise<{ istemci: Client; kapat: () => Promise<void> }> {
   const sunucu = mcpSunucusuOlustur({ cwd, ...(env === undefined ? {} : { env }) });
@@ -48,18 +53,53 @@ function hataPaketi(): HataPaketi {
 }
 
 describe('MCP sunucusu', () => {
-  it('18 aracı listeler', async () => {
-    const baglanti = await bagliMcp(await mkdtemp(join(tmpdir(), 'kobay-mcp-')));
+  it('19 aracı listeler', async () => {
+    const baglanti = await bagliMcp(await geciciDizinAc('kobay-mcp-'));
     try {
       const liste = await baglanti.istemci.listTools();
-      expect(liste.tools).toHaveLength(18);
+      expect(liste.tools).toHaveLength(19);
       expect(liste.tools.map((arac) => arac.name)).toEqual(expect.arrayContaining([
         'project_create', 'project_update', 'project_get', 'explore', 'plan_generate', 'plan_accept',
         'test_create', 'test_list', 'test_get', 'code_get', 'test_delete', 'test_run', 'test_rerun',
-        'test_refresh', 'test_result', 'failure_get', 'prune', 'doctor',
+        'test_refresh', 'test_result', 'failure_get', 'prune', 'doctor', 'test_report',
       ]));
+      const alanlar = (ad: string): string[] => Object.keys(
+        (liste.tools.find((arac) => arac.name === ad)?.inputSchema.properties ?? {}) as Record<string, unknown>,
+      );
+      expect(alanlar('test_run')).toEqual(expect.arrayContaining(['ids', 'all', 'rerun', 'noAnalysis']));
+      expect(alanlar('test_report').sort()).toEqual(['all', 'ids', 'maxPrompts', 'out', 'projectDir', 'summary']);
       for (const arac of liste.tools) {
         expect((arac.inputSchema.properties as Record<string, unknown>).projectDir).toBeDefined();
+      }
+      // Beceri araç tablosu sunucunun bütün araçlarını anar; yeni araç eklenince tablo da güncellenir.
+      const beceriTablosu = beceriMetni().split('\n').filter((satir) => satir.startsWith('| '));
+      const tablodaOlmayan = liste.tools
+        .map((arac) => arac.name)
+        .filter((ad) => !beceriTablosu.some((satir) => satir.includes(`\`${ad}\``)));
+      expect(tablodaOlmayan).toEqual([]);
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
+  it('araç ipuçlarını tools/list çıktısında verir: salt-okuma yok, yıkıcı ve yazan araçlar', async () => {
+    const baglanti = await bagliMcp(await geciciDizinAc('kobay-mcp-'));
+    try {
+      const { tools } = await baglanti.istemci.listTools();
+      const ipucu = Object.fromEntries(tools.map((arac) => [arac.name, arac.annotations]));
+      // Her araç `.kobay` bakımı yazabildiği için hiçbiri readOnlyHint: true taşımaz.
+      for (const arac of tools) expect(arac.annotations?.readOnlyHint, arac.name).toBe(false);
+      const yikicilar = ['test_delete', 'prune', 'project_update', 'project_create'];
+      for (const ad of yikicilar) {
+        expect(ipucu[ad], ad).toEqual({ readOnlyHint: false, destructiveHint: true });
+      }
+      const yazanlar = tools.map((arac) => arac.name).filter((ad) => !yikicilar.includes(ad));
+      expect(yazanlar).toEqual(expect.arrayContaining([
+        'project_get', 'test_list', 'test_get', 'code_get', 'test_result', 'doctor', 'failure_get', 'test_report',
+      ]));
+      expect(yazanlar).toHaveLength(15);
+      for (const ad of yazanlar) {
+        expect(ipucu[ad], ad).toEqual({ readOnlyHint: false, destructiveHint: false });
       }
     } finally {
       await baglanti.kapat();
@@ -67,7 +107,7 @@ describe('MCP sunucusu', () => {
   });
 
   it('prune previews by default and requires confirm true for deletion', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-prune-'));
+    const cwd = await geciciDizinAc('kobay-mcp-prune-');
     const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://localhost:3000', brain: { adaptor: 'sahte' } });
     await writeFile(dizin.yol('failure-out', 'trace.zip'), 'legacy');
     await utimes(dizin.yol('failure-out', 'trace.zip'), new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'));
@@ -105,7 +145,7 @@ describe('MCP sunucusu', () => {
   });
 
   it('package.json sürümünü ve kısa İngilizce kullanım talimatını bildirir', async () => {
-    const baglanti = await bagliMcp(await mkdtemp(join(tmpdir(), 'kobay-mcp-')));
+    const baglanti = await bagliMcp(await geciciDizinAc('kobay-mcp-'));
     try {
       const paket = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')) as { version: string };
       expect(baglanti.istemci.getServerVersion()?.version).toBe(paket.version);
@@ -113,25 +153,29 @@ describe('MCP sunucusu', () => {
       expect(baglanti.istemci.getInstructions()).toContain('test_refresh only for product_changed');
       expect(baglanti.istemci.getInstructions()).toContain('prune tool previews by default');
       expect(baglanti.istemci.getInstructions()).toContain('confirm true');
+      expect(baglanti.istemci.getInstructions()).toContain('Finish with test_report');
     } finally {
       await baglanti.kapat();
     }
   });
 
   it('proje yoksa test_list MCP hatası ve JSON metni döndürür', async () => {
-    const baglanti = await bagliMcp(await mkdtemp(join(tmpdir(), 'kobay-mcp-')));
+    const baglanti = await bagliMcp(await geciciDizinAc('kobay-mcp-'));
     try {
       const sonuc = await baglanti.istemci.callTool({ name: 'test_list', arguments: {} });
       expect(sonuc.isError).toBe(true);
       expect(sonuc.content).toEqual([{ type: 'text', text: expect.stringContaining('not inside a Kobay project') }]);
-      expect(() => JSON.parse((sonuc.content[0] as { text: string }).text)).not.toThrow();
+      // Aracın kendi denetimi de komut hatalarıyla aynı zarfı verir: `{"error": {"code", "message"}}`.
+      expect(JSON.parse((sonuc.content[0] as { text: string }).text)).toEqual({
+        error: { code: 'UsageError', message: expect.stringContaining('not inside a Kobay project') },
+      });
     } finally {
       await baglanti.kapat();
     }
   });
 
   it('project_create yalnız sabit KOBAY_LOGIN_PASS kullanır ve env adı seçimini reddeder', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-'));
+    const cwd = await geciciDizinAc('kobay-mcp-');
     const baglanti = await bagliMcp(cwd, {
       KOBAY_LOGIN_PASS: 'sifre-test-123',
       KOBAY_LOGIN_ORIGIN: 'http://localhost:3000',
@@ -174,7 +218,7 @@ describe('MCP sunucusu', () => {
     }
   });
   it('project_update yalnız verilen alanı değiştirir, proje yoksa hata döner', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-'));
+    const cwd = await geciciDizinAc('kobay-mcp-');
     const baglanti = await bagliMcp(cwd);
     try {
       const projesiz = await baglanti.istemci.callTool({
@@ -215,8 +259,51 @@ describe('MCP sunucusu', () => {
     }
   });
 
+  it('giriş bilgisini başka origin\'e bağlama reddi aynı hata zarfında PermissionError döner', async () => {
+    const cwd = await geciciDizinAc('kobay-mcp-');
+    const baglanti = await bagliMcp(cwd, { KOBAY_LOGIN_PASS: 'sifre-test-123', KOBAY_LOGIN_ORIGIN: 'http://localhost:3000' });
+    try {
+      const sonuc = await baglanti.istemci.callTool({
+        name: 'project_create', arguments: { url: 'http://baska.test', loginUser: 'demo' },
+      });
+      expect(sonuc.isError).toBe(true);
+      expect(JSON.parse((sonuc.content[0] as { text: string }).text)).toEqual({
+        error: { code: 'PermissionError', message: expect.stringContaining('Credentials may only be given for KOBAY_LOGIN_ORIGIN') },
+      });
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
+  it('project_create ve project_update yalnız http(s) adres kabul eder', async () => {
+    const cwd = await geciciDizinAc('kobay-mcp-');
+    const baglanti = await bagliMcp(cwd);
+    const ipucu = 'Use an http:// or https:// URL, e.g. http://localhost:3000';
+    const metin = (sonuc: Awaited<ReturnType<Client['callTool']>>): string => (sonuc.content as Array<{ text: string }>)[0]?.text ?? '';
+    try {
+      for (const url of ['localhost:3000', 'ftp://x', 'http:example.com', 'http:/example.com', 'ht\ntp://x', 'http://x y']) {
+        const sonuc = await baglanti.istemci.callTool({ name: 'project_create', arguments: { url } });
+        expect(sonuc.isError, url).toBe(true);
+        expect(JSON.parse(metin(sonuc)), url).toEqual({ error: { code: 'UsageError', message: expect.stringContaining(ipucu) } });
+      }
+      await expect(access(join(cwd, '.kobay'))).rejects.toThrow();
+
+      await baglanti.istemci.callTool({ name: 'project_create', arguments: { url: 'http://localhost:3000' } });
+      for (const alan of [
+        { baseUrl: 'localhost:3000' }, { loginUrl: 'ftp://localhost:3000/giris' },
+        { baseUrl: 'http:/localhost:3000' }, { loginUrl: 'http://localhost:3000/gi\nris' },
+      ]) {
+        const sonuc = await baglanti.istemci.callTool({ name: 'project_update', arguments: alan });
+        expect(sonuc.isError).toBe(true);
+        expect(metin(sonuc)).toContain(ipucu);
+      }
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
   it('projectDir ile sunucu cwd dışındaki Kobay projesini seçer, normal dizini reddeder', async () => {
-    const sunucuKoku = await mkdtemp(join(tmpdir(), 'kobay-mcp-server-'));
+    const sunucuKoku = await geciciDizinAc('kobay-mcp-server-');
     const projeKoku = join(sunucuKoku, 'uygulama');
     const normalDizin = join(sunucuKoku, 'normal');
     await Promise.all([mkdir(projeKoku), mkdir(normalDizin)]);
@@ -242,8 +329,8 @@ describe('MCP sunucusu', () => {
   });
 
   it('projectDir izinli MCP kökleri dışındaysa reddeder, başlangıç ortamındaki ek kökü kabul eder', async () => {
-    const sunucuKoku = await mkdtemp(join(tmpdir(), 'kobay-mcp-root-'));
-    const disKok = await mkdtemp(join(tmpdir(), 'kobay-mcp-dis-'));
+    const sunucuKoku = await geciciDizinAc('kobay-mcp-root-');
+    const disKok = await geciciDizinAc('kobay-mcp-dis-');
     await KobayDizini.ac(disKok, { baseUrl: 'http://dis.test', beyin: { adaptor: 'sahte' } });
 
     const sinirli = await bagliMcp(sunucuKoku);
@@ -265,7 +352,7 @@ describe('MCP sunucusu', () => {
   });
 
   it('docs, planPath ve out yollarının proje kökünden kaçmasını engeller', async () => {
-    const sunucuKoku = await mkdtemp(join(tmpdir(), 'kobay-mcp-yol-'));
+    const sunucuKoku = await geciciDizinAc('kobay-mcp-yol-');
     const projeKoku = join(sunucuKoku, 'uygulama');
     const yeniProje = join(sunucuKoku, 'yeni-uygulama');
     const disPlan = join(sunucuKoku, 'dis-plan.json');
@@ -313,7 +400,7 @@ describe('MCP sunucusu', () => {
   });
 
   it('kaydedildikten sonra dışarı çevrilen docsPath symlinkini okuma anında reddeder', async () => {
-    const sunucuKoku = await mkdtemp(join(tmpdir(), 'kobay-mcp-docs-'));
+    const sunucuKoku = await geciciDizinAc('kobay-mcp-docs-');
     const projeKoku = join(sunucuKoku, 'uygulama');
     const disBelge = join(sunucuKoku, 'gizli.md');
     await mkdir(projeKoku);
@@ -345,7 +432,7 @@ describe('MCP sunucusu', () => {
   });
 
   it('test_refresh testi ve haritayı denetler; tarayıcı gerektirmeden hata döndürür', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-'));
+    const cwd = await geciciDizinAc('kobay-mcp-');
     const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
     const harita: Harita = {
       baseUrl: 'http://uygulama.test',
@@ -415,7 +502,7 @@ describe('MCP sunucusu', () => {
       });
     });
     const [mesru, kotu] = await Promise.all([sunucuAc('MESRU'), sunucuAc('KOTU')]);
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-origin-'));
+    const cwd = await geciciDizinAc('kobay-mcp-origin-');
     const baglanti = await bagliMcp(cwd, { KOBAY_LOGIN_PASS: 'GIZLI-PAROLA-123', KOBAY_LOGIN_ORIGIN: mesru.url });
     const metin = (sonuc: Awaited<ReturnType<Client['callTool']>>): string => (sonuc.content as [{ text: string }])[0].text;
     try {
@@ -445,7 +532,7 @@ describe('MCP sunucusu', () => {
   });
 
   it('planPath ve docsPath .kobay altını ve gizli dosyaları gösteremez', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-sir-'));
+    const cwd = await geciciDizinAc('kobay-mcp-sir-');
     const baglanti = await bagliMcp(cwd, { KOBAY_LOGIN_PASS: 'GIZLI-PAROLA-123', KOBAY_LOGIN_ORIGIN: 'http://127.0.0.1:9' });
     try {
       const olusturIlk = await baglanti.istemci.callTool({
@@ -500,7 +587,7 @@ describe('MCP sunucusu', () => {
       });
     });
     const [mesru, kotu] = await Promise.all([sunucuAc(), sunucuAc()]);
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-mcp-altdizin-'));
+    const kok = await geciciDizinAc('kobay-mcp-altdizin-');
     await mkdir(join(kok, 'yeni'));
     const metin = (sonuc: Awaited<ReturnType<Client['callTool']>>): string => (sonuc.content as [{ text: string }])[0].text;
     const kilitli = await bagliMcp(kok, { KOBAY_LOGIN_PASS: 'GIZLI-PAROLA-123', KOBAY_LOGIN_ORIGIN: mesru.url });
@@ -525,7 +612,7 @@ describe('MCP sunucusu', () => {
       await kilitli.kapat();
     }
 
-    const tanimsiz = await bagliMcp(await mkdtemp(join(tmpdir(), 'kobay-mcp-tanimsiz-')), { KOBAY_LOGIN_PASS: 'GIZLI-PAROLA-123' });
+    const tanimsiz = await bagliMcp(await geciciDizinAc('kobay-mcp-tanimsiz-'), { KOBAY_LOGIN_PASS: 'GIZLI-PAROLA-123' });
     try {
       const sonuc = await tanimsiz.istemci.callTool({
         name: 'project_create', arguments: { url: kotu.url, loginUser: 'ali' },
@@ -539,7 +626,7 @@ describe('MCP sunucusu', () => {
   });
 
   it('failure_get out .kobay, .git, .claude gibi gizli dizinlere yazmaz', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-mcp-out-'));
+    const cwd = await geciciDizinAc('kobay-mcp-out-');
     await KobayDizini.ac(cwd, { baseUrl: 'http://proje.test', beyin: { adaptor: 'sahte' } });
     const baglanti = await bagliMcp(cwd);
     try {
@@ -568,8 +655,103 @@ describe('MCP sunucusu', () => {
     }
   });
 
+  it('test_run noAnalysis never generates code: a test without code is blocked; test_report then reports it from disk', async () => {
+    const cwd = await realpath(await geciciDizinAc('kobay-mcp-rapor-'));
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://127.0.0.1:9', beyin: { adaptor: 'sahte' } });
+    await dizin.testYaz({
+      id: 't_mcpr1234', name: 'shows the login heading', type: 'frontend', createdFrom: 'cli', status: 'draft',
+      planSteps: [{ type: 'action', description: 'Open the login page' }],
+      priority: 'p1', codeVersion: 0,
+      createdAt: '2026-10-09T00:00:00.000Z', updatedAt: '2026-10-09T00:00:00.000Z',
+    });
+    const alt = join(cwd, 'alt');
+    await mkdir(alt);
+    const baglanti = await bagliMcp(cwd);
+    const metin = (sonuc: Awaited<ReturnType<typeof baglanti.istemci.callTool>>): string => (
+      (sonuc.content as Array<{ text: string }>)[0]?.text ?? ''
+    );
+    try {
+      // noAnalysis testRun'a ulaşır: beyin hiç çağrılmadan kodsuz test engellenir (exit 3 = araç hatası).
+      const kosu = await baglanti.istemci.callTool({ name: 'test_run', arguments: { ids: ['t_mcpr1234'], noAnalysis: true } });
+      expect(kosu.isError).toBe(true);
+      expect(metin(kosu)).toContain('locally with a brain');
+      await expect(dizin.kodOku('t_mcpr1234')).resolves.toBeNull();
+      expect((await dizin.kosuListele('t_mcpr1234')).map((k) => k.verdict)).toEqual(['blocked']);
+
+      // Varsayılan klasör + özet; göreli summary projectDir'e (burada alt/) göre çözülür, CLI --cwd gibi.
+      const rapor = await baglanti.istemci.callTool({
+        name: 'test_report', arguments: { projectDir: alt, all: true, summary: 'summary.md', maxPrompts: 1 },
+      });
+      expect(rapor.isError, metin(rapor)).not.toBe(true);
+      const veri = JSON.parse(metin(rapor)) as Record<string, unknown>;
+      expect(veri).toMatchObject({
+        reportDir: join(cwd, '.kobay', 'report'),
+        indexPath: join(cwd, '.kobay', 'report', 'index.html'),
+        summaryPath: join(alt, 'summary.md'),
+        counts: { blocked: 1, notRun: 0 },
+      });
+      expect(Array.isArray(veri.fixPrompts)).toBe(true);
+      await access(join(cwd, '.kobay', 'report', 'index.html'));
+      expect(await readFile(join(alt, 'summary.md'), 'utf8')).toContain('<!-- kobay-report -->');
+
+      // CLI ile aynı kullanım hatası; proje dışı ve gizli dizin hedefi reddedilir, hiçbir şey yazılmaz.
+      const tekBasina = await baglanti.istemci.callTool({ name: 'test_report', arguments: { all: true, maxPrompts: 2 } });
+      expect(tekBasina.isError).toBe(true);
+      expect(metin(tekBasina)).toContain('--max-prompts only applies together with --summary <path>');
+      const disari = await baglanti.istemci.callTool({
+        name: 'test_report', arguments: { all: true, out: join(tmpdir(), 'kobay-mcp-dis-rapor') },
+      });
+      expect(disari.isError).toBe(true);
+      expect(metin(disari)).toContain('out cannot be outside the project root');
+      const gizli = await baglanti.istemci.callTool({ name: 'test_report', arguments: { all: true, out: '.git/rapor' } });
+      expect(gizli.isError).toBe(true);
+      expect(metin(gizli)).toContain('name starts with a dot');
+      await expect(access(join(cwd, '.git'))).rejects.toThrow();
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
+  it('test_report summary and out cannot leave the project root (absolute, .., symlink) and write nothing outside', async () => {
+    const sunucuKoku = await realpath(await geciciDizinAc('kobay-mcp-rapor-yol-'));
+    const projeKoku = join(sunucuKoku, 'uygulama');
+    const disDizin = join(sunucuKoku, 'dis');
+    const alt = join(projeKoku, 'alt');
+    await mkdir(projeKoku);
+    await mkdir(disDizin);
+    const dizin = await KobayDizini.ac(projeKoku, { baseUrl: 'http://127.0.0.1:9', beyin: { adaptor: 'sahte' } });
+    await dizin.testYaz({
+      id: 't_rpyl1234', name: 'shows the login heading', type: 'frontend', createdFrom: 'cli', status: 'draft',
+      planSteps: [{ type: 'action', description: 'Open the login page' }],
+      priority: 'p1', codeVersion: 0,
+      createdAt: '2026-10-09T00:00:00.000Z', updatedAt: '2026-10-09T00:00:00.000Z',
+    });
+    await mkdir(alt);
+    await symlink(disDizin, join(projeKoku, 'disari-link'));
+    const baglanti = await bagliMcp(sunucuKoku);
+    try {
+      const durumlar: Array<[string, Record<string, unknown>, string]> = [
+        ['summary absolute', { projectDir: projeKoku, all: true, summary: join(disDizin, 'mutlak.md') }, 'summary'],
+        ['summary ..', { projectDir: alt, all: true, summary: '../../dis/kacis.md' }, 'summary'],
+        ['summary symlink', { projectDir: projeKoku, all: true, summary: 'disari-link/link.md' }, 'summary'],
+        ['out symlink', { projectDir: projeKoku, all: true, out: 'disari-link/rapor' }, 'out'],
+      ];
+      for (const [ad, argumanlar, alan] of durumlar) {
+        const sonuc = await baglanti.istemci.callTool({ name: 'test_report', arguments: argumanlar });
+        const metin = (sonuc.content as Array<{ text: string }>)[0]?.text ?? '';
+        expect(sonuc.isError, `${ad}: ${metin}`).toBe(true);
+        expect(metin, ad).toContain(`${alan} cannot be outside the project root`);
+      }
+      // Dışarıda hiçbir dosya oluşmadı; sınır yazımdan önce denetlendi.
+      expect(await readdir(disDizin)).toEqual([]);
+      await expect(access(join(projeKoku, '.kobay', 'report'))).rejects.toThrow();
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
   it('failure_get out verilmezse hep .kobay/failure-out/<id> kullanır, çöp klasör açmaz', async () => {
-    const cwd = await realpath(await mkdtemp(join(tmpdir(), 'kobay-mcp-varsayilan-')));
+    const cwd = await realpath(await geciciDizinAc('kobay-mcp-varsayilan-'));
     const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://proje.test', beyin: { adaptor: 'sahte' } });
     await dizin.hataPaketiYaz(hataPaketi(), []);
     const cikisKoku = join(cwd, '.kobay', 'failure-out');
@@ -590,4 +772,93 @@ describe('MCP sunucusu', () => {
       await baglanti.kapat();
     }
   });
+});
+
+/**
+ * `test_run` + `noAnalysis` kodu olan, gerçekten düşen bir testte: demo uygulama +
+ * gerçek Chromium (test/cli/analizsiz-kosu.test.ts ile aynı kurgu). Sahte beyne her
+ * görev için HAZIR yanıt verilir; beyin çağrılsaydı analiz `product_bug` dönerdi ve
+ * `.kobay/logs` altına `brain-*` günlüğü düşerdi.
+ */
+describe('MCP test_run noAnalysis (real demo run, no brain)', () => {
+  const TEST_ID = 't_mcpn1234';
+  let tarayiciEngeli: unknown;
+  let demo: { url: string; kapat: () => Promise<void> } | undefined;
+
+  beforeAll(async () => {
+    try {
+      const tarayici = await chromium.launch({ headless: true });
+      await tarayici.close();
+    } catch (hata) {
+      tarayiciEngeli = hata;
+    }
+    if (tarayiciEngeli === undefined) demo = await baslat(0);
+  });
+
+  afterAll(async () => { await demo?.kapat(); });
+
+  afterEach(() => { delete process.env.KOBAY_SAHTE_YANIT_DIZINI; });
+
+  function playwrightMumkun(context: TestContext): boolean {
+    if (tarayiciEngeli === undefined) return true;
+    // Katı kipte (CI) Chromium yoksa atlama değil hata.
+    if (process.env.KOBAY_CHROMIUM_TEST === '1') throw tarayiciEngeli;
+    context.skip(`Chromium engelli: ${String(tarayiciEngeli).split('\n')[0] ?? ''}`);
+    return false;
+  }
+
+  function kod(baseUrl: string, baslik: string): string {
+    return `import { test, expect } from './_fixture';
+test('shows the login heading', async ({ page }) => {
+  await test.step('0: Open the login page', async () => {
+    await page.goto('${baseUrl}/login');
+  });
+  await test.step('1: See the login heading', async () => {
+    await expect(page.getByRole('heading', { name: '${baslik}' })).toBeVisible({ timeout: 3000 });
+  });
+});
+`;
+  }
+
+  it('a test with code that fails gets failure kind unknown and the brain is never called', async (context) => {
+    if (!playwrightMumkun(context) || demo === undefined) return;
+    const cwd = await realpath(await geciciDizinAc('kobay-mcp-analizsiz-'));
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: demo.url, beyin: { adaptor: 'sahte' } });
+    await dizin.testYaz({
+      id: TEST_ID, name: 'shows the login heading', type: 'frontend', createdFrom: 'cli', status: 'ready',
+      planSteps: [
+        { type: 'action', description: 'Open the login page' },
+        { type: 'assertion', description: 'See the login heading' },
+      ],
+      priority: 'p1', codeVersion: 1,
+      createdAt: '2026-10-09T00:00:00.000Z', updatedAt: '2026-10-09T00:00:00.000Z',
+    });
+    const kotuKod = kod(demo.url, 'Wrong heading');
+    await dizin.kodYaz(TEST_ID, kotuKod);
+    const yanitDizini = await geciciDizinAc('kobay-mcp-analizsiz-yanit-');
+    await yazAtomik(join(yanitDizini, `analysis-${TEST_ID}.json`), JSON.stringify({
+      rootCauseHypothesis: 'The heading text changed', failureKind: 'product_bug',
+      recommendedFixTarget: { kind: 'code', reference: 'login page', rationale: 'Wrong heading' }, evidence: [],
+    }));
+    await yazAtomik(join(yanitDizini, `generate-${TEST_ID}.json`), JSON.stringify({ kod: kod(demo.url, 'Login') }));
+    process.env.KOBAY_SAHTE_YANIT_DIZINI = yanitDizini;
+
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const kosu = await baglanti.istemci.callTool({ name: 'test_run', arguments: { ids: [TEST_ID], noAnalysis: true } });
+      const metin = (kosu.content as Array<{ text: string }>)[0]?.text ?? '';
+      // Düşen test araç hatası değildir; sonuç satırı döner.
+      expect(kosu.isError, metin).not.toBe(true);
+      expect(JSON.parse(metin)).toEqual([expect.objectContaining({ id: TEST_ID, verdict: 'failed', failureKind: 'unknown' })]);
+      const gunlukler = (await readdir(join(cwd, '.kobay', 'logs')).catch(() => [] as string[])).filter((ad) => ad.startsWith('brain-'));
+      expect(gunlukler).toEqual([]);
+      // Kod yeniden üretilmedi, analiz atlandı olarak işaretlendi.
+      expect(await dizin.kodOku(TEST_ID)).toBe(kotuKod);
+      const paket = await dizin.hataPaketiOku(TEST_ID);
+      expect(paket.failure.failureKind).toBe('unknown');
+      expect(paket.failure.rootCauseHypothesis).toBe(ANALIZ_ATLANDI);
+    } finally {
+      await baglanti.kapat();
+    }
+  }, 120_000);
 });

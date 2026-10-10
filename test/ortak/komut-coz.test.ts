@@ -1,17 +1,17 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { komutCagrisiHazirla, komutCoz, sureciSonlandir, surecAgaciniCoz } from '../../src/ortak/komut-coz.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const require = createRequire(import.meta.url);
 
 describe('komutCoz', () => {
   it('win32 PATHEXT ile codex.cmd bulur; cmd alıntısı cross-spawn ile aynıdır', async () => {
-    const dizin = await mkdtemp(join(tmpdir(), 'kobay-komut-coz-'));
+    const dizin = await geciciDizinAc('kobay-komut-coz-');
     await writeFile(join(dizin, 'codex.cmd'), '@echo off\r\n', { mode: 0o755 });
     const komut = await komutCoz('codex', {
       platform: 'win32', env: { PATH: dizin, PATHEXT: '.cmd' },
@@ -55,7 +55,7 @@ describe('komutCoz', () => {
 
   // Windows sürücü iki noktası, enjekte edilmiş POSIX PATH ayırıcısıyla temsil edilemez.
   it.skipIf(process.platform === 'win32')('POSIX PATH içindeki yürütülebiliri doğrudan döndürür', async () => {
-    const dizin = await mkdtemp(join(tmpdir(), 'kobay-komut-coz-'));
+    const dizin = await geciciDizinAc('kobay-komut-coz-');
     const komutYolu = join(dizin, 'codex');
     await writeFile(komutYolu, '#!/bin/sh\n', { mode: 0o755 });
 

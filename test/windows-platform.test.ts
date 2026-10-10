@@ -1,12 +1,11 @@
-import { mkdtemp } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, win32 } from 'node:path';
+import { win32 } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { kanitDosyaAdi } from '../src/analiz/index.js';
 import { playwrightSpecArgumani as kosSpecArgumani } from '../src/kos/index.js';
 import { mcpGercekYol } from '../src/mcp/index.js';
 import { playwrightSpecArgumani as uretSpecArgumani } from '../src/uret/index.js';
+import { geciciDizinAc } from './yardimci/gecici-dizin.js';
 
 describe('Windows platform enjeksiyonu', () => {
   it('koşu ve üretim Playwright filtrelerini göreli ve slash ayracılı verir', () => {
@@ -27,7 +26,7 @@ describe('Windows platform enjeksiyonu', () => {
   });
 
   it('MCP gerçek yolunu native realpath ile tek kaynaktan kanonikleştirir', async () => {
-    const dizin = await mkdtemp(join(tmpdir(), 'kobay-mcp-realpath-'));
+    const dizin = await geciciDizinAc('kobay-mcp-realpath-');
     expect(mcpGercekYol(dizin)).toBe(realpathSync.native(dizin));
   });
 });

@@ -266,7 +266,7 @@ adim "kobay project create (beyin: sahte)"
 PROJE="$GECICI/proje"
 mkdir -p "$PROJE"
 ( cd "$KURULUM" && KOBAY_LOGIN_USER=demo KOBAY_LOGIN_PASS=demo123 "${KOBAY_NPX[@]}" project create \
-    --cwd "$PROJE" --url "$URL" --login --login-url "$URL/login" --beyin sahte )
+    --cwd "$PROJE" --url "$URL" --login --login-url "$URL/login" --brain sahte )
 
 adim "kobay explore"
 KESIF="$( cd "$KURULUM" && "${KOBAY_NPX[@]}" explore --cwd "$PROJE" --output json )"
@@ -276,5 +276,16 @@ printf 'keşfedilen sayfa: %s (beklenen %s)\n' "$SAYFA" "$BEKLENEN_SAYFA"
 
 adim "kobay project get"
 ( cd "$KURULUM" && "${KOBAY_NPX[@]}" project get --cwd "$PROJE" )
+
+adim "kobay test report --all (kurulu paketten HTML rapor)"
+RAPOR="$( cd "$KURULUM" && "${KOBAY_NPX[@]}" test report --all --cwd "$PROJE" --output json )" \
+  || hata "test report sıfırdan farklı kodla döndü: $RAPOR"
+# indexPath Windows'ta yerel yol (C:\...): varlığını Python denetler, kabuk MSYS yolunu kullanır.
+RAPOR_INDEX="$(printf '%s' "$RAPOR" | "$PYTHON" -c 'import json,os,sys; z=json.load(sys.stdin); assert z["ok"] is True; assert os.path.isfile(z["data"]["indexPath"]); print(z["data"]["indexPath"])')" \
+  || hata "test report zarfı beklenen biçimde değil ya da index.html yok: $RAPOR"
+[ -f "$PROJE/.kobay/report/index.html" ] || hata "rapor .kobay/report/index.html altında değil"
+[ -f "$PROJE/.kobay/report/kobay-report.json" ] || hata "rapor işaret dosyası yok"
+grep -q 'Content-Security-Policy' "$PROJE/.kobay/report/index.html" || hata "raporda CSP yok"
+printf 'rapor: %s\n' "$RAPOR_INDEX"
 
 printf '\nDUMAN TESTİ GEÇTİ\n'

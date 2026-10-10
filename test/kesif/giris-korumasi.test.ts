@@ -1,11 +1,12 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import { kesfet } from '../../src/kesif/index.js';
-import { ayniSiteMi, ayniSiteOriginMi, kayitliAlanAdi, parolaIzleri } from '../../src/kesif/giris-korumasi.js';
+import {
+  ayniSiteMi, ayniSiteOriginMi, izinliKumedeMi, kayitliAlanAdi, parolaIzleri,
+} from '../../src/kesif/giris-korumasi.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const PAROLA = 'sizmamali-parola';
 const kati = process.env.KOBAY_TEST_STRICT === '1';
@@ -127,6 +128,13 @@ beforeAll(async () => {
     istek.on('data', (parca: Buffer) => { govde += parca.toString(); });
     istek.on('end', () => {
       yabanciIstekler.push(`${istek.method ?? ''} ${istek.url ?? ''} ${JSON.stringify(istek.headers)} ${govde}`);
+      if (istek.url === '/api/giris' && istek.method === 'POST') {
+        // Aynı sitedeki API girişi kabul edip uygulamaya geri yönlendirir: giriş uygulamanın
+        // origin'inde biter (liste boşken de dönüş şartı geçerli).
+        yanit.writeHead(302, { location: `${hedefSiteUrl}/panel` });
+        yanit.end();
+        return;
+      }
       if (istek.url === '/giris-formu') {
         // Aynı sitedeki başka origin'de barındırılan giriş sayfası (yönlendirme senaryosu).
         yanit.writeHead(200, { 'content-type': 'text/html' });
@@ -196,7 +204,7 @@ interface DenemeSecenekleri { maxSayfa?: number; parola?: string; kok?: string; 
 async function girisDene(yol: string, maxSayfaVeya: number | DenemeSecenekleri = 1): ReturnType<typeof kesfet> {
   const s: DenemeSecenekleri = typeof maxSayfaVeya === 'number' ? { maxSayfa: maxSayfaVeya } : maxSayfaVeya;
   const kok = s.kok ?? hedefUrl;
-  const dizin = await mkdtemp(join(tmpdir(), 'kobay-giris-korumasi-'));
+  const dizin = await geciciDizinAc('kobay-giris-korumasi-');
   return kesfet({
     baseUrl: `${kok}${s.basla ?? ''}`,
     loginUrl: `${kok}${yol}`,
@@ -381,7 +389,7 @@ describe('kimliksiz keşif', () => {
   it('service worker\'ı engellemez: worker betiği indirilir', async (context) => {
     if (!tarayiciMumkun(context)) return;
     hedefIstekler.length = 0;
-    const dizin = await mkdtemp(join(tmpdir(), 'kobay-giris-korumasi-'));
+    const dizin = await geciciDizinAc('kobay-giris-korumasi-');
     await kesfet({
       baseUrl: `${hedefUrl}/service-worker`,
       storageStateYolu: join(dizin, 'storage.json'),
@@ -466,6 +474,33 @@ describe('ayniSiteMi', () => {
     expect(ayniSiteOriginMi('https://localhost:8080/x', 'http://localhost:5173')).toBe(false);
     expect(ayniSiteOriginMi('ws://127.0.0.1:3000/ws', 'http://127.0.0.1:3000')).toBe(true);
     expect(ayniSiteOriginMi('data:text/plain,x', 'http://127.0.0.1:3000')).toBe(false);
+  });
+});
+
+describe('izinliKumedeMi: baseUrl aynı-site, auth origin tam eşitlik', () => {
+  it('listedeki auth origin yalnız birebir eşleşir; alt alanı, kardeş alanı ve başka portu yabancıdır', () => {
+    const app = 'https://app.example.com';
+    expect(izinliKumedeMi('https://yourco.okta.com/login', app, ['https://yourco.okta.com'])).toBe(true);
+    expect(izinliKumedeMi('wss://yourco.okta.com/ws', app, ['https://yourco.okta.com'])).toBe(true);
+    expect(izinliKumedeMi('https://evilco.okta.com/topla', app, ['https://yourco.okta.com'])).toBe(false);
+    expect(izinliKumedeMi('https://yourco.okta.com:444/topla', app, ['https://yourco.okta.com'])).toBe(false);
+    expect(izinliKumedeMi('http://yourco.okta.com/topla', app, ['https://yourco.okta.com'])).toBe(false);
+    expect(izinliKumedeMi('https://auth.example.com:444/topla', 'https://app.example.org', ['https://auth.example.com']))
+      .toBe(false);
+    expect(izinliKumedeMi('https://evil.example.com/topla', 'https://app.example.org', ['https://auth.example.com']))
+      .toBe(false);
+    expect(izinliKumedeMi('http://localhost:4001/x', 'http://127.0.0.1:3000', ['http://localhost:4000'])).toBe(false);
+  });
+
+  it('baseUrl origin\'i aynı-site kuralını korur (0.2.1): alt alan ve port serbest', () => {
+    const auth = ['https://auth.example.com'];
+    expect(izinliKumedeMi('https://api.example.com/x', 'https://app.example.com', auth)).toBe(true);
+    expect(izinliKumedeMi('https://app.example.com:8443/x', 'https://app.example.com', auth)).toBe(true);
+    expect(izinliKumedeMi('http://127.0.0.1:4000/x', 'http://127.0.0.1:3000', [])).toBe(true);
+    expect(izinliKumedeMi('https://evil.example.net/x', 'https://app.example.com', auth)).toBe(false);
+    // Kimliğin origin'i kümede yoksa yalnız auth origin'ler izinli.
+    expect(izinliKumedeMi('https://api.example.com/x', undefined, auth)).toBe(false);
+    expect(izinliKumedeMi('data:text/plain,x', 'https://app.example.com', auth)).toBe(false);
   });
 });
 

@@ -181,6 +181,60 @@ export const BeyinAyariSemasi: v.GenericSchema<unknown, BeyinAyari> = v.object({
   maxTokens: v.exactOptional(v.pipe(v.number(), v.integer(), v.minValue(1))),
 });
 
+/** Ayrı giriş (SSO) origin listesinin üst sınırı. */
+export const EN_COK_AUTH_ORIGIN = 5;
+
+/**
+ * Tek bir auth origin girdisini denetler ve normal biçimini (`URL.origin`) döner.
+ * Yalnız http(s); yol, sorgu, parça, kullanıcı bilgisi ve joker yasak (sondaki tek `/` hariç).
+ * Geçersizse nedenini söyleyen `Error` fırlatır.
+ */
+export function authOriginNormallestir(girdi: string): string {
+  const neden = (aciklama: string): Error => new Error(`Invalid auth origin "${girdi}": ${aciklama}`);
+  const ham = girdi.trim();
+  if (ham.includes('*')) throw neden('wildcards are not allowed; list each origin in full');
+  const semaSonrasi = /^[a-z][a-z0-9+.-]*:\/\/(.*)$/i.exec(ham)?.[1];
+  if (semaSonrasi === undefined) throw neden('expected a full origin such as https://auth.example.com');
+  const govde = semaSonrasi.endsWith('/') ? semaSonrasi.slice(0, -1) : semaSonrasi;
+  if (govde.includes('@')) throw neden('user info is not allowed');
+  if (/[/?#\\]/.test(govde)) throw neden('only an origin is allowed (no path, query, or fragment)');
+  let adres: URL;
+  try {
+    adres = new URL(ham);
+  } catch {
+    throw neden('not a valid URL');
+  }
+  if (adres.protocol !== 'http:' && adres.protocol !== 'https:') throw neden('only http and https are allowed');
+  if (adres.hostname === '') throw neden('the host name is missing');
+  return adres.origin;
+}
+
+/**
+ * Auth origin listesini denetler; normal biçimde, sıralı döner. `baseUrl` origin'i örtüktür
+ * (listede olamaz), tekrar ve 5'ten fazla öğe yasak. Geçersizse `Error` fırlatır.
+ */
+export function authOriginleriDogrula(baseUrl: string, girdiler: readonly string[]): string[] {
+  let baseOrigin: string;
+  try {
+    baseOrigin = new URL(baseUrl).origin;
+  } catch {
+    throw new Error('baseUrl must be a valid URL');
+  }
+  if (girdiler.length > EN_COK_AUTH_ORIGIN) {
+    throw new Error(`At most ${EN_COK_AUTH_ORIGIN} auth origins are allowed (got ${girdiler.length})`);
+  }
+  const gorulen = new Set<string>();
+  for (const girdi of girdiler) {
+    const origin = authOriginNormallestir(girdi);
+    if (origin === baseOrigin) {
+      throw new Error(`Invalid auth origin "${girdi}": it is the baseUrl origin, which is always allowed; do not list it`);
+    }
+    if (gorulen.has(origin)) throw new Error(`Invalid auth origin "${girdi}": ${origin} is listed twice`);
+    gorulen.add(origin);
+  }
+  return [...gorulen].sort();
+}
+
 /** Diskteki proje ayarı; 0.1'in `beyin` alanı okunurken `brain`'e eşlenir. */
 export const KobayConfigSemasi: v.GenericSchema<unknown, KobayConfig> = v.pipe(
   v.unknown(),
@@ -189,7 +243,21 @@ export const KobayConfigSemasi: v.GenericSchema<unknown, KobayConfig> = v.pipe(
     baseUrl: v.string(),
     docsPath: v.exactOptional(v.string()),
     loginUrl: v.exactOptional(v.string()),
+    authOrigins: v.exactOptional(v.array(v.string())),
     brain: BeyinAyariSemasi,
+  }),
+  // Elle düzenlenmiş liste de aynı kurallardan geçer; okunan liste normal ve sıralıdır.
+  // Boş liste alan yokmuş gibi okunur.
+  v.rawTransform(({ dataset, addIssue, NEVER }) => {
+    const { authOrigins, ...kalan } = dataset.value;
+    if (authOrigins === undefined) return dataset.value;
+    try {
+      const liste = authOriginleriDogrula(kalan.baseUrl, authOrigins);
+      return liste.length === 0 ? kalan : { ...kalan, authOrigins: liste };
+    } catch (hata: unknown) {
+      addIssue({ message: hata instanceof Error ? hata.message : String(hata) });
+      return NEVER;
+    }
   }),
 );
 
@@ -201,6 +269,8 @@ export const KimlikSemasi: v.GenericSchema<unknown, Kimlik> = v.pipe(
     username: v.string(),
     password: v.string(),
     origin: v.exactOptional(v.string()),
+    // Yoksa (0.2 kimliği) boş küme sayılır; karşılaştırma `kimlikOriginDogrula`'da.
+    authOrigins: v.exactOptional(v.array(v.string())),
   }),
 );
 

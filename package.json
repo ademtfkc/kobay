@@ -1,6 +1,6 @@
 {
   "name": "@ademtfkc/kobay",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Local-first AI test engine that explores apps, generates and runs tests, and returns evidence-backed failures.",
   "type": "module",
   "license": "Apache-2.0",
@@ -34,7 +34,8 @@
     "dist/**/*.js",
     "beceri",
     "schemas",
-    "test/kobay-demo/sunucu.mjs"
+    "test/kobay-demo/sunucu.mjs",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

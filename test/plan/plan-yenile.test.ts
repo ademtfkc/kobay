@@ -1,5 +1,3 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BrainError, beyinOlustur } from '../../src/beyin/index.js';
@@ -9,6 +7,7 @@ import {
   planYenile,
   planYenilemeKullaniciIstemiOlustur,
 } from '../../src/plan/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const test: TestKaydi = {
   id: 't_abc12345',
@@ -59,7 +58,7 @@ const mapDiff: HaritaFarki = {
 };
 
 async function sahteBeyin(icerik: unknown, gorev = `plan-refresh-${test.id}`) {
-  const dizin = await mkdtemp(join(tmpdir(), 'kobay-plan-yenile-'));
+  const dizin = await geciciDizinAc('kobay-plan-yenile-');
   await yazAtomik(join(dizin, `${gorev}.json`), JSON.stringify(icerik));
   return beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: dizin });
 }

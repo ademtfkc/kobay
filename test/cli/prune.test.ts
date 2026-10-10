@@ -1,10 +1,9 @@
-import { access, mkdtemp, utimes, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { access, utimes, writeFile } from 'node:fs/promises';
 import { PassThrough, Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { main } from '../../src/cli/index.js';
 import { KobayDizini } from '../../src/depo/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 function metinTopla(akis: PassThrough): () => string {
   let sonuc = '';
@@ -14,7 +13,7 @@ function metinTopla(akis: PassThrough): () => string {
 }
 
 async function proje(): Promise<{ cwd: string; dizin: KobayDizini }> {
-  const cwd = await mkdtemp(join(tmpdir(), 'kobay-prune-cli-'));
+  const cwd = await geciciDizinAc('kobay-prune-cli-');
   const dizin = await KobayDizini.ac(cwd, {
     baseUrl: 'http://localhost:3000',
     brain: { adaptor: 'sahte' },

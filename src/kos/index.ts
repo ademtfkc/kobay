@@ -209,10 +209,6 @@ async function kosturHam(
     KOBAY_RUN_DIR: join('runs', runId),
     KOBAY_REPORT_FILE: join('runs', runId, 'pw-report.json'),
     KOBAY_TEST_TIMEOUT_MS: String(zamanAsimiMs),
-    // 0.3'te eski adlar kalkar.
-    KOBAY_KOSU_DIZINI: join('runs', runId),
-    KOBAY_RAPOR_DOSYASI: join('runs', runId, 'pw-report.json'),
-    KOBAY_TEST_ZAMAN_ASIMI_MS: String(zamanAsimiMs),
     ...(await dosyaVarMi(storageStateYolu) ? { KOBAY_STORAGE_STATE: storageStateYolu } : {}),
   });
   const calisma = await kosuSureci(specYolu, configYolu, dizin.kok, env, zamanAsimiMs);

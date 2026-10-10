@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import {
   beceriKur, beceriMetni, kurulumMesaji, mcpKayitTalimati, mcpSunucuGirdisi,
 } from '../../src/beceri/index.js';
 import { yazAtomik } from '../../src/depo/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 /** `kobay` bulunmayan PATH: tespit `npx -y @ademtfkc/kobay mcp` biçimine düşmeli. */
 const KOBAYSIZ_PATH = { PATH: join(tmpdir(), 'kobay-yok-bir-dizin') };
@@ -23,7 +24,7 @@ async function mcpOku(proje: string): Promise<Record<string, unknown>> {
 }
 
 async function geciciDizin(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'kobay-beceri-'));
+  return geciciDizinAc('kobay-beceri-');
 }
 
 describe('beceri kurulumu', () => {

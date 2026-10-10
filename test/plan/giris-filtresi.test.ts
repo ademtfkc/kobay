@@ -1,11 +1,10 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { beyinOlustur } from '../../src/beyin/index.js';
 import { yazAtomik, type Harita } from '../../src/depo/index.js';
 import { BEYAN_SEBEBI, PLAN_SISTEM_ISTEMI, adimGercekKimlikIsterMi, girisKuraliIhlali, planUret } from '../../src/plan/index.js';
 import { sistemIstemi } from '../../src/uret/istem.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 function harita(loggedIn: boolean): Harita {
   return {
@@ -42,7 +41,7 @@ const SAYFA = taslak('Login page renders', [
 const ANASAYFA = taslak('View home', [['action', 'Open the home page'], ['assertion', 'Verify Home heading']], '/');
 
 async function beyin(oneriler: unknown[]) {
-  const dizin = await mkdtemp(join(tmpdir(), 'kobay-giris-'));
+  const dizin = await geciciDizinAc('kobay-giris-');
   await yazAtomik(join(dizin, 'plan.json'), JSON.stringify({ proposals: oneriler }));
   return beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: dizin });
 }

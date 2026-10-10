@@ -6,3 +6,4 @@ export * from './kimlik.js';
 export * from './dizin.js';
 export * from './budama.js';
 export * from './paket-yolu.js';
+export * from './adres.js';

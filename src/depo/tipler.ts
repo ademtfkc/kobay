@@ -159,6 +159,12 @@ export interface KobayConfig {
   baseUrl: string;
   docsPath?: string;
   loginUrl?: string;
+  /**
+   * Ayrı giriş alan adları (SSO): tam origin listesi, sıralı ve normal biçimde. `baseUrl`
+   * origin'i örtüktür, listede yer almaz. Yalnız CLI `--login` ile yazılır; kimlik dosyası
+   * aynı listeyi kilit olarak taşır (bkz. `Kimlik.authOrigins`).
+   */
+  authOrigins?: string[];
   brain: BeyinAyari;
 }
 
@@ -170,6 +176,12 @@ export interface Kimlik {
    * eski biçimde (origin'siz) kayıtlı kimlik hiçbir yere gönderilmez.
    */
   origin?: string;
+  /**
+   * Kimlik verilirken onaylanan ayrı giriş origin'leri (sıralı, normal biçim). Config'teki
+   * listeyle birebir aynı olmalı; yoksa boş küme sayılır. Liste elle değiştirilirse kimlik
+   * kullanılmaz: parolanın gidebileceği küme sessizce büyümez.
+   */
+  authOrigins?: string[];
 }
 
 /** Elle yazılan plan dosyasının uygulama içi görünümü. */

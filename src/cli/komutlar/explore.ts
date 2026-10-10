@@ -1,4 +1,5 @@
 import { basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
+import { adresKimligiGizle } from '../../depo/index.js';
 import { dizinBul, kesfiYenile } from './ortak.js';
 
 /** Özette listelenecek en fazla sayfa; gerisi "… +N more" olarak toplanır. */
@@ -6,7 +7,7 @@ const OZETTE_SAYFA_SINIRI = 8;
 
 /** Sayfa adresini hedefe göre kısaltır: `http://x/cariler` → `/cariler`. */
 function kisaYol(url: string, baseUrl: string): string {
-  return url.startsWith(baseUrl) ? (url.slice(baseUrl.length) || '/') : url;
+  return url.startsWith(baseUrl) ? (url.slice(baseUrl.length) || '/') : adresKimligiGizle(url);
 }
 
 export async function explore(a: { cwd: string }): Promise<KomutSonucu> {

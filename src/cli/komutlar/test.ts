@@ -1,18 +1,23 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { hataAnalizEt } from '../../analiz/index.js';
+import { KODSUZ_ENGEL_ONEKI, hataAnalizEt } from '../../analiz/index.js';
 import { beyinOlustur } from '../../beyin/index.js';
 import {
   FileNotFound,
+  adresKimligiGizle,
+  metindekiKimligiGizle,
   type HaritaFarki,
   type KobayDizini,
+  type KosuSonucu,
   type TestKaydi,
   type Verdict,
+  yeniRunId,
 } from '../../depo/index.js';
 import { girisKuraliIhlali, planDosyasindanTest, planYenile } from '../../plan/index.js';
 import { kostur } from '../../kos/index.js';
 import { kodUret } from '../../uret/index.js';
 import { CIKIS, type CikisKodu } from '../cikis.js';
+import { uyariYaz } from '../cikti.js';
 import {
   UsageError,
   basarili,
@@ -45,7 +50,7 @@ import {
  */
 export function planUrlDogrula(url: string, baseUrl: string): string {
   const bicimHatasi = new UsageError(
-    `Plan file url must be a path like "/records" or a full address on ${baseUrl}: ${url}`,
+    `Plan file url must be a path like "/records" or a full address on ${adresKimligiGizle(baseUrl)}: ${adresKimligiGizle(url)}`,
   );
   const yolMu = url.startsWith('/');
   // Yol olmayan göreli metin ("records") baseUrl'in yoluna göre farklı çözülür; belirsiz, kabul edilmez.
@@ -58,7 +63,7 @@ export function planUrlDogrula(url: string, baseUrl: string): string {
   }
   if (adres.protocol !== 'http:' && adres.protocol !== 'https:') throw bicimHatasi;
   if (adres.origin !== new URL(baseUrl).origin) {
-    throw new UsageError(`Plan file url is on a different origin than the project (${baseUrl}): ${url}`);
+    throw new UsageError(`Plan file url is on a different origin than the project (${adresKimligiGizle(baseUrl)}): ${adresKimligiGizle(url)}`);
   }
   return yolMu ? `${adres.pathname}${adres.search}${adres.hash}` : adres.href;
 }
@@ -182,7 +187,7 @@ function kosuSatiriMetni(satir: Record<string, unknown>, errorMessage?: string):
   } else if (verdict === 'inconclusive' && errorMessage !== undefined) {
     aciklama = ilkSatir(errorMessage);
   }
-  if (aciklama !== undefined) metin += ` — ${aciklama}`;
+  if (aciklama !== undefined) metin += ` — ${metindekiKimligiGizle(aciklama)}`;
 
   if (verdict === 'failed') metin += `\n  failure bundle: kobay test failure get ${id}`;
   return metin;
@@ -206,19 +211,57 @@ async function eskiKosulariBuda(dizin: KobayDizini, testId: string, runId: strin
     await dizin.kosulariBuda(testId, { korunanlar: [runId] });
   } catch (hata: unknown) {
     const sebep = hata instanceof Error ? hata.message : String(hata);
-    process.stderr.write(`[kobay] Warning: could not prune old run directories (${sebep}).\n`);
+    uyariYaz(`[kobay] Warning: could not prune old run directories (${sebep}).\n`);
   }
 }
 
 async function tekTestKostur(
   dizin: KobayDizini,
   test: TestKaydi,
-  rerun: boolean,
+  secenek: { rerun: boolean; analizYok: boolean },
 ): Promise<{ exitCode: CikisKodu; satir: Record<string, unknown>; errorMessage?: string }> {
+  const { rerun, analizYok } = secenek;
   try {
     const config = await dizin.configOku();
     let guncelTest = test;
     const mevcutKod = await dizin.kodOku(test.id);
+    // `--no-analysis` (CI): beyin yok, kod üretilemez. Kodsuz ya da taslak (planı
+    // değişmiş, kodu bayat) test koşturulmadan engellenir — motor taslağı zaten
+    // koşturmaz. Diğer testler koşmaya devam eder (çıkış 3, kullanım hatası değil).
+    if (analizYok && (mevcutKod === null || test.status === 'draft')) {
+      const sebep = mevcutKod === null
+        ? 'Test has no generated code'
+        : 'Test code is out of date: the test is a draft whose plan changed after its code was generated';
+      const mesaj = `${sebep}; run \`kobay test run ${test.id}\` locally with a brain, then commit .kobay/`;
+      // Engel diske de yazılır: ardından gelen `test report` testi `not run` değil `blocked`
+      // sayar ve istemi verir. Test kaydının durumu DEĞİŞMEZ (taslak taslak kalır ki yerel
+      // `test run` kodu yeniden üretsin); yalnız `lastRunId` bu kayda bağlanır.
+      const an = new Date().toISOString();
+      const kayit: KosuSonucu = {
+        testId: test.id,
+        runId: yeniRunId(),
+        status: 'blocked',
+        verdict: 'blocked',
+        startedAt: an,
+        finishedAt: an,
+        codeVersion: test.codeVersion,
+        errorMessage: `${KODSUZ_ENGEL_ONEKI}${mesaj}`,
+      };
+      await dizin.kosuDizini(kayit.runId);
+      await dizin.kosuSonucuYaz(kayit);
+      await dizin.testYaz({ ...test, lastRunId: kayit.runId });
+      await eskiKosulariBuda(dizin, test.id, kayit.runId);
+      return {
+        exitCode: verdictCikisi('blocked'),
+        satir: {
+          id: test.id,
+          name: test.name,
+          verdict: 'blocked' as Verdict,
+          runId: kayit.runId,
+          error: mesaj,
+        },
+      };
+    }
     if (rerun && mevcutKod === null) {
       return {
         exitCode: CIKIS.MOTOR,
@@ -231,7 +274,7 @@ async function tekTestKostur(
         },
       };
     }
-    if (!rerun && (mevcutKod === null || test.status === 'draft')) {
+    if (!rerun && !analizYok && (mevcutKod === null || test.status === 'draft')) {
       const harita = await haritaSagla(dizin);
       const beyin = beyinOlustur(config.brain, process.env);
       const uretim = await kodUret(beyin, test, harita, {
@@ -262,13 +305,14 @@ async function tekTestKostur(
           name: test.name,
           verdict: 'blocked' as Verdict,
           runId: kosu.sonuc.runId,
-          error: `Target app is not reachable: ${config.baseUrl}; start the app and run again`,
+          error: `Target app is not reachable: ${adresKimligiGizle(config.baseUrl)}; start the app and run again`,
         },
       };
     }
     let sonKosuSonucu = kosu.sonuc;
     if (kosu.sonuc.verdict === 'failed') {
-      const beyin = beyinOlustur(config.brain, process.env);
+      // `--no-analysis`: beyin hiç kurulmaz; paket yine yazılır, sınıf yerelden ya da `unknown`.
+      const beyin = analizYok ? null : beyinOlustur(config.brain, process.env);
       const paket = await hataAnalizEt(beyin, dizin, guncelTest, kosu.sonuc, kosu.adimlar, {
         logDizini: dizin.yol('logs'),
       });
@@ -305,6 +349,8 @@ export async function testRun(a: {
   ids?: string[];
   all?: boolean;
   rerun?: boolean;
+  /** CI kipi: beyin hiç çağrılmaz, yalnız var olan kod koşar (`--rerun`'u kapsar). */
+  noAnalysis?: boolean;
 }): Promise<KomutSonucu> {
   return komutCalistir(async () => {
     if (a.all === true && a.ids !== undefined && a.ids.length > 0) {
@@ -328,7 +374,7 @@ export async function testRun(a: {
     const satirMetinleri: string[] = [];
     let exitCode: CikisKodu = CIKIS.GECTI;
     for (const test of testler) {
-      const sonuc = await tekTestKostur(dizin, test, a.rerun === true);
+      const sonuc = await tekTestKostur(dizin, test, { rerun: a.rerun === true, analizYok: a.noAnalysis === true });
       sonuclar.push(sonuc.satir);
       satirMetinleri.push(kosuSatiriMetni(sonuc.satir, sonuc.errorMessage));
       exitCode = Math.max(exitCode, sonuc.exitCode) as CikisKodu;
@@ -450,7 +496,7 @@ export async function testRefresh(a: { cwd: string; id: string; run?: boolean })
     // İnsan modunda özetin JSON dökümü basılmaz; kimlik, sayfa ve yeni adımlar
     // bu metinde durur. `--output json` aynı gövdeyi verir.
     const basMetni = [
-      `Page refreshed: ${yeniSayfa.url}`,
+      `Page refreshed: ${adresKimligiGizle(yeniSayfa.url)}`,
       `Test: ${guncelTest.id} — ${guncelTest.name}${guncelTest.name === test.name ? '' : ` (was: ${test.name})`}`,
       `New plan (${guncelTest.planSteps.length} step${guncelTest.planSteps.length === 1 ? '' : 's'}, status: ${guncelTest.status}):`,
       adimSatirlari,

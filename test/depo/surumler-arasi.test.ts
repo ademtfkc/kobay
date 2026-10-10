@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { access, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ISARET_ESKI_ANAHTARLARI, KALICI_ANAHTARLAR } from '../../src/depo/anahtar-gocu.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 /**
  * 0.1 ile 0.2 aynı projede koşabilir. Kimlik işlemi kilidi bu yüzden iki adla
@@ -134,7 +134,7 @@ async function olmesiniBekle(pid: number): Promise<void> {
 
 /** Boş bir proje: `dist` ile oluşturulur, sonra kayıtlı bir kimlik konur. */
 async function projeKur(dist: string): Promise<string> {
-  const kok = await mkdtemp(join(tmpdir(), 'kobay-surumler-'));
+  const kok = await geciciDizinAc('kobay-surumler-');
   const sonuc = await kobayCalistir(dist, kok, ['project', 'create', '--url', 'http://localhost:3000']);
   expect(sonuc.kod, sonuc.cikti).toBe(0);
   await writeFile(

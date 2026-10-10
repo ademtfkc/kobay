@@ -1,5 +1,5 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
@@ -72,7 +72,7 @@ async function pidSonlansin(pid: number): Promise<boolean> {
 
 it('zaman aşımı Playwright worker ile Chromium alt sürecini öksüz bırakmaz', async (context) => {
   if (!playwrightMumkun(context) || demo === undefined) return;
-  const kok = await mkdtemp(join(tmpdir(), 'kobay-oksuz-surec-'));
+  const kok = await geciciDizinAc('kobay-oksuz-surec-');
   const dizin = await KobayDizini.ac(kok, { baseUrl: demo.url, beyin: { adaptor: 'sahte' } });
   const test = testKaydi();
   const pidYolu = join(kok, 'child-pids.json');

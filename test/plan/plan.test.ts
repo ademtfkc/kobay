@@ -1,5 +1,3 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { beyinOlustur } from '../../src/beyin/index.js';
@@ -14,6 +12,7 @@ import {
   planUret,
   yolKalibi,
 } from '../../src/plan/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const harita: Harita = {
   baseUrl: 'http://uygulama.test',
@@ -49,7 +48,7 @@ function taslak(sira: number, url = 'https://farkli-origin.test/urunler/'): Reco
 }
 
 async function sahteBeyin(icerik: unknown) {
-  const dizin = await mkdtemp(join(tmpdir(), 'kobay-plan-'));
+  const dizin = await geciciDizinAc('kobay-plan-');
   await yazAtomik(join(dizin, 'plan.json'), JSON.stringify(icerik));
   return beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: dizin });
 }

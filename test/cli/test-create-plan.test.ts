@@ -1,13 +1,13 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { testCreate } from '../../src/cli/komutlar/index.js';
 import { planUrlDogrula } from '../../src/cli/komutlar/test.js';
 import { KobayDizini, type TestKaydi } from '../../src/depo/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 async function proje(plan: Record<string, unknown>): Promise<{ cwd: string; dizin: KobayDizini }> {
-  const cwd = await mkdtemp(join(tmpdir(), 'kobay-test-create-'));
+  const cwd = await geciciDizinAc('kobay-test-create-');
   const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
   await writeFile(join(cwd, 'plan.json'), JSON.stringify({
     type: 'frontend',
@@ -50,6 +50,22 @@ describe('test create: elle yazılan plan dosyası', () => {
       expect(sonuc.exitCode, url).toBe(2);
       await expect(dizin.testListele()).resolves.toEqual([]);
     }
+  });
+
+  it('url hatasında baseUrl ve plan url kimliği maskelenir', async () => {
+    const kimlikli = 'http://admin:Hunter2Pass@uygulama.test';
+    const dizin = await geciciDizinAc('kobay-test-create-');
+    await KobayDizini.ac(dizin, { baseUrl: kimlikli, beyin: { adaptor: 'sahte' } });
+    for (const url of ['http://root:Hunter2Pass@kotu.test/x', 'records:Hunter2Pass@x', '//root:Hunter2Pass@kotu.test']) {
+      await writeFile(join(dizin, 'plan.json'), JSON.stringify({
+        type: 'frontend', name: 'Kayıtlar listelenir', url,
+        planSteps: [{ type: 'action', description: 'a' }, { type: 'assertion', description: 'b' }],
+      }));
+      const sonuc = await testCreate({ cwd: dizin, planPath: 'plan.json' });
+      expect(sonuc.exitCode, url).toBe(2);
+      expect(JSON.stringify(sonuc), url).not.toContain('Hunter2Pass');
+    }
+    expect(() => planUrlDogrula('http://root:Hunter2Pass@kotu.test/x', kimlikli)).toThrow(/\[redacted\]@kotu\.test/);
   });
 
   it('ters bölü, //host, javascript: ve başka origin exit 2; kısayol yok (denetim P1)', async () => {

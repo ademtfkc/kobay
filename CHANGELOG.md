@@ -7,6 +7,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-10
+
+### Added
+
+- Login on a separate auth site (SSO): `kobay project create --login
+  --auth-origin <origin>` (repeatable) and `kobay project update --login
+  [--auth-origin <origin>... | --clear-auth-origins]` (a given list replaces the
+  saved one). Each entry is an exact http(s) origin — no path, query, user info
+  or wildcard, at most 5, not the base URL's origin. The flags are rejected
+  without `--login`, and MCP tools, plan files and `test create` cannot set the
+  list. It is saved as `authOrigins` in `config.json` and in the credential
+  lock; if the two differ, the credentials are not used (exit `5`). Changing the
+  base URL to another origin drops the list. The login page, form target and
+  network guard allow the base URL's origin (with its own site) plus the
+  listed origins, exact origin only (no subdomains, no other ports); every
+  other site is blocked as before. Exploration still crawls only the base URL's
+  origin. `project update` gains `--login` to re-enter the credentials; without
+  `--auth-origin` it keeps the list only if the saved credentials already
+  approved exactly that list, otherwise it exits `2` and asks for the full list
+  or `--clear-auth-origins`. If `config.json` is invalid, `project update` says
+  to reset it with `kobay project create --url <URL> --login --force`.
+- `kobay test report [ids...] [--all] [--out <dir>]` writes a static HTML report
+  of each selected test's latest run: summary counts, steps with screenshots,
+  error message, the failure analysis when the published bundle belongs to that
+  run, and the generated code. It reads only what is on disk and exits `0` even
+  when tests failed. The default folder `.kobay/report/` is replaced atomically
+  as a whole and is git-ignored; the folder is self-contained, so it can be moved
+  or uploaded as a CI artifact. The page has no scripts or external resources
+  and a strict Content-Security-Policy; every text is secret-masked and
+  HTML-escaped, and the project root and home directory are replaced with
+  `[project]` and `~`. Screenshots are copied unredacted, and the report says so.
+  A non-empty destination is replaced only if it is entirely a kobay report
+  (valid `kobay-report.json`, `index.html`, `assets/<runId>/step-<n>.png` and
+  nothing else); any other entry exits `2` and is named. Old reports are removed
+  file by file, never recursively. Report data under `.kobay/tests`, `runs` and
+  `failure` (and `config.json`) is read without following symlinks or hard links. An unreadable run record shows as
+  `inconclusive` with a note.
+  The report opens with a summary (run bar, pass rate, total run time), lists
+  tests that need attention first and folds passed tests away. Each failed,
+  blocked or inconclusive test has a "Fix with your coding agent" prompt for
+  Claude Code, Codex or Cursor, routed by failure kind and quoting run text as
+  untrusted data; two or more such tests also get one fix-all prompt. JSON output
+  adds the optional `fixPrompts` and `fixAllPrompt` fields. Each quoted value is
+  masked on its own, so masking can never break the prompt's frame; long error
+  output is cut at 2,000 characters. Test names in the JSON output are
+  secret-masked, and times are shown as UTC (`2026-10-05 22:27 UTC`).
+- `kobay test run --no-analysis` runs tests without ever calling the brain, for
+  CI: it runs existing code only (like `--rerun`); a test without generated code,
+  or a draft whose plan changed after its code was generated, is `blocked`
+  (exit `3`) with a hint to run it locally and commit `.kobay/`; a failed test
+  still gets its evidence bundle, with failure kind `unknown` (or the local
+  `kobay:` classification) and "analysis skipped (--no-analysis)" in the analysis
+  fields. Without the flag nothing changes.
+- `kobay test report --summary <path> [--max-prompts <n>]` also writes a
+  GitHub-flavored Markdown summary for a pull request comment or job summary:
+  a `<!-- kobay-report -->` marker line, counts, one row per test, up to `n`
+  (default 5) fix prompts in `<details>` blocks plus the fix-all prompt, and a
+  footer. Text only; every value is masked on its own, table cells are escaped,
+  prompts sit in a fence longer than any backtick run inside them, and the file
+  stays under 60,000 characters. JSON output adds `summaryPath`. The path follows
+  the `--out` rules and may not point into `.kobay/` or the report folder.
+- MCP: `test_run` gains `noAnalysis` (same as `--no-analysis`), and the new
+  `test_report` tool takes the same inputs (`ids`, `all`, `out`, `summary`,
+  `maxPrompts`) and returns the same output as `kobay test report`; over MCP,
+  `out` and `summary` must stay inside the project root.
+- GitHub Action (`action.yml`, composite): installs kobay, waits for the app,
+  runs `test run --no-analysis`, writes the job summary, creates or updates one
+  sticky pull request comment, uploads `.kobay/report` as the `kobay-report`
+  artifact and ends with the exit code of the test run. Fork pull requests skip
+  the comment with a warning. The default `version` input is pinned to the
+  release it ships with (`0.3.0`); set `version: latest` to follow new releases.
+- Reports (HTML, JSON prompts and the summary) show kobay's own installation
+  path in stack frames as `[kobay]`, so a global install outside the home
+  directory (as on CI runners) does not leak an absolute path.
+  Credentials in free-text addresses (`http://user:pass@host`) become
+  `[redacted]`, and other absolute file paths under system roots (`/opt`,
+  `/usr`, `/tmp`, CI roots such as `/agent` and `/codebuild`, any letter case,
+  `C:\` and UNC paths like `\\server\share\…`, including long `\\?\` / `\\.\` and Volume-GUID forms …) become `[path]/<file name>`; app routes such as
+  `/records/new` are kept. A `--no-analysis` failure's prompt says the run had no
+  analysis and suggests a local `kobay test rerun`; a no-code block is recorded
+  as a blocked run and its prompt asks for local code generation.
+
+### Changed
+
+- Login must end on the app origin: even without auth origins, a login that
+  lands on, or soon redirects to, another origin now fails with "Login did not
+  return to the app origin" (exit `5`) instead of counting as logged in.
+- `test refresh` now treats a page served from another origin as not refreshed,
+  even when the path matches and no auth origins are configured.
+- `project create --url`, `project update --base-url` and
+  `--login-url` (and MCP `project_create` / `project_update`) accept only
+  `http://` and `https://` URLs. `localhost:3000` without a scheme or
+  `ftp://…` used to be saved and then reported as "not reachable"; they now
+  exit `2` with "Use an http:// or https:// URL, e.g. http://localhost:3000".
+- `--output` accepts only `text` or `json`; any other value (for example
+  `JSON` or `yaml`) exits `2` instead of silently falling back to text, and
+  `--help` lists the choices.
+- MCP tool errors raised by the server's own checks (project directory, paths,
+  login origin) now use the same envelope as command errors:
+  `{"error": {"code": ..., "message": ...}}` instead of `{"error": "<text>"}`.
+  Refusing to bind credentials to another origin has code `PermissionError`,
+  the other checks `UsageError`.
+- MCP tools carry annotations: `readOnlyHint: false` on every tool, because
+  any tool may maintain the `.kobay` directory (`.gitignore` sync, stale file
+  cleanup, migration); `destructiveHint: true` on `test_delete`, `prune`,
+  `project_create` and `project_update` (a new origin drops saved credentials
+  and sessions, `force` overwrites the config); `destructiveHint: false` on the
+  rest.
+- The npm package now includes `CHANGELOG.md`.
+
+### Removed
+
+- **Breaking:** the legacy Turkish run-environment aliases `KOBAY_KOSU_DIZINI`,
+  `KOBAY_RAPOR_DOSYASI` and `KOBAY_TEST_ZAMAN_ASIMI_MS` are no longer exported
+  to test processes, and the hidden `--beyin` option alias is gone from
+  `setup`, `project create` and `project update`; 0.2.1 announced the removal.
+  To migrate, read `KOBAY_RUN_DIR`, `KOBAY_REPORT_FILE` and
+  `KOBAY_TEST_TIMEOUT_MS` in your own test code or scripts, and pass `--brain`
+  instead of `--beyin`.
+
+### Fixed
+
+- The agent skill said MCP `isError: true` means any non-zero exit, "a failed
+  test counts". A failed test (exit `1`) comes back without `isError` and with
+  `"verdict": "failed"`; the skill now tells the agent to decide from `verdict`
+  and that `isError` marks only exit `2`–`5`. Run `kobay agent install` again
+  to update an installed skill.
+- The skill's CLI fallback was `npx kobay`, which is not this package; it is
+  now `npx -y @ademtfkc/kobay`. The skill's tool table also lists
+  `project_update` and `test_get`.
+- The HTML report headline said "1 of 1 test need attention"; it now agrees
+  ("needs" for one, "need" for more), like the Markdown summary.
+- A report without screenshots no longer prints the "Screenshots are not
+  redacted" warning (HTML page and CLI text).
+- Text-mode CLI output and error messages (and MCP error messages) now redact URL userinfo:
+  `http://admin:secret@localhost:3000` is shown as `http://[redacted]@localhost:3000`.
+  `--output json` fields, including `baseUrl`, are unchanged.
+- Fixed a same-process race in the failure bundle lock: inspecting or taking over
+  a lock and releasing it are now serialized per lock within a process, keyed by
+  the lock's real path, so `BundleLockLost` is no longer raised spuriously when
+  concurrent writers in one process hand the lock over. Time spent waiting in
+  this queue counts toward the lock timeout; the limit covers only the
+  inspection while taking the lock, and releasing (including cleanup after a
+  failed attempt) always waits its turn, since it is a short file operation.
+
 ## [0.2.1] - 2026-10-03
 
 ### Windows
@@ -426,6 +571,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/ademtfkc/kobay/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ademtfkc/kobay/compare/v0.2.0...v0.2.1
 [0.1.0]: https://github.com/ademtfkc/kobay/releases/tag/v0.1.0

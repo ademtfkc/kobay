@@ -1,11 +1,11 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import { LoginFormOriginError, girisFormuBul, kesfet } from '../../src/kesif/index.js';
 import { baslat } from '../kobay-demo/sunucu.mjs';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 let demo: { url: string; kapat: () => Promise<void> };
 let e2eEngeli: unknown;
@@ -27,7 +27,7 @@ beforeAll(async () => {
 afterAll(async () => { if (demo) await demo.kapat(); });
 
 async function geciciDizin(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'kobay-kesif-'));
+  return geciciDizinAc('kobay-kesif-');
 }
 
 /** KOBAY_TEST_STRICT=1 verildiğinde atlama yasak: engel hata sayılır. */

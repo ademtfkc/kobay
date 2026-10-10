@@ -32,7 +32,7 @@ describe('CLI yardım metinleri', () => {
     const metinler = yardimMetinleri(programOlustur());
 
     expect(metinler.length).toBeGreaterThan(40);
-    expect(metinler.filter((m) => m.metin.trim() === '' && !m.yer.endsWith('--beyin <adaptor>'))).toEqual([]);
+    expect(metinler.filter((m) => m.metin.trim() === '')).toEqual([]);
     expect(metinler.filter((m) => turkceHarf.test(m.metin))).toEqual([]);
   });
 
@@ -54,5 +54,17 @@ describe('CLI yardım metinleri', () => {
     const hatali = await calistir(['project', 'create', '--url', 'http://uygulama.test', '--brain', 'yok']);
     expect(hatali.exitCode).toBe(2);
     expect(hatali.cikti).toContain("argument 'yok' is invalid. Allowed choices are claude, codex, openrouter.");
+  });
+
+  it('--output yalnız text ve json kabul eder; yardım seçenekleri gösterir', async () => {
+    for (const deger of ['JSON', 'yaml']) {
+      const hatali = await calistir(['--output', deger, 'project', 'get']);
+      expect(hatali.exitCode, deger).toBe(2);
+      expect(hatali.cikti).toContain(`argument '${deger}' is invalid. Allowed choices are text, json.`);
+    }
+    const yardim = await calistir(['--help']);
+    expect(yardim.exitCode).toBe(0);
+    // Commander uzun satırı terminal genişliğine göre kırar; kıyas tek boşlukla.
+    expect(yardim.cikti.replace(/\s+/g, ' ')).toContain('--output <format> output format (choices: "text", "json", default: "text")');
   });
 });

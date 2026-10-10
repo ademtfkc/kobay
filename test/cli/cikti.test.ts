@@ -1,11 +1,9 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ciktiYaz } from '../../src/cli/cikti.js';
 import { main } from '../../src/cli/index.js';
 import { KobayDizini } from '../../src/depo/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 function metinTopla(akis: PassThrough): { oku: () => string } {
   let metin = '';
@@ -58,7 +56,7 @@ describe('insan modunda tablo hücreleri', () => {
 });
 
 describe('CLI çıktı sınırı', () => {
-  it('--brain öncelikli yardımda görünür ve --beyin eş adı çalışır', async () => {
+  it('--brain yardımda görünür; kaldırılan --beyin eş adı reddedilir', async () => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const cikti = metinTopla(stdout);
@@ -69,13 +67,20 @@ describe('CLI çıktı sınırı', () => {
 
     expect(exitCode).toBe(0);
     expect(cikti.oku()).toContain('--brain <adaptor>');
-    expect(cikti.oku()).toContain('(alias: --beyin)');
-    expect(cikti.oku()).not.toContain('--beyin <adaptor>');
+    expect(cikti.oku()).not.toContain('--beyin');
+
+    const cwd = await geciciDizinAc('kobay-cli-beyin-');
+    const reddedilen = await main([
+      'node', 'kobay', '--cwd', cwd, 'project', 'create', '--url', 'http://uygulama.test', '--beyin', 'sahte',
+    ], { input: Readable.from([]), stdout: new PassThrough(), stderr: new PassThrough() });
+    expect(reddedilen).toBe(2);
+    await expect(KobayDizini.bul(cwd)).resolves.toBeNull();
   });
 
-  it('--brain ve --beyin aynı beyin ayarını kabul eder', async () => {
-    for (const flag of ['--brain', '--beyin']) {
-      const cwd = await mkdtemp(join(tmpdir(), 'kobay-cli-brain-'));
+  it('--brain beyin ayarını kabul eder', async () => {
+    {
+      const flag = '--brain';
+      const cwd = await geciciDizinAc('kobay-cli-brain-');
       const exitCode = await main([
         'node', 'kobay', '--cwd', cwd, 'project', 'create', '--url', 'http://uygulama.test', flag, 'sahte',
       ], { input: Readable.from([]), stdout: new PassThrough(), stderr: new PassThrough() });
@@ -92,8 +97,27 @@ describe('CLI çıktı sınırı', () => {
     }
   });
 
+  it('Commander hata çıktısında adres kimliği maskelenir (metin ve JSON modu)', async () => {
+    for (const bayrak of [[], ['--output', 'json']]) {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const cikti = metinTopla(stdout);
+      const hata = metinTopla(stderr);
+
+      const exitCode = await main([
+        'node', 'kobay', ...bayrak, 'project', 'create', '--url', 'http://uygulama.test',
+        '--brain', 'http://admin:Hunter2Pass@host.test',
+      ], { input: Readable.from([]), stdout, stderr });
+
+      expect(exitCode, bayrak.join(' ')).toBe(2);
+      expect(hata.oku(), bayrak.join(' ')).not.toContain('Hunter2Pass');
+      expect(hata.oku(), bayrak.join(' ')).toContain('http://[redacted]@host.test');
+      if (bayrak.length === 0) expect(cikti.oku()).not.toContain('Hunter2Pass');
+    }
+  });
+
   it('--output json ile stdouta yalnız ayrıştırılabilir tek JSON yazar', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-cli-cikti-'));
+    const cwd = await geciciDizinAc('kobay-cli-cikti-');
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const cikti = metinTopla(stdout);
@@ -150,7 +174,7 @@ describe('CLI çıktı sınırı', () => {
   });
 
   it('--login bilgilerini ortamdan alır ve hiçbir çıktıda parolayı göstermez', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-cli-login-'));
+    const cwd = await geciciDizinAc('kobay-cli-login-');
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const cikti = metinTopla(stdout);
@@ -160,7 +184,7 @@ describe('CLI çıktı sınırı', () => {
 
     const exitCode = await main([
       'node', 'kobay', '--cwd', cwd, '--output', 'json',
-      'project', 'create', '--url', 'http://uygulama.test', '--login', '--beyin', 'sahte',
+      'project', 'create', '--url', 'http://uygulama.test', '--login', '--brain', 'sahte',
     ], { input: Readable.from([]), stdout, stderr });
 
     expect(exitCode).toBe(0);
@@ -173,7 +197,7 @@ describe('CLI çıktı sınırı', () => {
   });
 
   it('--login girdisi kapalıyken ve ortam değişkeni yokken asılı kalmaz: exit 2 ve yönlendirme', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-cli-login-kapali-'));
+    const cwd = await geciciDizinAc('kobay-cli-login-kapali-');
     delete process.env.KOBAY_LOGIN_USER;
     delete process.env.KOBAY_LOGIN_PASS;
     for (const [ad, input] of [
@@ -185,7 +209,7 @@ describe('CLI çıktı sınırı', () => {
       const hata = metinTopla(stderr);
       const exitCode = await main([
         'node', 'kobay', '--cwd', cwd,
-        'project', 'create', '--url', 'http://uygulama.test', '--login', '--beyin', 'sahte',
+        'project', 'create', '--url', 'http://uygulama.test', '--login', '--brain', 'sahte',
       ], { input, stdout, stderr });
       expect(exitCode, ad).toBe(2);
       expect(hata.oku(), ad).toContain('KOBAY_LOGIN_USER');

@@ -1,11 +1,11 @@
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, lstat, mkdir, readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import { beforeAll, describe, expect, it, vi, type TestContext } from 'vitest';
 import { BrainError, beyinOlustur } from '../../src/beyin/index.js';
 import { KobayDizini, yazAtomik, type KosuSonucu, type Sayfa, type TestKaydi } from '../../src/depo/index.js';
 import { analizKullaniciIstemiOlustur, analizSistemIstemiOlustur, domTemizle, dusenAdimKodunuBul, hataAnalizEt, hataMesajiniTemizle, hataPaketiYolunuDenetle, UnsafeBundlePath } from '../../src/analiz/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const runId = 'r_20260917010101_abcd';
 const test: TestKaydi = {
@@ -49,10 +49,10 @@ function tarayiciMumkun(context: TestContext): boolean {
 }
 
 async function hazirDizin(yanit: unknown = beyinYanit) {
-  const projeKoku = await mkdtemp(join(tmpdir(), 'kobay-analiz-'));
+  const projeKoku = await geciciDizinAc('kobay-analiz-');
   const dizin = await KobayDizini.ac(projeKoku, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
   const kosuDizini = await dizin.kosuDizini(runId);
-  const yanitDizini = await mkdtemp(join(tmpdir(), 'kobay-analiz-yanit-'));
+  const yanitDizini = await geciciDizinAc('kobay-analiz-yanit-');
   await Promise.all([
     dizin.testYaz(test),
     dizin.kodYaz(test.id, "test('başlık', async () => expect('Ürün').toBe('Ürün'))"),
@@ -460,7 +460,7 @@ describe('hataAnalizEt', () => {
 
   it('beyin hatasını yutmaz', async () => {
     const { dizin } = await hazirDizin();
-    const bosBeyin = beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: await mkdtemp(join(tmpdir(), 'kobay-analiz-bos-')) });
+    const bosBeyin = beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: await geciciDizinAc('kobay-analiz-bos-') });
     await expect(hataAnalizEt(bosBeyin, dizin, test, sonuc, [])).rejects.toBeInstanceOf(BrainError);
   });
 
@@ -532,7 +532,7 @@ describe.skipIf(process.platform === 'win32')('hata paketi yolu symlink denetimi
 
   /** Depo dışında, silinmemesi gereken bir dosya taşıyan kurban klasörü kurar. */
   async function kurban() {
-    const disari = await mkdtemp(join(tmpdir(), 'kobay-analiz-disari-'));
+    const disari = await geciciDizinAc('kobay-analiz-disari-');
     await mkdir(join(disari, test.id), { recursive: true });
     await writeFile(join(disari, test.id, 'degerli.txt'), 'silinmemeli');
     return disari;
@@ -561,7 +561,7 @@ describe.skipIf(process.platform === 'win32')('hata paketi yolu symlink denetimi
 
   it('.kobay symlink ise reddeder', async () => {
     const { dizin } = await hazirDizin();
-    const kopya = await mkdtemp(join(tmpdir(), 'kobay-analiz-kopya-'));
+    const kopya = await geciciDizinAc('kobay-analiz-kopya-');
     await rename(dizin.kok, join(kopya, '.kobay'));
     await symlink(join(kopya, '.kobay'), dizin.kok, 'dir');
 

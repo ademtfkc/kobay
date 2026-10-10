@@ -1,10 +1,9 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Beyin } from '../../src/beyin/index.js';
 import { KobayDizini, yazAtomik, type KosuSonucu, type TestKaydi } from '../../src/depo/index.js';
 import { hataAnalizEt, yerelOnSiniflama } from '../../src/analiz/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const KIMLIK_HATASI = 'kobay: this step needs the real credentials; the session is already authenticated';
 
@@ -41,7 +40,7 @@ describe('hataAnalizEt + yerel ön-sınıflama', () => {
       testId: test.id, runId, status: 'failed', verdict: 'failed', startedAt: test.createdAt,
       finishedAt: test.updatedAt, codeVersion: 1, failedStepIndex: 0, errorMessage: `Error: ${KIMLIK_HATASI}`,
     };
-    const projeKoku = await mkdtemp(join(tmpdir(), 'kobay-yerel-'));
+    const projeKoku = await geciciDizinAc('kobay-yerel-');
     const dizin = await KobayDizini.ac(projeKoku, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
     const kosuDizini = await dizin.kosuDizini(runId);
     await Promise.all([

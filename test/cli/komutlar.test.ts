@@ -1,5 +1,5 @@
-import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -108,7 +108,7 @@ function metinTopla(akis: PassThrough): { oku: () => string } {
 }
 
 async function geciciDizin(onEk = 'kobay-cli-'): Promise<string> {
-  return mkdtemp(join(tmpdir(), onEk));
+  return geciciDizinAc(onEk);
 }
 
 async function sahteYanitlariYaz(): Promise<string> {
@@ -508,6 +508,53 @@ describe('CLI komut fonksiyonları', () => {
     await expect((await KobayDizini.bul(cwd))?.configOku()).resolves.toMatchObject({
       baseUrl: 'http://uygulama.test',
     });
+  });
+
+  it('project create/update yalnız http(s) adres kabul eder; şemasız ve başka şemalı adres exit 2 ve ipucu', async () => {
+    const ipucu = 'Use an http:// or https:// URL, e.g. http://localhost:3000';
+    for (const url of ['localhost:3000', 'ftp://x', 'file:///etc/passwd', 'javascript:alert(1)', 'bozuk-url']) {
+      const cwd = await geciciDizin();
+      const sonuc = await projectCreate({ cwd, url, beyin: { adaptor: 'sahte' } });
+      expect(sonuc.exitCode, url).toBe(2);
+      expect(sonuc.json, url).toEqual({ error: { code: 'UsageError', message: expect.stringContaining(ipucu) } });
+      await expect(KobayDizini.bul(cwd), url).resolves.toBeNull();
+    }
+    const cwd = await geciciDizin();
+    const loginli = await projectCreate({ cwd, url: 'http://uygulama.test', loginUrl: 'ftp://uygulama.test/giris', beyin: { adaptor: 'sahte' } });
+    expect(loginli.exitCode).toBe(2);
+    expect(loginli.mesaj).toContain(ipucu);
+
+    await projectCreate({ cwd, url: 'https://uygulama.test', beyin: { adaptor: 'sahte' } });
+    for (const alan of [{ url: 'localhost:3000' }, { loginUrl: 'ftp://uygulama.test/giris' }]) {
+      const sonuc = await projectUpdate({ cwd, ...alan });
+      expect(sonuc.exitCode).toBe(2);
+      expect(sonuc.mesaj).toContain(ipucu);
+    }
+    await expect((await KobayDizini.bul(cwd))?.configOku()).resolves.toEqual(
+      expect.not.objectContaining({ loginUrl: expect.anything() }),
+    );
+    await expect((await KobayDizini.bul(cwd))?.configOku()).resolves.toMatchObject({ baseUrl: 'https://uygulama.test' });
+  });
+
+  it('ayrıştırıcının düzelttiği ham adresi reddeder; büyük harfli şema ham haliyle kabul edilir', async () => {
+    const ipucu = 'Use an http:// or https:// URL, e.g. http://localhost:3000';
+    // Node bunların hepsini `http:` sayar ama ham değer config'e yazılırdı.
+    for (const url of ['http:example.com', 'http:/example.com', 'ht\ntp://x', 'http://x y', 'http://x\t/', 'https://x\u007f']) {
+      const cwd = await geciciDizin();
+      const sonuc = await projectCreate({ cwd, url, beyin: { adaptor: 'sahte' } });
+      expect(sonuc.exitCode, JSON.stringify(url)).toBe(2);
+      expect(sonuc.json, JSON.stringify(url)).toEqual({ error: { code: 'UsageError', message: expect.stringContaining(ipucu) } });
+      await expect(KobayDizini.bul(cwd), JSON.stringify(url)).resolves.toBeNull();
+    }
+    const cwd = await geciciDizin();
+    expect((await projectCreate({ cwd, url: 'HTTP://localhost:3000', beyin: { adaptor: 'sahte' } })).exitCode).toBe(0);
+    await expect((await KobayDizini.bul(cwd))?.configOku()).resolves.toMatchObject({ baseUrl: 'HTTP://localhost:3000' });
+    for (const alan of [{ url: 'http:/example.com' }, { loginUrl: 'http:localhost:3000/giris' }]) {
+      const sonuc = await projectUpdate({ cwd, ...alan });
+      expect(sonuc.exitCode, JSON.stringify(alan)).toBe(2);
+      expect(sonuc.mesaj).toContain(ipucu);
+    }
+    await expect((await KobayDizini.bul(cwd))?.configOku()).resolves.toMatchObject({ baseUrl: 'HTTP://localhost:3000' });
   });
 
   it('project create var olan projede exit 2; --force yalnız configi yeniden yazar', async () => {
@@ -917,6 +964,47 @@ describe('hata mesajları eyleme yönlendirir', () => {
     expect(sonuc.exitCode).toBe(3);
     expect(sonuc.mesaj).toContain('Target app is not reachable: http://uygulama.test');
     expect(sonuc.json).toEqual({ error: expect.objectContaining({ code: 'TargetUnreachableError' }) });
+  });
+
+  it('hedef adresindeki kullanıcı:parola mesajlarda maskelenir (reachable, project create/update)', async () => {
+    const cwd = await bosProje();
+    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
+    const olustur = await projectCreate({ cwd, url: kimlikli, force: true, beyin: { adaptor: 'sahte' } });
+    const guncelle = await projectUpdate({ cwd, url: kimlikli });
+    for (const sonuc of [olustur, guncelle]) {
+      expect(sonuc.exitCode).toBe(0);
+      expect(sonuc.metin).not.toContain('Hunter2Pass');
+      expect(sonuc.metin).toContain('Target: http://[redacted]@localhost:3000\n');
+    }
+
+    sahteler.hedefAyakta = false;
+    const yok = await explore({ cwd });
+    expect(yok.exitCode).toBe(3);
+    expect(yok.mesaj).toContain('Target app is not reachable: http://[redacted]@localhost:3000;');
+    expect(yok.mesaj).not.toContain('Hunter2Pass');
+  });
+
+  it('project get: insan modunda parola yok, --output json baseUrl ham kalır', async () => {
+    const cwd = await bosProje();
+    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
+    const loginUrl = 'http://admin:Hunter2Pass@localhost:3000/giris';
+    const olustur = await projectCreate({ cwd, url: kimlikli, loginUrl, force: true, beyin: { adaptor: 'sahte' } });
+    const al = await projectGet({ cwd });
+    for (const sonuc of [olustur, al]) {
+      expect(JSON.stringify(sonuc.json)).toContain(kimlikli);
+      const cikti = (json: boolean): { stdout: string; stderr: string } => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        ciktiYaz(sonuc, json, stdout, stderr);
+        return { stdout: String(stdout.read() ?? ''), stderr: String(stderr.read() ?? '') };
+      };
+      const insan = cikti(false);
+      expect(insan.stdout + insan.stderr).not.toContain('Hunter2Pass');
+      expect(insan.stdout).toContain('http://[redacted]@localhost:3000');
+      expect(cikti(true).stdout).toContain(kimlikli);
+    }
+    const gecersiz = await projectUpdate({ cwd, url: 'http://admin:Hunter2Pass@' });
+    expect(gecersiz.mesaj ?? '').not.toContain('Hunter2Pass');
   });
 
   it('hata paketi yokken hangi komutun paket ürettiğini söyler', async () => {

@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import type { Readable, Writable } from 'node:stream';
 import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
+import { metindekiKimligiGizle } from '../depo/adres.js';
 import type { BeyinAyari, Kimlik } from '../depo/index.js';
 import { CIKIS } from './cikis.js';
 import { ciktiYaz } from './cikti.js';
@@ -31,6 +32,7 @@ import {
   testGet,
   testList,
   testRefresh,
+  testReport,
   testRerun,
   testResult,
   testRun,
@@ -54,9 +56,9 @@ const varsayilanAkislar: CliAkislari = {
 
 /** Yalnız verilen beyin alanları; eksikler proje/global ayardan gelir. */
 function beyinAyari(
-  secenekler: { brain?: string; beyin?: string; model?: string; effort?: string },
+  secenekler: { brain?: string; model?: string; effort?: string },
 ): Partial<BeyinAyari> | undefined {
-  const brain = secenekler.brain ?? secenekler.beyin;
+  const brain = secenekler.brain;
   if (brain === undefined && secenekler.model === undefined && secenekler.effort === undefined) return undefined;
   return {
     ...(brain === undefined ? {} : { adaptor: brain as BeyinAyari['adaptor'] }),
@@ -66,7 +68,6 @@ function beyinAyari(
 }
 
 /**
- * `--brain` görünen addır; `--beyin` eski Türkçe eş addır, yardımda gizlenir ama çalışır.
  * `gizli` seçimler (ör. test beyni `sahte`) kabul edilir ama yardımda listelenmez.
  */
 function beyinSecenekleri(
@@ -84,14 +85,26 @@ function beyinSecenekleri(
   };
   const secimMetni = gorunen.map((secim) => `"${secim}"`).join(', ');
   return komut
-    .addOption(new Option('--brain <adaptor>', `${aciklama} (alias: --beyin) (choices: ${secimMetni})`).argParser(denetle))
-    .addOption(new Option('--beyin <adaptor>').argParser(denetle).hideHelp());
+    .addOption(new Option('--brain <adaptor>', `${aciklama} (choices: ${secimMetni})`).argParser(denetle));
 }
+
+/** Tekrarlanabilir seçenek: her `--auth-origin` değeri listeye eklenir. */
+function biriktir(deger: string, onceki: string[] | undefined): string[] {
+  return [...(onceki ?? []), deger];
+}
+
+const AUTH_ORIGIN_ACIKLAMASI = 'exact origin of a separate login site (SSO), e.g. https://auth.example.com;'
+  + ' matched exactly (no subdomains or other ports); repeatable, requires --login';
 
 function pozitifOndalik(deger: string): number {
   const sayi = Number(deger);
   if (!Number.isFinite(sayi) || sayi <= 0) throw new InvalidArgumentError('Must be a positive number.');
   return sayi;
+}
+
+function negatifOlmayanTamsayi(deger: string): number {
+  if (!/^\d{1,4}$/.test(deger.trim())) throw new InvalidArgumentError('Must be a whole number from 0 to 9999.');
+  return Number.parseInt(deger, 10);
 }
 
 async function acikSor(soru: string, akislar: CliAkislari): Promise<string> {
@@ -105,6 +118,14 @@ async function acikSor(soru: string, akislar: CliAkislari): Promise<string> {
   } finally {
     arayuz.close();
   }
+}
+
+/**
+ * `--auth-origin` ile `--clear-auth-origins` birlikteyse parola hiç sorulmaz; komut aynı
+ * kullanım hatasını parola istemeden döndürür.
+ */
+function authOriginBayragiUygun(secenekler: { authOrigin?: string[]; clearAuthOrigins?: boolean }): boolean {
+  return !(secenekler.authOrigin !== undefined && secenekler.clearAuthOrigins === true);
 }
 
 async function girisBilgisi(akislar: CliAkislari): Promise<Kimlik> {
@@ -130,13 +151,13 @@ export function programOlustur(
     .name('kobay')
     .description('Local-first automated test engine')
     .version(paket.version)
-    .option('--output <format>', 'output format', 'text')
+    .addOption(new Option('--output <format>', 'output format').choices(['text', 'json']).default('text'))
     .option('--cwd <dir>', 'project directory', process.cwd())
     .showHelpAfterError()
     .exitOverride()
     .configureOutput({
-      writeOut: (metin) => akislar.stdout.write(metin),
-      writeErr: (metin) => akislar.stderr.write(metin),
+      writeOut: (metin) => akislar.stdout.write(metindekiKimligiGizle(metin)),
+      writeErr: (metin) => akislar.stderr.write(metindekiKimligiGizle(metin)),
     });
 
   const calistir = async (islem: Promise<KomutSonucu>): Promise<void> => {
@@ -151,10 +172,9 @@ export function programOlustur(
   'brain to use', ['claude', 'codex', 'openrouter'])
     .option('--model <model>', 'model name to pass to the brain')
     .option('--effort <effort>', 'reasoning effort, when supported by the adapter')
-    .action(async (secenekler: { brain?: 'claude' | 'codex' | 'openrouter'; beyin?: 'claude' | 'codex' | 'openrouter'; model?: string; effort?: string }) => {
-      const { brain, beyin, ...kalan } = secenekler;
-      const adaptor = brain ?? beyin;
-      await calistir(setup({ ...kalan, ...(adaptor === undefined ? {} : { beyin: adaptor }) }));
+    .action(async (secenekler: { brain?: 'claude' | 'codex' | 'openrouter'; model?: string; effort?: string }) => {
+      const { brain, ...kalan } = secenekler;
+      await calistir(setup({ ...kalan, ...(brain === undefined ? {} : { beyin: brain }) }));
     });
 
   program.command('install-browser')
@@ -178,6 +198,7 @@ export function programOlustur(
     .option('--docs <path>', 'product document file (used to generate plans)')
     .option('--login', 'prompt for credentials and save them in .kobay')
     .option('--login-url <url>', 'login page URL')
+    .option('--auth-origin <origin>', AUTH_ORIGIN_ACIKLAMASI, biriktir)
     .option('--force', 'overwrite only the config of an existing project'),
   'brain for this project', ['claude', 'codex', 'openrouter'], ['sahte'])
     .option('--model <model>', 'model name to pass to the brain')
@@ -187,12 +208,13 @@ export function programOlustur(
       docs?: string;
       login?: boolean;
       loginUrl?: string;
+      authOrigin?: string[];
       force?: boolean;
       brain?: string;
-      beyin?: string;
       model?: string;
       effort?: string;
     }) => {
+      // --auth-origin --login'siz verilirse projectCreate kullanım hatası döner.
       const login = secenekler.login === true ? await girisBilgisi(akislar) : undefined;
       const beyin = beyinAyari(secenekler);
       await calistir(projectCreate({
@@ -201,6 +223,7 @@ export function programOlustur(
         ...(secenekler.docs === undefined ? {} : { docs: secenekler.docs }),
         ...(login === undefined ? {} : { login }),
         ...(secenekler.loginUrl === undefined ? {} : { loginUrl: secenekler.loginUrl }),
+        ...(secenekler.authOrigin === undefined ? {} : { authOrigins: secenekler.authOrigin }),
         ...(beyin === undefined ? {} : { beyin }),
         ...(secenekler.force === undefined ? {} : { force: secenekler.force }),
       }));
@@ -209,7 +232,14 @@ export function programOlustur(
     .description('updates individual project fields; unspecified fields are unchanged')
     .option('--base-url <url>', 'new target application URL')
     .option('--login-url <url>', 'new login page URL')
-    .option('--docs-path <path>', 'product document file path'),
+    .option('--docs-path <path>', 'product document file path')
+    .option(
+      '--login',
+      'prompt for credentials again and save them in .kobay (replaces the saved ones); without --auth-origin,'
+        + ' keeps the auth origin list only if the saved credentials already approved it',
+    )
+    .option('--auth-origin <origin>', `${AUTH_ORIGIN_ACIKLAMASI}; replaces the whole saved list`, biriktir)
+    .option('--clear-auth-origins', 'removes every saved auth origin; requires --login'),
   'brain to use', ['claude', 'codex', 'openrouter'], ['sahte'])
     .option('--model <model>', 'model name to pass to the brain')
     .option('--effort <effort>', 'reasoning effort, when supported by the adapter')
@@ -217,12 +247,17 @@ export function programOlustur(
       baseUrl?: string;
       loginUrl?: string;
       docsPath?: string;
+      login?: boolean;
+      authOrigin?: string[];
+      clearAuthOrigins?: boolean;
       brain?: string;
-      beyin?: string;
       model?: string;
       effort?: string;
     }) => {
-      const brain = secenekler.brain ?? secenekler.beyin;
+      const login = secenekler.login === true && authOriginBayragiUygun(secenekler)
+        ? await girisBilgisi(akislar)
+        : undefined;
+      const brain = secenekler.brain;
       const beyin = brain === undefined && secenekler.model === undefined && secenekler.effort === undefined
         ? undefined
         : {
@@ -236,6 +271,9 @@ export function programOlustur(
         ...(secenekler.loginUrl === undefined ? {} : { loginUrl: secenekler.loginUrl }),
         ...(secenekler.docsPath === undefined ? {} : { docs: secenekler.docsPath }),
         ...(beyin === undefined ? {} : { beyin }),
+        ...(login === undefined ? {} : { login }),
+        ...(secenekler.authOrigin === undefined ? {} : { authOrigins: secenekler.authOrigin }),
+        ...(secenekler.clearAuthOrigins === true ? { clearAuthOrigins: true } : {}),
       }));
     });
   project.command('get')
@@ -298,11 +336,18 @@ export function programOlustur(
     .description('runs tests; generates missing code with the brain and prepares a failure bundle when one fails')
     .option('--all', 'run all saved tests')
     .option('--rerun', 'run existing code without generating it')
-    .action(async (ids: string[], secenekler: { all?: boolean; rerun?: boolean }) => calistir(testRun({
+    .option(
+      '--no-analysis',
+      'never call the brain (for CI): run existing code only; a test without code is blocked,'
+      + ' and a failure gets an evidence bundle with failure kind "unknown"',
+    )
+    .action(async (ids: string[], secenekler: { all?: boolean; rerun?: boolean; analysis?: boolean }) => calistir(testRun({
       cwd: cwd(),
       ...(ids.length === 0 ? {} : { ids }),
       ...(secenekler.all === undefined ? {} : { all: secenekler.all }),
       ...(secenekler.rerun === undefined ? {} : { rerun: secenekler.rerun }),
+      // Commander `--no-analysis` için `analysis: false` verir; varsayılan true.
+      ...(secenekler.analysis === false ? { noAnalysis: true } : {}),
     })));
   test.command('rerun <id>')
     .description('runs a test with its existing code without generating it again')
@@ -320,6 +365,25 @@ export function programOlustur(
     .action(async (id: string, secenekler: { history?: boolean }) => calistir(testResult({
       cwd: cwd(), id,
       ...(secenekler.history === undefined ? {} : { history: secenekler.history }),
+    })));
+  test.command('report [ids...]')
+    .description('writes a static HTML report of the latest run of each selected test (does not run tests)')
+    .option('--all', 'report all saved tests')
+    .option('--out <dir>', 'destination directory (default: .kobay/report); a non-empty directory is replaced only if it holds a kobay report')
+    .option(
+      '--summary <path>',
+      'also write a GitHub-flavored Markdown summary (for a pull request comment or job summary) to this file',
+    )
+    .option('--max-prompts <n>', 'maximum number of fix prompts in the --summary file (default: 5)', negatifOlmayanTamsayi)
+    .action(async (ids: string[], secenekler: {
+      all?: boolean; out?: string; summary?: string; maxPrompts?: number;
+    }) => calistir(testReport({
+      cwd: cwd(),
+      ...(ids.length === 0 ? {} : { ids }),
+      ...(secenekler.all === undefined ? {} : { all: secenekler.all }),
+      ...(secenekler.out === undefined ? {} : { out: secenekler.out }),
+      ...(secenekler.summary === undefined ? {} : { summary: secenekler.summary }),
+      ...(secenekler.maxPrompts === undefined ? {} : { maxPrompts: secenekler.maxPrompts }),
     })));
   const failure = test.command('failure').description('get the evidence bundle for a failed run');
   failure.command('get <id>')

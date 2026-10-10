@@ -1,6 +1,3 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Harita } from '../../src/depo/index.js';
 
@@ -20,6 +17,7 @@ vi.mock('../../src/kos/index.js', () => ({
 import { explore, testRefresh } from '../../src/cli/komutlar/index.js';
 import { KobayDizini, type TestKaydi } from '../../src/depo/index.js';
 import { CredentialLeakBlockedError, CredentialOriginError, LoginFormOriginError } from '../../src/kesif/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const TEST_ID = 't_abc12345';
 const harita: Harita = {
@@ -43,7 +41,7 @@ const testKaydi: TestKaydi = {
 };
 
 async function proje(): Promise<string> {
-  const cwd = await mkdtemp(join(tmpdir(), 'kobay-giris-origin-'));
+  const cwd = await geciciDizinAc('kobay-giris-origin-');
   const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
   await dizin.haritaYaz(harita);
   await dizin.testYaz(testKaydi);

@@ -1,6 +1,5 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Harita, Sayfa } from '../../src/depo/index.js';
@@ -98,12 +97,12 @@ const YENI_KOD = [
 ].join('\n');
 
 async function proje(): Promise<{ cwd: string; dizin: KobayDizini }> {
-  const cwd = await mkdtemp(join(tmpdir(), 'kobay-refresh-'));
+  const cwd = await geciciDizinAc('kobay-refresh-');
   const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
   await dizin.haritaYaz(harita);
   await dizin.testYaz(testKaydi);
   await dizin.kodYaz(TEST_ID, '// eski kod: Cariler');
-  const yanitlar = await mkdtemp(join(tmpdir(), 'kobay-refresh-yanit-'));
+  const yanitlar = await geciciDizinAc('kobay-refresh-yanit-');
   await Promise.all([
     yazAtomik(join(yanitlar, `plan-refresh-${TEST_ID}.json`), JSON.stringify({
       name: 'Müşteriler listesini görüntüle',
@@ -239,7 +238,7 @@ describe('test refresh', () => {
   });
 
   it('harita yoksa exit 2 verir', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-refresh-haritasiz-'));
+    const cwd = await geciciDizinAc('kobay-refresh-haritasiz-');
     const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
     await dizin.testYaz(testKaydi);
 

@@ -1,5 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { access, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -10,9 +9,10 @@ import {
   testCreate,
 } from '../../src/cli/komutlar/index.js';
 import { KobayDizini, type HataPaketi } from '../../src/depo/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 async function geciciDizin(onEk = 'kobay-sinir-'): Promise<string> {
-  return mkdtemp(join(tmpdir(), onEk));
+  return geciciDizinAc(onEk);
 }
 
 /** `failure get` senaryolarının ortak paketi. */

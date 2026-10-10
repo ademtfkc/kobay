@@ -1,9 +1,9 @@
 import { access } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
-import type { Harita, Kimlik, Sayfa } from '../depo/index.js';
+import { authOriginleriDogrula, type Harita, type Kimlik, type Sayfa } from '../depo/index.js';
 import { girisFormuBul } from './giris.js';
 import { girisKorumasiKur, girisKorumasiSonDenetim } from './giris-korumasi.js';
-import { girisiGonder, kimlikOriginDogrula, loginUrlDogrula, oturumDurumunuYaz } from './oturum.js';
+import { girisiGonder, izinliOriginler, kimlikOriginDogrula, loginUrlDogrula, oturumDurumunuYaz } from './oturum.js';
 import { sayfaOzeti } from './sayfa-ozeti.js';
 
 export interface SayfaYenilemeSecenekleri {
@@ -13,6 +13,8 @@ export interface SayfaYenilemeSecenekleri {
   storageStateYolu: string;
   kimlik?: Kimlik;
   loginUrl?: string;
+  /** Ayrı giriş (SSO) origin'leri; bkz. `KesifSecenekleri.authOrigins`. */
+  authOrigins?: readonly string[];
   sayfaZamanAsimiMs?: number;
 }
 
@@ -39,9 +41,11 @@ function dosyaVarMi(yol: string): Promise<boolean> {
  * sayfanın özeti haritaya yazılmaz.
  */
 export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promise<Sayfa> {
-  loginUrlDogrula(secenekler.baseUrl, secenekler.loginUrl);
-  // Tarayıcı açılmadan: başka origin'e ait kimlikle hiçbir sayfaya gidilmez.
-  if (secenekler.kimlik !== undefined) kimlikOriginDogrula(secenekler.kimlik, new URL(secenekler.baseUrl).origin);
+  const authOrigins = authOriginleriDogrula(secenekler.baseUrl, secenekler.authOrigins ?? []);
+  const hedefOrigin = new URL(secenekler.baseUrl).origin;
+  loginUrlDogrula(secenekler.baseUrl, secenekler.loginUrl, authOrigins);
+  // Tarayıcı açılmadan: başka origin'e (ya da başka auth origin kümesine) ait kimlikle hiçbir sayfaya gidilmez.
+  if (secenekler.kimlik !== undefined) kimlikOriginDogrula(secenekler.kimlik, hedefOrigin, authOrigins);
   const hedef = new URL(secenekler.url, secenekler.baseUrl).href;
   const beklenenYol = new URL(hedef).pathname;
   const sayfaZamanAsimiMs = secenekler.sayfaZamanAsimiMs ?? 15_000;
@@ -55,7 +59,7 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
   });
   // WebSocket yönlendirmesi yalnız sonra açılan belgelere işler; koruma ilk sayfadan önce kurulur.
   if (secenekler.kimlik !== undefined) {
-    await girisKorumasiKur(context, secenekler.kimlik, new URL(secenekler.baseUrl).origin);
+    await girisKorumasiKur(context, secenekler.kimlik, izinliOriginler(hedefOrigin, authOrigins));
   }
   const sayfa = await context.newPage();
 
@@ -64,23 +68,28 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
 
     // Giriş yalnız yönlendirme olduğunda denenir; hedef sayfadaki bir parola
     // alanı (örn. "şifre değiştir" formu) giriş sanılmasın.
-    if (secenekler.kimlik !== undefined && new URL(sayfa.url()).pathname !== beklenenYol) {
+    // Ayrı giriş sitesine (SSO) yönlendirmede yol aynı olsa da origin farklıdır; o da yönlendirmedir.
+    const yerindeMi = (): boolean => {
+      const adres = new URL(sayfa.url());
+      return adres.origin === hedefOrigin && adres.pathname === beklenenYol;
+    };
+    if (secenekler.kimlik !== undefined && !yerindeMi()) {
       if (secenekler.loginUrl !== undefined) {
         await sayfa.goto(secenekler.loginUrl, { waitUntil: 'domcontentloaded', timeout: sayfaZamanAsimiMs });
       }
       const form = await girisFormuBul(sayfa);
       if (form) {
-        await girisiGonder(sayfa, form, secenekler.kimlik, new URL(secenekler.baseUrl).origin);
+        await girisiGonder(sayfa, form, secenekler.kimlik, hedefOrigin, authOrigins);
         await oturumDurumunuYaz(context, secenekler.storageStateYolu);
         await sayfa.goto(hedef, { waitUntil: 'domcontentloaded', timeout: sayfaZamanAsimiMs });
       }
     }
 
     const gelenYol = new URL(sayfa.url()).pathname;
-    if (gelenYol !== beklenenYol) {
+    if (!yerindeMi()) {
       throw new Error(`Page could not be refreshed: asked for ${beklenenYol}, got ${gelenYol} (the session may have expired)`);
     }
-    const ozet = await sayfaOzeti(sayfa, new URL(secenekler.baseUrl).origin);
+    const ozet = await sayfaOzeti(sayfa, hedefOrigin);
     girisKorumasiSonDenetim(context);
     return ozet;
   } finally {

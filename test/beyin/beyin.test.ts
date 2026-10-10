@@ -1,5 +1,5 @@
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { delimiter, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -21,7 +21,7 @@ const anahtarliOrtam = process.env.PATH === undefined ? cliDizini : `${cliDizini
 const geciciler: string[] = [];
 
 async function geciciDizin(): Promise<string> {
-  const dizin = await mkdtemp(join(tmpdir(), 'kobay-brain-'));
+  const dizin = await geciciDizinAc('kobay-brain-');
   geciciler.push(dizin);
   return dizin;
 }

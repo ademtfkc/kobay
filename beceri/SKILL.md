@@ -1,7 +1,7 @@
 ---
 name: kobay
 description: Verify web app features end to end with kobay (local Playwright test engine). Use after finishing or fixing a user-facing feature in a web app that has a .kobay/ directory, or when the user asks to test, verify or "run kobay". Runs tests, reads the failure bundle, and fixes the product, the test or the environment based on failureKind.
-allowed-tools: Bash(kobay *)
+allowed-tools: Bash(kobay *), Bash(npx -y @ademtfkc/kobay *)
 license: Apache-2.0
 ---
 
@@ -19,24 +19,28 @@ config or tests only; wait until product code has changed.
 ## Tools: MCP first, CLI second
 
 If `mcp__kobay__*` tools are available, use them. Otherwise use the `kobay` CLI
-(or `npx kobay` if `kobay` is not on PATH).
+(or `npx -y @ademtfkc/kobay` if `kobay` is not on PATH; the npm package name
+is scoped).
 
 | Step | MCP tool | CLI |
 | --- | --- | --- |
 | Project status | `project_get` | `kobay project get --output json` |
 | Create project | `project_create` | `kobay project create --url <URL> --output json` |
+| Change project settings (`baseUrl`, `loginUrl`, `docsPath`, `brain`, `model`, `effort`) | `project_update` | `kobay project update --base-url <URL> --output json` |
 | Environment check | `doctor` | `kobay doctor --output json` |
 | Explore the app | `explore` | `kobay explore --output json` |
 | Propose tests | `plan_generate` | `kobay test plan generate --output json` |
 | Accept proposals | `plan_accept` (`ids`) | `kobay test plan accept --ids <P1,P2> --output json` |
 | Test from a plan file (`type`, `name`, `planSteps`; optional `url` on the project's origin) | `test_create` (`planPath`) | `kobay test create --plan <FILE> --output json` |
 | List tests | `test_list` | `kobay test list --output json` |
-| Run tests | `test_run` (`ids` or `all: true`) | `kobay test run <ID...> --output json` / `kobay test run --all --output json` |
+| Read one test record | `test_get` | `kobay test get <ID> --output json` |
+| Run tests | `test_run` (`ids` or `all: true`; `noAnalysis` for CI) | `kobay test run <ID...> --output json` / `kobay test run --all --output json` |
 | Re-run existing code | `test_rerun` | `kobay test rerun <ID> --output json` |
 | Adapt to a changed UI | `test_refresh` | `kobay test refresh <ID> --output json` |
 | Last result | `test_result` | `kobay test result <ID> --output json` |
 | Failure bundle | `failure_get` (`id`, `out`) | `kobay test failure get <ID> --out <DIR> --output json` |
 | Generated code | `code_get` | `kobay test code get <ID> --output json` |
+| HTML run report for a human (latest run per test) | `test_report` (`ids` or `all: true`, `out`, `summary`, `maxPrompts`) | `kobay test report <ID...> --output json` / `kobay test report --all --output json` |
 | Delete a test | `test_delete` | `kobay test delete <ID> --output json` |
 | Clean up old runs and logs | `prune` (`confirm`, `dryRun`, `maxMb`, `olderThanDays`; preview by default) | `kobay prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>] --output json` |
 
@@ -47,8 +51,16 @@ Rules for reading results:
   `{"ok": false, "exitCode": n, "error": {"code": ..., "message": ...}}`.
   Decide from `ok` and `exitCode` in the JSON. Do not pipe kobay into another
   command and read `$?`; that is the last command's exit code, not kobay's.
-- MCP: the tool result text is the `data` part as JSON; `isError: true` means a
-  non-zero exit (a failed test counts).
+- MCP: the tool result text is the `data` part as JSON. Decide pass or fail
+  from `verdict` in that JSON, never from `isError`: a failed test (exit `1`)
+  comes back without `isError`, with `"verdict": "failed"`. `isError: true`
+  only means the tool could not do its job (exit `2`–`5`: usage, unreachable
+  target, brain/engine or login/permission error). Then check the body: if it
+  is `{"error": {"code": ..., "message": ...}}`, it is a usage or engine error.
+  `test_run` and `test_rerun` can also return `isError: true` with the usual
+  array of result rows: read each row's `verdict` anyway, because `blocked`
+  (exit `3`) and `inconclusive` (exit `4`) come back this way. `test_refresh`
+  does the same with its `run` row.
 - Exit codes: `0` passed, `1` a test failed, `2` usage error, `3` target app
   unreachable, `4` brain or engine error, `5` login or permission problem.
 - `test run` returns one row per test: `id`, `name`, `verdict`, `runId`, and
@@ -68,7 +80,14 @@ Rules for reading results:
    `KOBAY_LOGIN_PASS` and `KOBAY_LOGIN_ORIGIN` (for example
    `http://localhost:3000`) exported, and the project URL must be on that
    origin, or the call fails. The login URL must be on the same origin as the
-   base URL (exit code `2` otherwise). If `explore`/`test_refresh` exits `5`
+   base URL (exit code `2` otherwise). If the login form is on a separate auth
+   site (SSO), only the user can allow it, in a terminal, while entering the
+   credentials: `kobay project create --url <URL> --login --auth-origin <origin>`
+   (or `kobay project update --login --auth-origin <origin>`, giving the full
+   list; each entry is an exact origin, subdomains and other ports are not
+   included). You cannot set
+   this over MCP; do not edit `authOrigins` in `.kobay/config.json` (the saved
+   login then stops working). If `explore`/`test_refresh` exits `5`
    because the login page or form points to another origin, or the page tried
    to send the credentials to another origin, report it to the user; do not work
    around it. If it exits `5` because the saved login belongs to another origin,

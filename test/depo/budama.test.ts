@@ -1,7 +1,6 @@
 import {
-  access, lutimes, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile,
+  access, lutimes, mkdir, readFile, rm, symlink, utimes, writeFile,
 } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -10,9 +9,10 @@ import {
   depoyuBuda,
   type KosuSonucu,
 } from '../../src/depo/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 async function proje(): Promise<KobayDizini> {
-  return KobayDizini.ac(await mkdtemp(join(tmpdir(), 'kobay-prune-')), {
+  return KobayDizini.ac(await geciciDizinAc('kobay-prune-'), {
     baseUrl: 'http://localhost:3000',
     brain: { adaptor: 'sahte' },
   });
@@ -127,7 +127,7 @@ describe('depo budama', () => {
 
   it('keeps unknown failure-out files and links and reports why they were skipped', async () => {
     const dizin = await proje();
-    const disari = join(await mkdtemp(join(tmpdir(), 'kobay-prune-note-')), 'valuable.txt');
+    const disari = join(await geciciDizinAc('kobay-prune-note-'), 'valuable.txt');
     await writeFile(disari, 'keep');
     await Promise.all([
       writeFile(dizin.yol('failure-out', 'notes.txt'), 'keep'),
@@ -277,7 +277,7 @@ describe('depo budama', () => {
 
   it('rejects a managed-directory symlink without touching its external target', async () => {
     const dizin = await proje();
-    const disari = await mkdtemp(join(tmpdir(), 'kobay-prune-outside-'));
+    const disari = await geciciDizinAc('kobay-prune-outside-');
     await writeFile(join(disari, 'brain-plan-1.log'), 'valuable');
     await rm(dizin.yol('logs'), { recursive: true });
     await symlink(disari, dizin.yol('logs'));
@@ -289,7 +289,7 @@ describe('depo budama', () => {
 
 describe('0.1 data migration notice', () => {
   it('writes one stderr line only when migration changes data', async () => {
-    const kok = await mkdtemp(join(tmpdir(), 'kobay-migration-notice-'));
+    const kok = await geciciDizinAc('kobay-migration-notice-');
     await mkdir(join(kok, '.kobay'));
     await writeFile(join(kok, '.kobay', 'config.json'), JSON.stringify({
       baseUrl: 'http://localhost:3000',

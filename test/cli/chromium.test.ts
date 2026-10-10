@@ -1,8 +1,6 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { projectCreate, explore } from '../../src/cli/komutlar/index.js';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 /** KOBAY_TEST_STRICT=1 verildiğinde atlama yasak: eksik ortam hata sayılır. */
 const kati = process.env.KOBAY_TEST_STRICT === '1';
@@ -20,7 +18,7 @@ it('gerçek Chromium ile demo uygulamasını keşfeder', async (context) => {
   };
   const sunucu = await baslat(0);
   try {
-    const cwd = await mkdtemp(join(tmpdir(), 'kobay-cli-chromium-'));
+    const cwd = await geciciDizinAc('kobay-cli-chromium-');
     await projectCreate({
       cwd,
       url: sunucu.url,

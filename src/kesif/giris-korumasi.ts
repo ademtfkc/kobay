@@ -5,7 +5,11 @@ import type { Kimlik } from '../depo/index.js';
  * Parola sayfaya yazıldıktan sonra JavaScript'in (fetch, XHR, sendBeacon, img, açılır
  * pencere, WebSocket) onu başka SİTEYE göndermesine karşı ağ katmanı koruması.
  *
- * "Aynı site": `baseUrl` origin'i ya da aynı şema + aynı kayıtlı alan adı
+ * İzinli küme (`izinliKumedeMi`): `baseUrl` origin'inin SİTESİ ve kullanıcının `--login` ile
+ * onayladığı auth origin'ler (SSO) yalnız TAM origin olarak. `https://yourco.okta.com`
+ * listedeyken `evilco.okta.com` ya da `yourco.okta.com:444` yabancıdır.
+ *
+ * `baseUrl` için "aynı site": origin'in kendisi ya da aynı şema + aynı kayıtlı alan adı
  * (`app.example.com` ↔ `api.example.com`), port serbest. localhost, IP ve tek etiketli adlarda
  * şema + ana makine adı eşitliği (port serbest: `localhost:5173` ↔ `localhost:8080`; ama
  * `localhost` ↔ `127.0.0.1` farklı). Kiracıya ayrılmış barındırma alanlarında (`amazonaws.com`,
@@ -190,6 +194,19 @@ function httpAdres(url: string): URL | null {
 }
 
 /**
+ * Parolanın gidebileceği küme kararı (form hedefi, ağ süzgeci, WebSocket ve son denetim için tek
+ * kural): `baseUrl` origin'i aynı-site kuralıyla (`ayniSiteOriginMi`: alt alan ve port serbest),
+ * auth origin'ler (SSO) yalnız TAM origin eşitliğiyle. `ws:`/`wss:` adresleri `http:`/`https:`
+ * sayılır. `baseOrigin` verilmezse yalnız auth origin'ler izinlidir.
+ */
+export function izinliKumedeMi(url: string, baseOrigin: string | undefined, authOrigins: readonly string[]): boolean {
+  if (baseOrigin !== undefined && ayniSiteOriginMi(url, baseOrigin)) return true;
+  const adres = httpAdres(url);
+  if (adres === null) return false;
+  return authOrigins.some((origin) => httpAdres(origin)?.origin === adres.origin);
+}
+
+/**
  * İstek adresi izinli origin ile aynı sitede mi? Şema eşit olmalı, port serbest (tarayıcıların
  * same-site kuralı). IP/localhost/tek etiketli adlarda ana makine adı birebir eşit olmalı
  * (`localhost:5173` → `localhost:8080` aynı site, `localhost` → `127.0.0.1` değil); kiracıya
@@ -242,33 +259,79 @@ function kokenAdi(url: string): string {
   return httpAdres(url)?.origin ?? url;
 }
 
-function sizintiHatasi(sizanOriginler: Set<string>, izinliOrigin: string, sonra: boolean): CredentialLeakBlockedError {
+/**
+ * Ayrı giriş sitesi (SSO) ipucu; `oturum.ts`'teki `SSO_IPUCU` ile aynı metin (döngüsel içe
+ * aktarma olmasın diye burada da duruyor). Auth origin listesi varsa ipucu verilmez.
+ */
+const SSO_IPUCU = 'If login runs on a separate auth site (SSO), allow its exact origin with'
+  + ' `kobay project update --login --auth-origin <origin>`.';
+
+/** İzinli kümenin okunur metni: `baseUrl` origin'i sitesiyle, auth origin'ler tam origin olarak. */
+export function izinliMetni(baseOrigin: string | undefined, authOrigins: readonly string[]): string {
+  const parcalar = [
+    ...(baseOrigin === undefined ? [] : [`${baseOrigin} and its own site`]),
+    ...(authOrigins.length === 0 ? [] : [`exactly ${authOrigins.join(', ')} (exact origin only)`]),
+  ];
+  return parcalar.join(', and ');
+}
+
+function ipucuMetni(authOrigins: readonly string[]): string {
+  return authOrigins.length === 0 ? ` ${SSO_IPUCU}` : '';
+}
+
+function sizintiHatasi(
+  sizanOriginler: Set<string>,
+  baseOrigin: string | undefined,
+  authOrigins: readonly string[],
+  sonra: boolean,
+): CredentialLeakBlockedError {
   return new CredentialLeakBlockedError(
     `The ${sonra ? 'app tried, after login,' : 'login page tried'} to send the credentials to a different site `
-      + `(${[...sizanOriginler].join(', ')}); credentials are only sent to ${izinliOrigin} and its own site. `
+      + `(${[...sizanOriginler].join(', ')}); credentials are only sent to ${izinliMetni(baseOrigin, authOrigins)}. `
       + `${sonra ? 'Exploration' : 'Login'} was stopped. `
-      + 'A separate auth site (SSO) is not supported. Locally, ports may differ but the host name must match (localhost and 127.0.0.1 are different sites).',
+      + 'Locally, ports may differ but the host name must match (localhost and 127.0.0.1 are different sites).'
+      + ipucuMetni(authOrigins),
   );
 }
 
 /**
+ * Koruma kümesi kimliğin onayladığı kümeyi aşamaz: her izinli origin ya kimliğin origin'i ya da
+ * kimlik verilirken onaylanan auth origin'lerden biri olmalı. Çağıran yanlış küme geçse bile
+ * parolanın gidebileceği yer sessizce büyümez; koruma hiç kurulmadan reddedilir.
+ */
+function kumeKimlikteOnayliMi(kimlik: Kimlik, izinliOriginler: readonly string[]): boolean {
+  if (izinliOriginler.length === 0 || kimlik.origin === undefined) return false;
+  const onayli = new Set([kimlik.origin, ...(kimlik.authOrigins ?? []).map((origin) => kokenAdi(origin))]);
+  return izinliOriginler.every((origin) => onayli.has(origin));
+}
+
+/**
  * Bağlamdaki tüm sayfaların (açılır pencereler dahil) isteklerini ve WebSocket'lerini
- * izinli siteye göre süzer. Kaldırılmaz: bağlam kapanınca kendiliğinden biter.
+ * izinli kümeye (baseUrl origin'inin sitesi + tam auth origin'ler, bkz. `izinliKumedeMi`) göre süzer. Kaldırılmaz: bağlam kapanınca kendiliğinden biter.
  * Aynı bağlama ikinci kez çağrılırsa var olan korumayı döndürür.
  */
 export async function girisKorumasiKur(
   context: BrowserContext,
   kimlik: Kimlik,
-  izinliOrigin: string,
+  izinliOriginler: readonly string[],
 ): Promise<GirisKorumasi> {
   const varOlan = korumalar.get(context);
   if (varOlan !== undefined) return varOlan;
+  if (!kumeKimlikteOnayliMi(kimlik, izinliOriginler)) {
+    throw new CredentialLeakBlockedError(
+      `The allowed origins (${izinliOriginler.join(', ') || 'none'}) were not approved when the credentials were saved;`
+        + ' the password was not sent.',
+    );
+  }
+  // Kimliğin kendi origin'i (`baseUrl`) aynı-site kuralıyla, geri kalanlar (auth origin'ler) tam origin.
+  const baseOrigin = izinliOriginler.find((origin) => origin === kimlik.origin);
+  const authListesi = izinliOriginler.filter((origin) => origin !== kimlik.origin);
   const izler = parolaIzleri(kimlik);
   const sizanOriginler = new Set<string>();
   /** Giriş penceresinde kesilen, parola görünmeyen siteler-arası yazmalar (bilgi amaçlı). */
   const kesilenYazmalar = new Set<string>();
   let evre: Evre = 'serbest';
-  const yabanciMi = (url: string): boolean => !ayniSiteOriginMi(url, izinliOrigin);
+  const yabanciMi = (url: string): boolean => !izinliKumedeMi(url, baseOrigin, authListesi);
 
   const yakala = async (route: Route, istek: Request): Promise<void> => {
     const url = istek.url();
@@ -339,18 +402,20 @@ export async function girisKorumasiKur(
     },
     denetle(girisBasarili) {
       evre = 'serbest';
-      if (sizanOriginler.size > 0) throw sizintiHatasi(sizanOriginler, izinliOrigin, false);
+      if (sizanOriginler.size > 0) throw sizintiHatasi(sizanOriginler, baseOrigin, authListesi, false);
       if (!girisBasarili && kesilenYazmalar.size > 0) {
         throw new CredentialLeakBlockedError(
           `Login did not complete: during login the page tried to write to a different site `
-            + `(${[...kesilenYazmalar].join(', ')}) and kobay blocked it; credentials are only sent to ${izinliOrigin} `
-            + 'and its own site. A separate auth site (SSO) is not supported. Locally, ports may differ but the host name must match (localhost and 127.0.0.1 are different sites).',
+            + `(${[...kesilenYazmalar].join(', ')}) and kobay blocked it; credentials are only sent to `
+            + `${izinliMetni(baseOrigin, authListesi)}. `
+            + 'Locally, ports may differ but the host name must match (localhost and 127.0.0.1 are different sites).'
+            + ipucuMetni(authListesi),
         );
       }
     },
     sonDenetim() {
       // denetle sızıntıda zaten fırlattığı için buraya gelen her kayıt giriş penceresi dışındadır.
-      if (sizanOriginler.size > 0) throw sizintiHatasi(sizanOriginler, izinliOrigin, true);
+      if (sizanOriginler.size > 0) throw sizintiHatasi(sizanOriginler, baseOrigin, authListesi, true);
     },
   };
   korumalar.set(context, koruma);

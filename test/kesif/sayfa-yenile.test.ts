@@ -1,11 +1,10 @@
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import type { Harita, Sayfa } from '../../src/depo/index.js';
 import { haritadaSayfaBul, haritadaSayfayiDegistir, kesfet, sayfayiYenile } from '../../src/kesif/index.js';
 import { baslat } from '../kobay-demo/sunucu.mjs';
+import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 let demo: { url: string; kapat: () => Promise<void> };
 let engel: unknown;
@@ -28,7 +27,7 @@ function e2eMumkun(context: TestContext): boolean {
 }
 
 async function girisliHarita(): Promise<{ harita: Harita; storageStateYolu: string }> {
-  const dizin = await mkdtemp(join(tmpdir(), 'kobay-yenile-'));
+  const dizin = await geciciDizinAc('kobay-yenile-');
   const storageStateYolu = join(dizin, 'storage.json');
   const harita = await kesfet({
     baseUrl: demo.url,
@@ -56,7 +55,7 @@ function bayatlat(harita: Harita, yol: string): Harita {
 
 describe('sayfayiYenile', () => {
   it('yenilemede farklı origin loginUrl ile kimlik göndermeden reddeder', async () => {
-    const dizin = await mkdtemp(join(tmpdir(), 'kobay-yenile-origin-'));
+    const dizin = await geciciDizinAc('kobay-yenile-origin-');
     await expect(sayfayiYenile({
       baseUrl: 'http://uygulama.test',
       url: '/records',
@@ -97,7 +96,7 @@ describe('sayfayiYenile', () => {
 
   it('oturum yokken kimlikle yeniden giriş yapıp istenen sayfayı döndürür', async (context) => {
     if (!e2eMumkun(context)) return;
-    const dizin = await mkdtemp(join(tmpdir(), 'kobay-yenile-oturumsuz-'));
+    const dizin = await geciciDizinAc('kobay-yenile-oturumsuz-');
     const storageStateYolu = join(dizin, 'storage.json');
 
     const yeniSayfa = await sayfayiYenile({
@@ -114,7 +113,7 @@ describe('sayfayiYenile', () => {
 
   it('oturum yok ve kimlik yoksa yanlış sayfanın özetini döndürmez', async (context) => {
     if (!e2eMumkun(context)) return;
-    const dizin = await mkdtemp(join(tmpdir(), 'kobay-yenile-yetkisiz-'));
+    const dizin = await geciciDizinAc('kobay-yenile-yetkisiz-');
 
     await expect(sayfayiYenile({
       baseUrl: demo.url,

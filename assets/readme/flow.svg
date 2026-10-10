@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="430" viewBox="0 0 960 430" role="img" aria-labelledby="t d">
+  <title id="t">How kobay works</title>
+  <desc id="d">explore, plan, generate, run and analyse. A failed test becomes a failure bundle with a failureKind: product_bug means fix the app and rerun, product_changed means test refresh, test_bug means fix the test code and rerun.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#7d8590"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .h { font-size: 19px; font-weight: 700; fill: #ffffff; }
+      .s { font-size: 13px; fill: #ffffff; }
+      .c { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; font-weight: 700; fill: #ffffff; }
+      .g { font-size: 13px; font-weight: 600; fill: #7d8590; }
+      .l { stroke: #7d8590; stroke-width: 2; fill: none; }
+    </style>
+  </defs>
+
+  <!-- main loop -->
+  <rect x="20" y="30" width="140" height="66" rx="12" fill="#57606a"/>
+  <text x="90" y="60" text-anchor="middle" class="h">explore</text>
+  <text x="90" y="81" text-anchor="middle" class="s">map · no LLM</text>
+
+  <rect x="210" y="30" width="140" height="66" rx="12" fill="#bc4c00"/>
+  <text x="280" y="60" text-anchor="middle" class="h">plan</text>
+  <text x="280" y="81" text-anchor="middle" class="s" style="font-size:12px">you accept proposals</text>
+
+  <rect x="400" y="30" width="140" height="66" rx="12" fill="#bc4c00"/>
+  <text x="470" y="60" text-anchor="middle" class="h">generate</text>
+  <text x="470" y="81" text-anchor="middle" class="s">Playwright code</text>
+
+  <rect x="590" y="30" width="140" height="66" rx="12" fill="#57606a"/>
+  <text x="660" y="60" text-anchor="middle" class="h">run</text>
+  <text x="660" y="81" text-anchor="middle" class="s">local Chromium</text>
+
+  <rect x="780" y="30" width="160" height="66" rx="12" fill="#bc4c00"/>
+  <text x="860" y="60" text-anchor="middle" class="h">analyse</text>
+  <text x="860" y="81" text-anchor="middle" class="s">root cause · fix target</text>
+
+  <path class="l" d="M160 63H206" marker-end="url(#a)"/>
+  <path class="l" d="M350 63H396" marker-end="url(#a)"/>
+  <path class="l" d="M540 63H586" marker-end="url(#a)"/>
+  <path class="l" d="M730 63H776" marker-end="url(#a)"/>
+  <text x="755" y="53" text-anchor="middle" class="g">failed</text>
+
+  <!-- passed -->
+  <path class="l" d="M660 96V138" marker-end="url(#a)"/>
+  <rect x="605" y="142" width="110" height="40" rx="20" fill="#1a7f37"/>
+  <text x="660" y="168" text-anchor="middle" class="h" style="font-size:16px">passed</text>
+
+  <!-- bundle -->
+  <path class="l" d="M860 96V138" marker-end="url(#a)"/>
+  <rect x="770" y="142" width="180" height="58" rx="10" fill="#424a53" stroke="#7d8590" stroke-width="1.5"/>
+  <text x="860" y="167" text-anchor="middle" class="h" style="font-size:16px">failure bundle</text>
+  <text x="860" y="187" text-anchor="middle" class="s">screenshot · DOM · trace</text>
+
+  <!-- branches -->
+  <path class="l" d="M860 200V232H170V268" marker-end="url(#a)"/>
+  <path class="l" d="M480 232V268" marker-end="url(#a)"/>
+  <path class="l" d="M790 232V268" marker-end="url(#a)"/>
+  <text x="600" y="224" text-anchor="middle" class="g">failureKind</text>
+
+  <rect x="40" y="272" width="260" height="84" rx="12" fill="#cf222e"/>
+  <text x="170" y="301" text-anchor="middle" class="c">product_bug</text>
+  <text x="170" y="322" text-anchor="middle" class="s">the app is broken</text>
+  <text x="170" y="342" text-anchor="middle" class="s" style="font-weight:700">fix the app → test rerun</text>
+
+  <rect x="350" y="272" width="260" height="84" rx="12" fill="#9a6700"/>
+  <text x="480" y="301" text-anchor="middle" class="c">product_changed</text>
+  <text x="480" y="322" text-anchor="middle" class="s">the app changed on purpose</text>
+  <text x="480" y="342" text-anchor="middle" class="s" style="font-weight:700">leave the app → test refresh</text>
+
+  <rect x="660" y="272" width="260" height="84" rx="12" fill="#8250df"/>
+  <text x="790" y="301" text-anchor="middle" class="c">test_bug</text>
+  <text x="790" y="322" text-anchor="middle" class="s">the test is wrong</text>
+  <text x="790" y="342" text-anchor="middle" class="s" style="font-weight:700">fix the test code → rerun</text>
+
+  <!-- legend -->
+  <rect x="40" y="392" width="14" height="14" rx="3" fill="#bc4c00"/>
+  <text x="62" y="404" class="g">calls the brain (LLM)</text>
+  <rect x="230" y="392" width="14" height="14" rx="3" fill="#57606a"/>
+  <text x="252" y="404" class="g">local, no LLM</text>
+  <text x="920" y="404" text-anchor="end" class="g">every fix ends with a rerun of the same test</text>
+</svg>
