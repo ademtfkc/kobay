@@ -385,14 +385,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.3.0
+      - uses: ademtfkc/kobay@v0.3.1
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.3.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.3.1` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -1039,6 +1039,10 @@ yollar, sayılar ve çalıştırılacak sonraki komut. Ayrıştırma. Her komut 
 {"ok":true,"exitCode":0,"data":[{"id":"t_6a12wnx1","name":"Record list shows saved records","verdict":"passed","runId":"r_20260923144622_dju9"}]}
 {"ok":false,"exitCode":2,"error":{"code":"InvalidId","message":"Invalid testId: t_yok"}}
 ```
+
+Komut beyni çağırdıysa zarfta ayrıca `"brain":{"calls":7,"costUsd":1.1}` olur (sağlayıcı
+maliyet bildirmiyorsa, Codex'teki gibi, `costUsd` `null`'dır); metin çıktısı stderr'de
+`Brain: 7 calls, $1.10` satırıyla biter.
 
 Bir boru sonrasında `$?` yerine JSON'daki `ok` ve `exitCode`'u oku —
 `kobay ... | jq`, kobay'ın değil `jq`'nun çıkış kodunu bildirir.

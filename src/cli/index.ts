@@ -5,10 +5,11 @@ import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import type { Readable, Writable } from 'node:stream';
 import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
+import { beyinKullanimFarki, beyinKullanimi } from '../beyin/index.js';
 import { metindekiKimligiGizle } from '../depo/adres.js';
 import type { BeyinAyari, Kimlik } from '../depo/index.js';
 import { CIKIS } from './cikis.js';
-import { ciktiYaz } from './cikti.js';
+import { ciktiYaz, type BeyinOzeti } from './cikti.js';
 import { InputClosedError, gizliSor, yanitBekle } from './gizli-sor.js';
 import { UsageError, basarisiz, type KomutSonucu } from './komut.js';
 import {
@@ -160,10 +161,19 @@ export function programOlustur(
       writeErr: (metin) => akislar.stderr.write(metindekiKimligiGizle(metin)),
     });
 
-  const calistir = async (islem: Promise<KomutSonucu>): Promise<void> => {
+  // Beyin defteri süreç başınadır; komutun kendi kullanımı, program kurulurkenki okumayla farktan bulunur
+  // (her `main` çağrısı yeni program kurar, bir program tek komut çalıştırır).
+  const beyinOncesi = beyinKullanimi();
+  const calistir = async (islem: Promise<KomutSonucu>, beyinOzetli = true): Promise<void> => {
     const sonuc = await islem;
     sonucBildir(sonuc);
-    ciktiYaz(sonuc, program.opts<{ output: string }>().output === 'json', akislar.stdout, akislar.stderr);
+    const fark = beyinOzetli ? beyinKullanimFarki(beyinOncesi, beyinKullanimi()) : undefined;
+    const beyin: BeyinOzeti | undefined = fark === undefined ? undefined : {
+      calls: fark.cagri,
+      // Kayan nokta toplamı (0.30000000000000004) zarfa sızmasın; mikro-dolar hassasiyeti yeter.
+      costUsd: fark.maliyetUsd === null ? null : Math.round(fark.maliyetUsd * 1e6) / 1e6,
+    };
+    ciktiYaz(sonuc, program.opts<{ output: string }>().output === 'json', akislar.stdout, akislar.stderr, beyin);
   };
   const cwd = (): string => program.opts<{ cwd: string }>().cwd;
 
@@ -404,7 +414,7 @@ export function programOlustur(
 
   program.command('mcp')
     .description('serves kobay tools as a stdio MCP server (register this command with your agent)')
-    .action(async () => calistir(mcp()));
+    .action(async () => calistir(mcp(), false)); // MCP sunucusunun beyin kullanımı CLI satırına girmez
   program.command('doctor')
     .description('checks Node, the brain CLI, Chromium, .kobay, and the target app')
     .action(async () => calistir(doctor({ cwd: cwd() })));

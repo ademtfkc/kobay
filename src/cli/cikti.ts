@@ -7,6 +7,14 @@ export interface CiktiZarfi {
   exitCode: number;
   data?: unknown;
   error?: { code: string; message: string };
+  /** Yalnız komut beyin çağrısı yaptıysa; `costUsd` maliyeti bilinmeyen çağrı varsa `null`. */
+  brain?: BeyinOzeti;
+}
+
+/** Komutun beyin (LLM) kullanımı: çağrı sayısı ve sağlayıcının bildirdiği toplam maliyet. */
+export interface BeyinOzeti {
+  calls: number;
+  costUsd: number | null;
 }
 
 function hataMi(veri: unknown): veri is { error: { code: string; message: string } } {
@@ -104,16 +112,69 @@ export function uyariYaz(metin: string, stderr: Writable = process.stderr): void
   stderr.write(metindekiKimligiGizle(metin));
 }
 
+const MIKRO = 1_000_000;
+
+/**
+ * Maliyeti tamsayı mikro-dolara çevirir (bütçe defteri de 6 ondalığa kuantize eder). Sonlu ve ≥ 0 olmayan ya da
+ * tamsayı aritmetiğinin güvenli aralığını aşan değer (NaN, Infinity, negatif, 1e21) için null: maliyet bilinmiyor.
+ */
+function mikroDolar(deger: number): number | null {
+  if (!Number.isFinite(deger) || deger < 0) return null;
+  const mikro = Math.round(deger * MIKRO);
+  return Number.isSafeInteger(mikro + MIKRO) ? mikro : null;
+}
+
+/** Tamsayı mikro-doları `basamak` ondalığa yarım-yukarı yuvarlar; yalnız tamsayı aritmetiği, kayan nokta bölmesi yok. */
+function mikroMetni(mikro: number, basamak: number): string {
+  const adim = 10 ** (6 - basamak);
+  const kaydirilmis = mikro + adim / 2;
+  const adet = (kaydirilmis - (kaydirilmis % adim)) / adim;
+  const olcek = 10 ** basamak;
+  const kesir = adet % olcek;
+  return `${(adet - kesir) / olcek}.${String(kesir).padStart(basamak, '0')}`;
+}
+
+/** Dolar tutarı: 0 → `0.00`; sentin altı (0 < x < 0.01) → 4 ondalık (`0.0040`); kalanı 2 ondalık. Geçersizse null. */
+function dolarMetni(deger: number): string | null {
+  const mikro = mikroDolar(deger);
+  if (mikro === null) return null;
+  if (deger > 0 && mikro < MIKRO / 100) {
+    const ince = mikroMetni(mikro, 4);
+    // 0.009996 dört ondalıkta 0.0100 olur: sent eşiğine yuvarlanan değer iki ondalıkla yazılır.
+    if (ince !== '0.0100') return ince;
+  }
+  return mikroMetni(mikro, 2);
+}
+
+/** Maliyet bilinmiyor sayılır: sağlayıcı bildirmedi (null) ya da değer geçersiz (NaN, Infinity, negatif, aşırı büyük). */
+function gecerliMaliyet(costUsd: number | null): number | null {
+  return costUsd === null || mikroDolar(costUsd) === null ? null : costUsd;
+}
+
+/** İnsan modunun stderr satırı: `Brain: 7 calls, $1.10` ya da `Brain: 7 calls, cost unknown`. */
+export function beyinSatiri(beyin: BeyinOzeti): string {
+  const maliyet = beyin.costUsd === null ? null : dolarMetni(beyin.costUsd);
+  return `Brain: ${birimliSayi(beyin.calls, 'call')}, ${maliyet === null ? 'cost unknown' : `$${maliyet}`}`;
+}
+
 export function ciktiYaz(
   sonuc: KomutSonucu,
   json: boolean,
   stdout: Writable = process.stdout,
   stderr: Writable = process.stderr,
+  beyin?: BeyinOzeti,
 ): void {
   if (json) {
-    stdout.write(`${JSON.stringify(ciktiZarfi(sonuc))}\n`);
+    const zarf = ciktiZarfi(sonuc);
+    const brain = beyin === undefined ? undefined : { calls: beyin.calls, costUsd: gecerliMaliyet(beyin.costUsd) };
+    stdout.write(`${JSON.stringify(brain === undefined ? zarf : { ...zarf, brain })}\n`);
     return;
   }
+  insanCiktisiYaz(sonuc, stdout, stderr);
+  if (beyin !== undefined) stderr.write(`${beyinSatiri(beyin)}\n`);
+}
+
+function insanCiktisiYaz(sonuc: KomutSonucu, stdout: Writable, stderr: Writable): void {
   // İnsan modunda basılan her metin (hata mesajı ve kayıt dökümü dahil) adres kimliğinden arındırılır;
   // `--output json` yukarıda aynen çıkar, makine sözleşmesi değişmez.
   if (sonuc.metin !== undefined) {

@@ -115,6 +115,114 @@ describe('geçerli kimlikle giriş filtresi', () => {
     ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
   });
 
+  it('tırnak içinde sahte köke yapışık değer sahtedir; emin olunmayan değer düşer', () => {
+    for (const adim of [
+      "Type 'wrongpassword' into the password field", 'Type "password123fake" into the password field',
+      "Enter 'badpass' in the password box and submit", "Type `fake_pw` into the password field",
+      "Type 'WrongPassword' into the password field",
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Enter the password and submit', 'Type the real password', "Type 'password' into the field",
+      // Kök rastgele sözcüğe yapışık ya da kimlik parçasına değil: emin değiliz, gerçek sayılır.
+      "Type 'Badger2024' into the password field", "Type 'testpassword' into the password field",
+      // Yapışık sahte değer başka bir öbekte; bu adın penceresinde sahte işaret yok.
+      "Type 'wrongpassword' into the username field and the account password into the password field",
+      // Tırnak yok: yapışık sözcük pencere kuralına takılmaz.
+      'Type wrongpassword into the password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('pencerede birden çok tırnaklı değer varsa hepsi sahte olmalı; akıllı ya da eşsiz tırnak değer sayılmaz', () => {
+    for (const adim of [
+      "Type 'wrongpassword' into the password field",
+      "Type 'wrongpassword' and 'badpass' into the password field",
+      "Type 'wrongpassword' into the password field (not 'badpass')",
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      // Biri gerçek görünüyor: sahte değer yanındaki gerçeği aklamaz.
+      "Type 'hunter2' into the password field (not 'wrongpassword')",
+      "Type 'wrongpassword' into the password field (not 'hunter2')",
+      // Akıllı tırnak değer sayılmaz; eşi olmayan tırnak da (emniyetli taraf).
+      'Type ‘wrongpassword’ into the password field', 'Type “wrongpassword” into the password field',
+      "Type 'wrongpassword\" into the password field",
+      "Type 'wrongpassword' into the password field (not “hunter2”)",
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('öbekte tırnak varsa genel sahte işareti devre dışı; karar yalnız tırnaklı değerden gelir', () => {
+    for (const adim of [
+      "Type 'wrong_pw' into the password field", "Type 'wrong123' into the password field",
+      "Type 'wrong-password' into the password field without clearing it",
+      // Kimlik adı yalnız tırnaklı değerin içinde ve öbekte başka değer yok.
+      "Type 'wrongpassword' into the field",
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      // Dördüncü karşıt denetim: "without" genel işareti tırnaklı gerçek değeri aklamaz.
+      "Type 'hunter2' into the password field without clearing it",
+      "Type 'hunter2' into the password field and verify the invalid password error is gone",
+      "Type “hunter2” into the password field with a wrong username",
+      // Tam değer: kök ile kimlik sözcüğü, ayraç ve rakam dışında serbest harf dizisi kalmamalı.
+      "Type 'wrongpasswordHunter2' into the password field", "Type 'hunter2wrong' into the password field",
+      "Type 'fakeHunter' into the password field",
+      // Unicode harf sözcük sınırı değildir.
+      "Type 'wrongÅngström' into the password field", 'Type wrongÅngström into the password field',
+      // Kaçışlı tırnak, boşluklu değer ve boş tırnak değer sayılmaz.
+      "Type 'wrong\\'password' into the password field", "Type 'wrong password' into the password field",
+      "Type '' into the password field and expect a wrong password error",
+      "Type 'wrong\\pw' into the password field",
+      // Kaçışlı açılış tırnağı: ardından gelen "değer" gerçek bir tırnaklı değer değildir.
+      "Type \\'wrongpassword' into the password field",
+      // İki kimlik adı: biri sahte biri gerçek → düşer.
+      "Type 'wrongpassword' into the password field and 'hunter2' into the secret field",
+      // Tırnak penceresinin (önde 3, arkada 5 sözcük) dışında ama aynı öbekte: genel işaret yine devre dışı.
+      "Type 'hunter2' slowly one character at a time into the password field without clearing it",
+      // Tırnak pencere kenarından taşıyor.
+      "Type into the password field the value 'wrong pass' slowly",
+      // İngilizce ad yoksa da tırnak kuralı geçerli.
+      "Fill in the login form with 'hunter2' and an empty username",
+      "Şifre alanına 'hunter2' yazın, yanlış uyarısı çıkmasın",
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('iki harf arasındaki düz ya da akıllı tek tırnak kesme işaretidir, tırnak sayılmaz', () => {
+    for (const adim of [
+      "Enter the user's wrong password", "Submit with an invalid password and verify it doesn't log in",
+      "Enter the admin's invalid password and verify it isn't accepted",
+      "Type 'wrongpassword' into the user's password field",
+      "Kullanıcı'nın şifre alanına yanlış şifre yaz",
+      // Akıllı kesme (’) de iki harf arasında kesme işaretidir.
+      'Enter the user’s wrong password', 'Enter an invalid password and verify it doesn’t log in',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      "Type 'hunter2' into the user's password field", "Enter the user's password",
+      // Harf olmayan yana değen tırnak kesme değildir: "2'" tırnak kuralına girer, emin olunmayan biçim düşer.
+      "Type 'hunter2's' into the password field with a wrong username",
+      "Type 'wrong's' into the password field",
+      // Akıllı tırnak çifti harf arasında değil: tırnak sayılır, değer sayılmaz.
+      'Type ’hunter2’ into the password field', "Type 'hunter2' into the user’s password field",
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('tırnak yoksa eski genel işaret kuralı aynen çalışır', () => {
+    for (const adim of [
+      'Enter a wrong password and submit', 'Fill in the password field without a value',
+      'Enter a mismatched password', 'Yanlış şifre gir', "Fill the login form with 'fake' values",
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Type the password into the password field', 'Enter the wrongful password',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('"without" yalnız kimlik yokluğu yapısında sahte işaretidir', () => {
+    for (const adim of [
+      'Submit the form without a password', 'Submit without entering the password and verify the error',
+      'Leave the password empty and submit',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Enter the password without changing the username', 'Type the password without pressing enter',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
   it('ortak kural: başlığa bakmaz, giriş yapılandırılmamışsa kapalıdır', () => {
     const adimlar = [{ type: 'action' as const, description: 'Enter the password' }];
     expect(girisKuraliIhlali(adimlar, true)).toContain('already authenticated');

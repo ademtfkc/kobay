@@ -104,7 +104,8 @@ export class CodexBeyni implements Beyin {
           );
         }
         sonHam = await readFile(ciktiYolu, 'utf8').catch(() => calisma.stdout);
-        this.butce.cagriTamamla(rezervasyon, 0);
+        // Codex maliyet bildirmez: bütçeye 0 işlenir, kullanım özeti maliyeti bilinmiyor der.
+        this.butce.cagriTamamla(rezervasyon, 0, false);
         return { ham: sonHam };
       });
       await beyinGunluguYaz(istek.logDizini, istek.gorev, sonIstem, sonuc.ham, undefined, this.env);

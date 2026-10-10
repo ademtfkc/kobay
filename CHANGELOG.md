@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-10
+
+### Added
+
+- Brain cost line: CLI commands that call the brain end with
+  `Brain: 7 calls, $1.10` on stderr (`cost unknown` when the provider does not
+  report cost, as with Codex; a total under one cent shows four decimals,
+  `$0.0040`; amounts round half-up on whole micro-dollars, and a negative,
+  non-finite or out-of-range cost counts as unknown, `costUsd: null` in JSON),
+  and `--output json` adds
+  `"brain": {"calls", "costUsd"}` to the envelope. Commands without brain
+  calls print no line and add no field. The MCP server is unchanged.
+
+### Fixed
+
+- The plan filter no longer drops a step that types a quoted fake value glued to
+  a fake marker, such as `Type 'wrongpassword' into the password field` (also
+  `"password123fake"`, `'badpass'`). The whole value must be built from a fake
+  marker plus credential words, `_ - .` and digits, so `'Badger2024'`,
+  `'wrongpasswordHunter2'` and `'hunter2wrong'` still count as real. When the
+  step quotes more than one value near the credential word, every one of them
+  must be fake (`Type 'hunter2' into the password field (not 'wrongpassword')`
+  still drops), and only matching straight quotes count as a quoted value
+  (curly, unmatched, empty or backslash-escaped quotes drop the step). Once a
+  quote appears, a plain fake word no longer clears the step
+  (`Type 'hunter2' into the password field without clearing it` drops). A bare
+  `without` no longer counts as a fake marker, only `without` plus a missing
+  credential (`without a password`, `without entering the password`), so
+  `Enter the password without changing the username` drops. `requiresRealCredentials: true` still drops the
+  proposal.
+- The 0.3.0 npm package carried the 0.3.0 notes in `CHANGELOG.md` under the
+  `[Unreleased]` heading; in 0.3.1 the headings are correct.
+
+### Security
+
+- Require `@modelcontextprotocol/sdk` `^1.32.1` (was `^1.30.0`) and lock it to
+  1.32.1 to clear GHSA-6qxp-vccf-f47h from `npm audit`. The advisory is in the SDK's OAuth
+  client, which kobay's stdio MCP server does not use.
+
 ## [0.3.0] - 2026-10-10
 
 ### Added
@@ -571,7 +610,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/ademtfkc/kobay/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ademtfkc/kobay/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ademtfkc/kobay/compare/v0.2.0...v0.2.1
 [0.1.0]: https://github.com/ademtfkc/kobay/releases/tag/v0.1.0

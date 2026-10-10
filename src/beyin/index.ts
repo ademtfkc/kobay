@@ -3,7 +3,7 @@ import type { BeyinAyari } from '../depo/index.js';
 import { ClaudeBeyni } from './claude.js';
 import { CodexBeyni } from './codex.js';
 import { OpenRouterBeyni } from './openrouter.js';
-import { BeyinButcesi } from './ortak.js';
+import { BeyinButcesi, type BeyinKullanimSayaci } from './ortak.js';
 import { SahteBeyin } from './sahte.js';
 
 export interface BeyinIstegi {
@@ -95,4 +95,20 @@ export function beyinOlustur(ayar: BeyinAyari, env: NodeJS.ProcessEnv = process.
     case 'sahte':
       return new SahteBeyin(env, butce);
   }
+}
+
+/** Süreçteki beyin defterinin birikmiş kullanımı; defter henüz yoksa sıfır. */
+export function beyinKullanimi(env: NodeJS.ProcessEnv = process.env): BeyinKullanimSayaci {
+  return surecButceleri.get(env)?.kullanim() ?? { cagri: 0, bilinenMaliyetUsd: 0, maliyetiBilinmeyenCagri: 0 };
+}
+
+/** İki okuma arasındaki kullanım: çağrı yoksa `undefined`; bir çağrının bile maliyeti bilinmiyorsa maliyet `null`. */
+export function beyinKullanimFarki(
+  once: BeyinKullanimSayaci,
+  sonra: BeyinKullanimSayaci,
+): { cagri: number; maliyetUsd: number | null } | undefined {
+  const cagri = sonra.cagri - once.cagri;
+  if (cagri <= 0) return undefined;
+  const bilinmeyen = sonra.maliyetiBilinmeyenCagri - once.maliyetiBilinmeyenCagri;
+  return { cagri, maliyetUsd: bilinmeyen > 0 ? null : sonra.bilinenMaliyetUsd - once.bilinenMaliyetUsd };
 }

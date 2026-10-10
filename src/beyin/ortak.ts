@@ -21,6 +21,16 @@ export interface HamBeyinYaniti extends BeyinKullanimi {
   ham: string;
 }
 
+/** Süreç boyunca biriken beyin kullanımı; rezervasyon değil, sağlayıcının bildirdiği gerçek maliyet. */
+export interface BeyinKullanimSayaci {
+  /** Sağlayıcıya gitmiş ve kapanmış çağrılar (başarılı ya da başarısız); hiç başlamayan çağrı sayılmaz. */
+  cagri: number;
+  /** Sağlayıcının bildirdiği gerçek maliyetlerin toplamı (USD). */
+  bilinenMaliyetUsd: number;
+  /** Maliyeti bildirilmeyen çağrılar (Codex, maliyetsiz biten hata); varsa toplam bilinmez. */
+  maliyetiBilinmeyenCagri: number;
+}
+
 export interface BeyinRezervasyonu {
   readonly kimlik: number;
   readonly azamiMaliyetUsd: number;
@@ -88,6 +98,9 @@ export class BeyinButcesi {
   private toplamMaliyetUsd = 0;
   private siradakiRezervasyon = 1;
   private readonly rezervasyonlar = new Map<number, number>();
+  private kapananCagri = 0;
+  private bilinenMaliyetUsd = 0;
+  private maliyetiBilinmeyenCagri = 0;
 
   constructor(ayar: BeyinAyari, env: NodeJS.ProcessEnv) {
     const politika = politikaOku(ayar, env);
@@ -108,6 +121,21 @@ export class BeyinButcesi {
     this.azamiCagri = Math.min(this.azamiCagri, politika.azamiCagri);
     this.azamiMaliyetUsd = Math.min(this.azamiMaliyetUsd, politika.azamiMaliyetUsd);
     this.openRouterMaxTokensDegeri = Math.min(this.openRouterMaxTokensDegeri, politika.openRouterMaxTokens);
+  }
+
+  /** CLI özet satırı için okuma; bütçe hesabına (rezervasyonlar dahil) dokunmaz. */
+  kullanim(): BeyinKullanimSayaci {
+    return {
+      cagri: this.kapananCagri,
+      bilinenMaliyetUsd: this.bilinenMaliyetUsd,
+      maliyetiBilinmeyenCagri: this.maliyetiBilinmeyenCagri,
+    };
+  }
+
+  private kullanimIsle(maliyetUsd: number | undefined): void {
+    this.kapananCagri += 1;
+    if (maliyetUsd === undefined || !Number.isFinite(maliyetUsd) || maliyetUsd < 0) this.maliyetiBilinmeyenCagri += 1;
+    else this.bilinenMaliyetUsd += maliyetUsd;
   }
 
   private rezerveMaliyetUsd(): number {
@@ -151,10 +179,15 @@ export class BeyinButcesi {
     return this.cagriBaslat(Math.min(this.claudeCagriButcesiUsd, Math.max(0, this.kalanMaliyetUsd())));
   }
 
-  cagriTamamla(rezervasyon: BeyinRezervasyonu, maliyetUsd: number | undefined): void {
+  /**
+   * `maliyetBildirildi: false`: sağlayıcı maliyet hiç bildirmez (Codex); bütçeye verilen değer işlenir
+   * ama kullanım özeti bu çağrının maliyetini bilinmiyor sayar.
+   */
+  cagriTamamla(rezervasyon: BeyinRezervasyonu, maliyetUsd: number | undefined, maliyetBildirildi = true): void {
     const ayrilan = this.rezervasyonlar.get(rezervasyon.kimlik);
     if (ayrilan === undefined) return;
     this.rezervasyonlar.delete(rezervasyon.kimlik);
+    this.kullanimIsle(maliyetBildirildi ? maliyetUsd : undefined);
     if (maliyetUsd === undefined || !Number.isFinite(maliyetUsd) || maliyetUsd < 0) {
       this.toplamMaliyetUsd += ayrilan;
       throw new BrainRuntimeError(
@@ -183,6 +216,7 @@ export class BeyinButcesi {
     const ayrilan = this.rezervasyonlar.get(rezervasyon.kimlik);
     if (ayrilan === undefined) return;
     this.rezervasyonlar.delete(rezervasyon.kimlik);
+    this.kullanimIsle(maliyetUsd);
     const bilinen = maliyetUsd !== undefined && Number.isFinite(maliyetUsd) && maliyetUsd >= 0;
     this.toplamMaliyetUsd += bilinen ? maliyetUsd : ayrilan;
   }

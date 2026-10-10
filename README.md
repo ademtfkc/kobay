@@ -384,14 +384,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.3.0
+      - uses: ademtfkc/kobay@v0.3.1
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.3.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.3.1` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -1030,6 +1030,10 @@ the next command to run. Do not parse it. Every command also accepts
 {"ok":true,"exitCode":0,"data":[{"id":"t_6a12wnx1","name":"Record list shows saved records","verdict":"passed","runId":"r_20260923144622_dju9"}]}
 {"ok":false,"exitCode":2,"error":{"code":"InvalidId","message":"Invalid testId: t_yok"}}
 ```
+
+When the command called the brain, the envelope also has
+`"brain":{"calls":7,"costUsd":1.1}` (`costUsd` is `null` when the provider does not report
+cost, as with Codex), and text output ends with `Brain: 7 calls, $1.10` on stderr.
 
 Read `ok` and `exitCode` from the JSON rather than `$?` after a pipe —
 `kobay ... | jq` reports `jq`'s exit code, not kobay's.

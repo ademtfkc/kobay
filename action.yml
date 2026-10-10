@@ -10,10 +10,10 @@ branding:
 inputs:
   version:
     description: >-
-      @ademtfkc/kobay version to install from npm ("0.3.0", "latest", ...).
+      @ademtfkc/kobay version to install from npm ("0.3.1", "latest", ...).
       A path to a local .tgz package or a file: spec is installed as it is.
     required: false
-    default: 0.3.0
+    default: 0.3.1
   node-version:
     description: Node.js version for actions/setup-node (kobay needs 22.12 or newer).
     required: false

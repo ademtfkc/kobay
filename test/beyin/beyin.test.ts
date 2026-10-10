@@ -4,7 +4,8 @@ import { delimiter, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { codexHataOzeti } from '../../src/beyin/codex.js';
-import { BrainError, beyinOlustur } from '../../src/beyin/index.js';
+import { beyinSatiri } from '../../src/cli/cikti.js';
+import { BrainError, beyinKullanimFarki, beyinKullanimi, beyinOlustur } from '../../src/beyin/index.js';
 import {
   BeyinButcesi,
   eksikKapanislariTamamla,
@@ -178,6 +179,33 @@ describe('CLI adaptörleri', () => {
     const gunluk = await readFile(join(logDizini, 'brain-plan-1.log'), 'utf8');
     expect(gunluk).toContain('--- usage ---');
     expect(gunluk).toContain('"maliyetUsd":0.012,"turSayisi":2,"hataMi":false');
+  });
+
+  it('claude total_cost_usd dönmezse ya da sayı değilse çağrı sayılır ama toplam maliyet bilinmez (cost unknown)', async () => {
+    await chmod(join(cliDizini, 'claude'), 0o755);
+    for (const cikti of [
+      { result: '{"tamam":true}', num_turns: 1, is_error: false },
+      { result: '{"tamam":true}', total_cost_usd: '0.01', is_error: false },
+    ]) {
+      const env = ortam({ KOBAY_SAHTE_CIKTI: await ciktiDosyasi(JSON.stringify(cikti)) });
+      const beyin = beyinOlustur({ adaptor: 'claude' }, env);
+      const once = beyinKullanimi(env);
+      // Bütçe defteri rezervasyonu harcanmış sayar ve çağrıyı cost_unknown ile durdurur.
+      await expect(beyin.sor({ gorev: 'plan', sistem: 'S', kullanici: 'K', sema }), JSON.stringify(cikti))
+        .rejects.toMatchObject({ sebep: 'cost_unknown' });
+      const fark = beyinKullanimFarki(once, beyinKullanimi(env));
+      expect(fark, JSON.stringify(cikti)).toEqual({ cagri: 1, maliyetUsd: null });
+      expect(beyinSatiri({ calls: fark!.cagri, costUsd: fark!.maliyetUsd })).toBe('Brain: 1 call, cost unknown');
+    }
+
+    // Karşılaştırma: maliyet bildirildiğinde toplam bilinir.
+    const env = ortam({ KOBAY_SAHTE_CIKTI: await ciktiDosyasi('{"result":"{\\"tamam\\":true}","total_cost_usd":0.004}') });
+    const beyin = beyinOlustur({ adaptor: 'claude' }, env);
+    const once = beyinKullanimi(env);
+    await beyin.sor({ gorev: 'plan', sistem: 'S', kullanici: 'K', sema });
+    const fark = beyinKullanimFarki(once, beyinKullanimi(env));
+    expect(fark).toEqual({ cagri: 1, maliyetUsd: 0.004 });
+    expect(beyinSatiri({ calls: fark!.cagri, costUsd: fark!.maliyetUsd })).toBe('Brain: 1 call, $0.0040');
   });
 
   it('ANTHROPIC_API_KEY varsa kullanıcıyı süreçte yalnız bir kez stderr üzerinden uyarır', async () => {
