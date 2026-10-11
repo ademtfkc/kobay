@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-10
+
+### Changed
+
+- Login pages that already embed a frame outside the trusted set are refused
+  before the password is typed; trusted CAPTCHA or widget origins must be
+  listed with `--auth-origin`.
+
+### Fixed
+
+- The plan filter classifies straight-quoted spans from their local verb and
+  suffix context before it scans clauses. Actual clicked controls and displayed
+  errors no longer look like credentials, but a value followed by words such as
+  `text`, `label`, `message` or `button` remains a value after an entry verb.
+  Real values in quoted credential fields, later entry/reference clauses and
+  mixed or unmatched quote forms are rejected.
+- Common named non-secret targets such as username, email, city and search
+  fields remain allowed in both target-value word orders. Quoted English and
+  Turkish credential field labels, values forwarded into a credential field,
+  and new secret names (token, OTP and verification/2FA codes) expand
+  rejection, while display checks no longer become credential entry merely
+  because they mention password, token or PIN updates.
+- Listed Unicode quote-like characters are rejected, format characters outside
+  quotes are removed before matching, and a format character inside a quoted
+  value makes the step unsafe. English and Turkish secret names and entry verbs
+  are matched with stricter word boundaries. Quoted-span and clicked-label
+  checks use bounded 160-character local windows to limit repeated scanning;
+  other whole-step patterns still have no hard input-length bound. Known limit: a verify-only step that puts a type word right after a quoted field label, such as `a 'Password' password field`, can still be dropped as if it typed the real password; rephrase the step or pass it through `--hint`.
+
+### Security
+
+- During the login window, direct cross-origin document loads in the main
+  frame, iframes and popups are blocked before they reach the other server and
+  are reported.
+- Before the password is typed, every frame of every open page (popups
+  included) is checked; a frame from outside the trusted set, including a
+  `blob:` document created by such an origin, refuses the login. A
+  cross-origin document request that started earlier and has not finished yet
+  also refuses the login, and a cross-origin document that still commits during
+  the login window is reported as a leak.
+- Limit: Chromium does not expose the second leg of a 302/307/308 document
+  redirect to the route guard. That leg is only detected, not blocked: the
+  foreign server receives the request, its document can load and run
+  JavaScript, and a fragment on the source URL is carried into it by redirect
+  processing (RFC 9110 §17.11). kobay refuses the login after the fact.
+  `about:blank` and `srcdoc` frames inherit the origin of the document that
+  created them and carry no origin in their URL, so the pre-login frame scan
+  does not see a foreign document that moved itself to `about:blank` or an
+  `about:blank` popup written by foreign JavaScript.
+
 ## [0.3.1] - 2026-10-10
 
 ### Added
@@ -610,7 +660,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ademtfkc/kobay/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ademtfkc/kobay/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ademtfkc/kobay/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/ademtfkc/kobay/compare/v0.2.0...v0.2.1

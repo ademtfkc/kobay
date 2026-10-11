@@ -105,18 +105,21 @@ calls the first time it runs).
 
 ```sh
 kobay test plan generate
-#> 16 proposals generated; 3 dropped: Login page renders correctly (A step needs the real credentials, …), …
+#> 16 proposals generated; 2 dropped: Unknown route returns an error page (URL is not in the map and no path pattern matched: /records/999999 (pattern: /records/:id)), Delete endpoint rejects GET requests (URL is not in the map and no path pattern matched: /records/delete (pattern: /records/delete))
+#> Brain: 1 call, $0.26
 #> { "proposals": [
-#>     { "id": "p_5j4p9f", "priority": "p1", "title": "Record List displays existing records with Delete buttons", "stepCount": 4 },
-#>     { "id": "p_bc7p1e", "priority": "p0", "title": "Create a new record and see it in the list", "stepCount": 9 },
-#>     { "id": "p_e0kklk", "priority": "p1", "title": "Submit New Record form with empty name", "stepCount": 7 },
-#>     … 13 more …
+#>     … 3 more …
+#>     { "id": "p_eu2719", "priority": "p1", "title": "Record list shows existing records with delete buttons", "stepCount": 4 },
+#>     { "id": "p_auwnf0", "priority": "p0", "title": "Create a new record and see it in the list", "stepCount": 9 },
+#>     … 1 more …
+#>     { "id": "p_7ocfuc", "priority": "p1", "title": "Submit new record form with empty name", "stepCount": 6 },
+#>     … 9 more …
 
-kobay test plan accept --ids p_5j4p9f,p_bc7p1e,p_e0kklk
+kobay test plan accept --ids p_eu2719,p_auwnf0,p_7ocfuc
 #> 3 proposals accepted
-#> t_s7k7kkdn  Record List displays existing records with Delete buttons  …
-#> t_jqt9aypj  Create a new record and see it in the list                 …
-#> t_v5hpedx1  Submit New Record form with empty name                     …
+#> t_encpb4jk  Record list shows existing records with delete buttons  …
+#> t_ozcp6xbs  Create a new record and see it in the list              …
+#> t_ak8j9xqh  Submit new record form with empty name                  …
 ```
 
 **4. Add one of your own** (optional). A hand-written plan asks for a flow the
@@ -125,10 +128,10 @@ have:
 
 ```sh
 kobay test create --plan monthly-total.plan.json
-#> Test created: t_6t11idff
+#> Test created: t_clwclqnp
 #> Name: Record list shows a monthly total
 #> Steps: 2, priority: p0, status: draft
-#> Next: kobay test run t_6t11idff
+#> Next: kobay test run t_clwclqnp
 ```
 
 **5. Run.** Tests without code get Playwright code generated first (LLM call);
@@ -136,18 +139,19 @@ a failing test is then analysed (another LLM call).
 
 ```sh
 kobay test run --all
-#> failed t_6t11idff — test_bug
-#>   failure bundle: kobay test failure get t_6t11idff
-#> passed t_jqt9aypj
-#> passed t_s7k7kkdn
-#> failed t_v5hpedx1 — product_bug
-#>   failure bundle: kobay test failure get t_v5hpedx1
+#> failed t_ak8j9xqh — product_bug
+#>   failure bundle: kobay test failure get t_ak8j9xqh
+#> failed t_clwclqnp — unknown
+#>   failure bundle: kobay test failure get t_clwclqnp
+#> passed t_encpb4jk
+#> passed t_ozcp6xbs
+#> Brain: 6 calls, $0.80
 ```
 
 Exit code `1`: a test failed. The two failures are two different stories, and
 the `failureKind` tells them apart:
 
-- **`t_v5hpedx1` — `product_bug`.** The bundled demo has a known bug: it
+- **`t_ak8j9xqh` — `product_bug`.** The bundled demo has a known bug: it
   accepts a record with an empty name. The analysis found the fourth, nameless
   row in the list and pointed at the form's POST handler:
 
@@ -155,33 +159,34 @@ the `failureKind` tells them apart:
   "failureKind": "product_bug",
   "recommendedFixTarget": {
     "kind": "code",
-    "reference": "POST handler for the New Record form at http://127.0.0.1:3999/new (the 'Save' submission that creates a record and redirects to /records) — the 'Name' field is not validated as required",
-    "rationale": "The record was persisted with an empty name instead of being rejected. …"
+    "reference": "POST handler for the form on http://127.0.0.1:3999/new (redirects to /records after save); the Name input should be required and the server should reject an empty name",
+    "rationale": "Search the product code for the redirect to the Received URL '/records' in the new-record form handler and add validation for an empty 'name' field …"
   }
   ```
 
-- **`t_6t11idff` — `test_bug`.** The monthly total was never part of the app.
-  The analysis compared the page with the exploration map, saw that nothing had
-  changed, and concluded that the expectation came from the plan, not from the
-  product. Instead of sending an agent off to "fix" the record list, it
-  recommended dropping that assertion — or, if a monthly total is a real
-  requirement, raising it as a missing feature.
+- **`t_clwclqnp` — `unknown`.** The monthly total was never part of the app.
+  The analysis compared the page with the exploration map and saw that nothing
+  had changed, but the map does not track table rows, so it could not tell a
+  feature the product never had from a row that disappeared. Instead of sending
+  an agent off to "fix" the record list, it said so and recommended checking
+  the spec: if a monthly total is a real requirement, treat it as a product
+  bug; if not, remove or rewrite the plan step.
 
 **6. Read the evidence and see the report.**
 
 ```sh
-kobay test failure get t_v5hpedx1
-#> Failure bundle copied: ~/kobay-demo/.kobay/failure-out/t_v5hpedx1
+kobay test failure get t_ak8j9xqh
+#> Failure bundle copied: ~/kobay-demo/.kobay/failure-out/t_ak8j9xqh
 
 kobay test report --all
-#> Report written: 4 tests (2 passed, 2 failed, 0 blocked, 0 inconclusive, 0 not run), 20 screenshots.
+#> Report written: 4 tests (2 passed, 2 failed, 0 blocked, 0 inconclusive, 0 not run), 19 screenshots.
 #> Open: ~/kobay-demo/.kobay/report/index.html
 #> Screenshots are not redacted; review them before sharing the report.
 ```
 
 After a fix, `kobay test rerun <id>` runs the same code again. This whole round
 — one plan, four code generations, two analyses — was 7 brain calls and cost
-about $1.10 with the `claude` CLI. Stop the demo with Ctrl+C when you are done.
+about $1.06 with the `claude` CLI. Stop the demo with Ctrl+C when you are done.
 
 A longer walkthrough of each step, with the flags, is in
 [Quick start in detail](#quick-start-in-detail).
@@ -384,14 +389,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.3.1
+      - uses: ademtfkc/kobay@v0.4.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.3.1` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.4.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -478,8 +483,8 @@ GitHub. Set `upload-report: false` if that matters.
 `kobay test failure get <id>` to `.kobay/failure-out/<id>/`:
 
 ```sh
-ls .kobay/failure-out/t_v5hpedx1
-#> code.ts  console.json  failure.json  meta.json  network.json  step-4.html  step-4.png  steps.json  trace.zip
+ls .kobay/failure-out/t_ak8j9xqh
+#> code.ts  console.json  failure.json  meta.json  network.json  step-3.html  step-3.png  steps.json  trace.zip
 ```
 
 `failure.json` carries the analysis (`failureKind`, `rootCauseHypothesis`,
@@ -542,7 +547,7 @@ What has and has not been exercised, so you can decide before installing:
 | | |
 | --- | --- |
 | **Who it's for** | Developers running Claude Code (or Codex / Cursor) who want the agent to verify a local web app instead of claiming it works. |
-| **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. The loop in the [quick start](#quick-start) was also run from a packed build against the bundled demo app with the real brain: 16 proposals (3 dropped), 4 tests, 2 passed, 2 failed, one classified `product_bug` and one `test_bug` as described there; 7 brain calls, about $1.10. |
+| **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. The loop in the [quick start](#quick-start) was also run from a packed build against the bundled demo app with the real brain: 16 proposals (2 dropped), 4 tests, 2 passed, 2 failed, one classified `product_bug` and one `unknown` as described there; 7 brain calls, about $1.06. |
 | **Tried once with the real CLI** | The `codex` brain. On 28 September 2026 one round against the bundled demo app with a real `codex exec` (Codex CLI 0.154.0, ChatGPT plan) produced a plan, generated test code and analysed a failure; every brain call matched the schema on the first try. One round, not long use. |
 | **Untested in practice** | The `openrouter` brain. The adapter has unit tests but has never been run against the real API. Treat it as unverified. |
 | **Platform** | Developed on macOS. In the public repository, CI runs the full strict suite on ubuntu-latest, macos-latest and windows-latest with Node 22 and 24, a packaging smoke test on all three, and a smoke test of the GitHub Action on Ubuntu. Windows has not been verified on a physical machine; see [Install and requirements](#install-and-requirements). |
@@ -658,7 +663,10 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   rejected, cross-site writes (POST, PUT and the like) are blocked, and
   cross-site WebSockets are closed before they connect; messages sent on a
   cross-site WebSocket that was already open are dropped silently during this
-  window (up to about 7 s). *After login*, until
+  window (up to about 7 s). Cross-site main-frame, iframe and popup documents
+  are also blocked during this window, and a login page that already embeds
+  one (in any frame or open popup, or still loading) is refused before the
+  password is typed unless its exact origin is listed with `--auth-origin`. *After login*, until
   the `explore` or `test refresh` browser closes, only cross-site requests and
   WebSocket messages that visibly carry the password are blocked, and
   exploration is rejected; the app's own cross-site API calls and WebSockets go
@@ -675,9 +683,13 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   `amazonaws.com` or `cloudfront.net` needs the exact origin. If your hosting
   platform is missing from the list, report it so it can be added. When
   credentials are configured, service workers are disabled. Limits: on a
-  307/308 redirect kobay detects and rejects the login, it cannot block the
-  redirected request itself, so the password may already have reached the
-  other server; a WebSocket opened from a Web Worker is not intercepted; a
+  302/307/308 cross-site redirect kobay detects and rejects the login, it
+  cannot block the redirected request itself, so the password may already have reached the
+  other server, whose page can run JavaScript and receives the source URL's
+  `#fragment`; `about:blank` and `srcdoc` frames inherit the origin of the
+  document that created them and carry no origin in their URL, so the
+  pre-login frame scan does not see a foreign document hidden behind one; a
+  WebSocket opened from a Web Worker is not intercepted; a
   password encoded in a way kobay does not recognise can still leave in a
   cross-site GET, and after login in any cross-site request. When login is
   refused for any of these reasons, `explore` and `test refresh` exit `5`.
@@ -876,27 +888,30 @@ are fine. Each proposal also states `requiresRealCredentials`; `true` drops it,
 and the step filter still drops real-credential steps when the flag says
 `false`. Generated code may not silently `test.skip`, and a step that would need
 the real credentials throws instead of being rewritten. The text output is the
-summary line plus the same JSON body `--output json` returns. In the demo run,
-two login proposals were dropped for needing the real credentials and one for a
-URL outside the map:
+summary line plus the same JSON body `--output json` returns. In the demo run
+(with `--hint` asking for the login-page check "Verify that a 'Username' text
+field, a 'Password' password field and a 'Log in' button are visible"), that
+check was kept and the only proposal dropped pointed at a URL outside the map:
 
 ```json
 "dropped": [
-  { "title": "Login page renders correctly", "reason": "A step needs the real credentials, but the session is already authenticated via kobay's login step and generated tests cannot type credentials (step 3: \"Verify that a 'Password' field of type password is visible\")" },
-  { "title": "Login with invalid credentials shows an error", "reason": "A step needs the real credentials, … (step 2: \"Type 'wrongpassword' into the 'Password' field\")" },
-  { "title": "Unknown URL returns an error page", "reason": "URL is not in the map and no path pattern matched: /records/does-not-exist (pattern: /records/does-not-exist)" }
+  {
+    "title": "Unknown page returns a not-found response",
+    "reason": "URL is not in the map and no path pattern matched: /does-not-exist (pattern: /does-not-exist)"
+  }
 ]
 ```
 
 Accept a few — not everything, since each test costs LLM calls the first time
-it runs. `kobay test list` shows each test's status and priority:
+it runs. `kobay test list` shows each test's status and priority (`draft` until
+it has run; here after the quick-start run):
 
 ```sh
 kobay test list
-#> t_6t11idff	draft	p0	Record list shows a monthly total
-#> t_jqt9aypj	draft	p0	Create a new record and see it in the list
-#> t_s7k7kkdn	draft	p1	Record List displays existing records with Delete buttons
-#> t_v5hpedx1	draft	p1	Submit New Record form with empty name
+#> t_ak8j9xqh	failed	p1	Submit new record form with empty name
+#> t_clwclqnp	failed	p0	Record list shows a monthly total
+#> t_encpb4jk	passed	p1	Record list shows existing records with delete buttons
+#> t_ozcp6xbs	passed	p0	Create a new record and see it in the list
 ```
 
 **Your own test.** `test create --plan` takes a hand-written plan file (the
@@ -925,17 +940,17 @@ generated code. The part an agent acts on is `failure`; for the empty-name test:
 ```json
 "failure": {
   "failureKind": "product_bug",
-  "rootCauseHypothesis": "Submitting the New Record form with an empty Name was accepted by the application: the browser was redirected from /new to the Record List page, and the list now contains a fourth row with an empty Name cell and Amount 10. No validation message was shown and the user did not stay on /new, … the server-side form handler simply does not reject an empty name.",
+  "rootCauseHypothesis": "Submitting the new record form with an empty Name was accepted by the server: the browser was redirected to /records and the record list now contains a fourth row with an empty name and amount 10. Neither browser validation (no required attribute) nor server-side validation rejected the empty name, so the test's expectation to remain on /new failed. The page identity mismatch is just a consequence of this redirect, not a dropped session.",
   "recommendedFixTarget": {
     "kind": "code",
-    "reference": "POST handler for the New Record form at http://127.0.0.1:3999/new (the 'Save' submission that creates a record and redirects to /records) — the 'Name' field is not validated as required",
-    "rationale": "The record was persisted with an empty name instead of being rejected. Search the product code for the route that handles the /new form submission … and add a required/non-empty check for the Name field …"
+    "reference": "POST handler for the form on http://127.0.0.1:3999/new (redirects to /records after save); the Name input should be required and the server should reject an empty name",
+    "rationale": "Search the product code for the redirect to the Received URL '/records' in the new-record form handler and add validation for an empty 'name' field (and/or a required attribute on the Name input), re-rendering the form with an error instead of saving."
   },
   "evidence": [
-    { "kind": "snapshot",   "stepIndex": 4, "summary": "The current DOM is the Record List page …; The record table contains a new fourth row with an empty Name cell and Amount 10, proving the empty-name submission was saved. …", "path": "step-4.html" },
-    { "kind": "console",    "stepIndex": 4, "summary": "No console errors were recorded.", "path": "console.json" },
-    { "kind": "network",    "stepIndex": 4, "summary": "No network errors or 5xx responses were recorded, so the environment is healthy.", "path": "network.json" },
-    { "kind": "screenshot", "stepIndex": 4, "summary": "screenshot of the failing step", "path": "step-4.png" }
+    { "kind": "snapshot",   "stepIndex": 3, "summary": "Current DOM is the Record List page with four rows; the last row has an empty Name cell and Amount 10, i.e. the empty-name record was saved.; …", "path": "step-3.html" },
+    { "kind": "console",    "stepIndex": 3, "summary": "No console errors recorded.", "path": "console.json" },
+    { "kind": "network",    "stepIndex": 3, "summary": "No network errors or 5xx responses recorded; the submit succeeded.", "path": "network.json" },
+    { "kind": "screenshot", "stepIndex": 3, "summary": "screenshot of the failing step", "path": "step-3.png" }
   ]
 }
 ```

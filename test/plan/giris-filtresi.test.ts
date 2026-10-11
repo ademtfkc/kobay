@@ -132,6 +132,149 @@ describe('geçerli kimlikle giriş filtresi', () => {
     ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
   });
 
+  it('not sahte kökü dolgu sözcükleriyle birleşebilir; en az bir sahte kök şartı korunur', () => {
+    for (const adim of [
+      'Type "not-the-password" into the password field', 'Type "not-a-password" into the password field',
+      'Type "notmypassword" into the password field', 'Type "not_the_real_password" into the password field',
+      'Type "not-valid-password" into the password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Type "the-real-password" into the password field', 'Type "not-hunter2" into the password field',
+      'Type "notebook" into the password field', 'Type "nothing" into the password field',
+      'Type "not-the-password-hunter2" into the password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('gizli ad öbeğinden sonraki giriş fiilli tırnaklı gerçek değer düşer', () => {
+    for (const adim of [
+      'Type "wrongpassword" into the password field, then replace it with "hunter2"',
+      'Enter a wrong password, then replace it with "hunter2"',
+      'Type "wrongpassword" into the password field and then type "hunter2"',
+      'Type "wrongpassword" into the password field. Then enter "hunter2"',
+      // Akıllı/eşsiz/boş tırnak ve ters bölü: değer güvenle sahte sayılamaz.
+      'Type "wrongpassword" into the password field, then type “hunter2”',
+      'Type "wrongpassword" into the password field, then type "hunter2',
+      'Type "wrongpassword" into the password field, then type ""',
+      'Type "wrongpassword" into the password field, then type "hunter\\2"',
+      'Type "wrongpassword" into the password field, then "hunter2"',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    for (const adim of [
+      'Type "wrongpassword" into the password field and click "Login"',
+      'Type "wrongpassword" into the password field, then type "admin" into the username field',
+      'Type "wrongpassword" into the password field, then replace it with "wrongpassword2"',
+      'Enter "admin" in the username field and "wrongpass" in the password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+  });
+
+  it('tırnak içindeki arayüz metnini fiil veya hedef sanmaz; kimlik-dışı alanları serbest bırakır', () => {
+    for (const adim of [
+      'Type "wrongpassword" into the password field, and click "Submit"',
+      'Type "wrongpassword" into the password field, then press "Enter"',
+      'Type "wrongpassword" into the password field, then click "Use another account"',
+      'Type "wrongpassword" into the password field, then click "Update" and check the error',
+      'Type "wrongpassword" into the password field, then type "London" into the city field',
+      'Type "wrongpassword" into the password field, then type "Acme" into the company field',
+      'Type "wrongpassword" into the password field, then type "admin" into the username field',
+      'Type "wrongpassword" into the password field and "admin" in the username field',
+      'Type "wrongpassword" into the password field, then click "Submit" to submit the form',
+      'Search for "laptop". Enter a wrong password',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Type "wrongpassword" into the password field, then type "hunter2" into the user field',
+      'Type "wrongpassword" into the password field, then type "hunter2" into the login field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('gönderme, giriş fiili, bilinmeyen fiil ve pasifte tırnaklı gerçek değeri düşürür', () => {
+    for (const adim of [
+      'Type "wrongpassword" into the password field, then retry with "hunter2" for the same user',
+      'Type "wrongpassword" into the password field, then enter "hunter2" to confirm the email change',
+      'Type "wrongpassword" into the password field, then replace it with "hunter2" in the name field',
+      'Type "wrongpassword" into the password field, then replace it with "search-2024"',
+      'Type "wrongpassword" into the password field, then write "hunter2" into it',
+      'Type "wrongpassword" into the password field, then it is replaced with "hunter2"',
+      'Type "wrongpassword" into the password field, then using "hunter2" in it',
+      'Type "wrongpassword" into the password field. Then pasting "hunter2" into it',
+      'Type "wrongpassword" into the password field. Then updated it to "hunter2"',
+      'Type "wrongpassword" into the password field. "hunter2" is used instead',
+      'Type "wrongpassword" into the password field, then fix it to "hunter2"',
+      'Type "wrongpassword" into the password field, then switch to "hunter2"',
+      'Type "wrongpassword" into the password field, then type, without delay, "hunter2" into it',
+      'Type "wrongpassword" into the password field. Then type; "hunter2" into it',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('gizli addan önceki öbekleri ve iki yönlü ana tetikleyiciyi tarar', () => {
+    for (const adim of [
+      'Type "hunter2" into it, then submit it as a wrong password',
+      'Type "hunter2", then enter a wrong password',
+      'Enter "hunter2" and then enter "wrongpass" in the password field',
+      'Put "hunter2" in the password field',
+      'Write "hunter2" in the password field',
+      'The password field is populated with "hunter2"',
+      'Click the password field, type "wrongpassword", then replace it with "hunter2"',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('yeni kimlik adlarını ve Türkçe/karma giriş fiillerini gerçek kimlik olarak tanır', () => {
+    for (const adim of [
+      'Type "hunter2" into the token field',
+      'Enter "hunter2" as the authentication token',
+      'Enter "hunter2" into the OTP field',
+      'Enter "hunter2" as the one-time code',
+      'Enter "hunter2" into the verification code field',
+      'Enter "hunter2" into the security code field',
+      'Enter "hunter2" into the recovery code field',
+      'Enter "hunter2" into the backup code field',
+      'Enter "hunter2" into the 2FA code field',
+      'Enter "hunter2" into the MFA code field',
+      'Enter "hunter2" into the two-factor code field',
+      'Enter "hunter2" into the authenticator code field',
+      'Erişim tokenını "hunter2" olarak gir',
+      'Şifreyi "hunter2" ile değiştir',
+      'Şifre alanına "hunter2" yerleştir',
+      'Type "wrongpassword" into the password field, sonra içine "hunter2" yaz',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    for (const adim of [
+      'Verify the token page is visible', 'Check the token expired message',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+  });
+
+  it('genişletilen İngilizce giriş/değiştirme fiillerinin çekimlerini tanır', () => {
+    for (const fiil of [
+      'Put', 'Writes', 'Wrote', 'Written', 'Populated', 'Supplies', 'Inserted', 'Sets', 'Uses', 'Replaced',
+      'Changed', 'Updated', 'Overwrote', 'Overwritten', 'Corrected', 'Re-entered', 'Re-typed', 'Retries',
+      'Fixed', 'Switched', 'Swapped', 'Modified', 'Edited', 'Keyed in', 'Gave', 'Given',
+    ]) {
+      const adim = `${fiil} "hunter2" in the password field`;
+      expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    }
+  });
+
+  it('not yalnız dar gramerle sahtedir', () => {
+    for (const adim of [
+      'Type "not-the-password" into the password field', 'Type "not-a-password" into the password field',
+      'Type "notmypassword" into the password field', 'Type "not_the_real_password" into the password field',
+      'Type "not-valid-password" into the password field', 'Type "not-the-password-1" into the password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Type "not123" into the password field', 'Type "not" into the password field',
+      'Type "nota1" into the password field', 'Type "Not4Pass" into the password field',
+      'Type "not-hunter2" into the password field', 'Type "notebook" into the password field',
+      'Type "nothing" into the password field', 'Type "the-real-password" into the password field',
+      'Type "not-the-password-hunter2" into the password field',
+      'Type "wrong-valid-password-123" into the password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('tam genişlik ve ters akıllı tırnakları güvenli tarafta düşürür', () => {
+    for (const adim of [
+      'Type "wrongpassword" into the password field, then type ＂hunter2＂ into it',
+      'Type ＇hunter2＇ into the password field',
+      'Type ‛hunter2‛ into the password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
   it('pencerede birden çok tırnaklı değer varsa hepsi sahte olmalı; akıllı ya da eşsiz tırnak değer sayılmaz', () => {
     for (const adim of [
       "Type 'wrongpassword' into the password field",
@@ -221,6 +364,203 @@ describe('geçerli kimlikle giriş filtresi', () => {
     for (const adim of [
       'Enter the password without changing the username', 'Type the password without pressing enter',
     ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('tırnaklı değerleri öbek, gizli ad, fiil ve hedef taramasından önce maskeler', () => {
+    for (const adim of [
+      'Click "Save and continue"', 'Click "Yes, continue"', 'Click "Password help"',
+      'Click "Use another account"',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+  });
+
+  it('T2 gizli adla aynı öbekteki tırnaklı değeri fiilsiz de yakalar', () => {
+    for (const adim of [
+      'Password: "hunter2"', 'password = "hunter2"', 'with password "hunter2"',
+      'Select "hunter2" in the password list', 'Keyed in "hunter2" into the password field',
+      'Punch in "hunter2" into the password field', 'Feed "hunter2" into the password field',
+      'Load "hunter2" into the password field', 'Type "hunter2" şifre alanına',
+      'The password is "hunter2". Type it into the field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    for (const adim of [
+      'Verify the password field shows "Error"', 'Verify the error "Invalid password" appears',
+      'Verify the password field is visible and click "Login"',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+  });
+
+  it('geniş değiştirme fiilleri T1 değildir; yaygın meşru adımlar kalır', () => {
+    for (const adim of [
+      'Check that the password field uses masking', 'Click "Change password" in the settings menu',
+      'Click "Update password" and verify the form opens',
+      'Change the display name and verify the password section is unchanged',
+      'Verify the API token is updated in the header',
+      'Open the security settings and set the language to English, then check the PIN section',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+  });
+
+  it('yalnız pozitif listedeki adlandırılmış gizli-olmayan hedefleri serbest bırakır', () => {
+    for (const hedef of [
+      'into the username field', 'into the user name input', 'to your user id box',
+      'into an email field', 'into the e-mail address textbox', 'into the first name field',
+      'into the last name field', 'into the full name field', 'into the display name field',
+      'into the nickname field', 'into the company field', 'into the organization field',
+      'into the city field', 'into the country field', 'into the state field', 'into the address field',
+      'into the street field', 'into the zip code field', 'into the postal code field',
+      'into the phone number field', 'into the search box', 'into the url field',
+      'into the website field', 'into the comment area', 'into the message textarea',
+      'into the subject field', 'into the title field', 'into the description field',
+      'into the note field', 'into the quantity input', 'into the amount field',
+      'into the date picker', 'into the age field',
+    ]) {
+      const adim = `Type "hunter2" ${hedef}`;
+      expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    }
+    for (const hedef of [
+      'into the input', 'into the text box', 'into the next field', 'into the second field',
+      'into the new field', 'into the first field', 'into the confirmation field',
+      'into the confirm field', 'into the repeat field', 'into the login field', 'into the user field',
+      'as the correct one', 'as well', 'as the new value', 'into the box below',
+    ]) {
+      const adim = `Type "hunter2" ${hedef}`;
+      expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+      const baglamli = `Type "wrongpassword" into the password field, then ${adim}`;
+      expect(adimGercekKimlikIsterMi(baglamli), baglamli).toBe(true);
+    }
+    for (const hedef of ['into the passwd field', 'into the pwd input', 'into the pass box']) {
+      const adim = `Type "hunter2" ${hedef}`;
+      expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    }
+  });
+
+  it('göndermeyi yalnız hedef konumunda tanır', () => {
+    for (const adim of [
+      'Type "wrongpassword" into the password field, then verify that "Error" appears',
+      'Type "wrongpassword" into the password field, then click "Retry" again',
+      'Type "wrongpassword" into the password field, then click "Login" again',
+      'Type "wrongpassword" into the password field, then type "London" into the city field to check it',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Type "wrongpassword" into the password field, then type "hunter2" into it',
+      'Type "wrongpassword" into the password field, then replace it with "hunter2"',
+      'Type "wrongpassword" into the password field, then put "hunter2" in the same field',
+      'Type "wrongpassword" into the password field, then put "hunter2" in the field',
+      'Type "wrongpassword" into the password field, then put "hunter2" in there',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('kimliksiz tırnaklı öbek tek başına tetik değildir; T1 bağlamında R1 taranır', () => {
+    expect(adimGercekKimlikIsterMi('click "Submit"')).toBe(false);
+    expect(adimGercekKimlikIsterMi('"hunter2" should be accepted')).toBe(false);
+    expect(adimGercekKimlikIsterMi('"hunter2" is submitted')).toBe(false);
+    expect(adimGercekKimlikIsterMi('Enter a wrong password, then "hunter2" should be accepted')).toBe(true);
+    expect(adimGercekKimlikIsterMi('Enter a wrong password, then "hunter2" is submitted')).toBe(true);
+  });
+
+  it('Türkçe fiil sınırlarını ve Türkçe gizli ad öbeklerini korur', () => {
+    for (const adim of [
+      'Type "wrongpassword" into the password field, then "hunter2" from the database',
+      'Type "wrongpassword" into the password field, then "hunter2" in parallel',
+      'Type "wrongpassword" into the password field, then şifre alanına "hunter2" yaz',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    expect(adimGercekKimlikIsterMi('The tokenized field shows "hunter2"')).toBe(false);
+  });
+
+  it('listelenen tırnak benzerlerini ve tırnak içindeki biçim karakterlerini zehirli sayar', () => {
+    for (const tirnak of [...'′″‴‵‶‷´‟「」『』〝〞〟ʹʺʻʼʽˈ˝']) {
+      const adim = `Type ${tirnak}hunter2${tirnak} into the password field`;
+      expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    }
+    for (const adim of [
+      'Type "hunter\u200B2" into the password field',
+      'Ty\u200Bpe "hunter2" into the pass\u200Bword field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('R1 yalnız T1/T2 sonrasında kimliksiz öbekleri tarar', () => {
+    for (const adim of [
+      'Type "Buy milk" into the new todo input', 'Set the quantity to "3"',
+      'Type "Blue" into the color field', 'Type "Hello world" into the chat box',
+      'Use "Express" shipping', 'Change the language to "Türkçe"',
+      'Type "2024-01-01" into the start date field', 'Fill the amount field with "120"',
+      'Type "Monthly total" into the report name field', 'Şehir alanına "İstanbul" yazın',
+      'Ad alanına "Ali" yaz', 'Kullanıcı adı alanına "admin" yaz',
+      'Type "hunter2" into the input',
+      '"hunter2" should be accepted', 'Verify the height shows 5′10″',
+      'Click the user´s profile',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Type "password" into the field',
+      'Type "wrongpassword" into the password field, then type "hunter2" into the input',
+      'Enter a wrong password, then "hunter2" should be accepted',
+      'Enter a wrong password, then "hunter2" is submitted',
+      'Type "wrongpassword" into the password field, then type ′hunter2′ into it',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('doğrulama istisnası yalnız giriş fiilsiz doğrulama öbeğini atlar', () => {
+    for (const adim of [
+      'Type "wrongpass" into the password field and "hunter2" into the confirm password field',
+      "Type 'wrongpassword' into the password field, then type 'Hunter2!' into the confirm password box",
+      'Type "hunter2" into the visible password field and a wrong PIN',
+      'Type the displayed code "hunter2" into the password field and type "wrongpin" into the PIN field',
+      'Type "hunter2" into the confirm password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    for (const adim of [
+      'Verify the password field shows "Error"', 'Verify the error "Invalid password" appears',
+      'Verify the password field is visible and click "Login"',
+      'Enter a wrong password and verify the password field shows "Error"',
+      'Enter a wrong password, then check that the "Invalid credentials" message is visible',
+      'Fill in the form and check that the CSRF token is present',
+      'Submit the form and verify the session token cookie is set',
+      'Enter a search term, then verify the token count is shown',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+  });
+
+  it('genel token adını CSRF/session ve UI/ömür bağlamlarında dışlar', () => {
+    for (const ad of [
+      'CSRF token', 'XSRF token', 'anti-forgery token', 'antiforgery token', 'session token',
+      'token count', 'token cookie', 'token header', 'token page', 'token link',
+      'token expired', 'token expiration', 'token refresh', 'token refreshed',
+    ]) {
+      const adim = `Enter a search term, then inspect the ${ad}`;
+      expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+      const tirnakliAdim = `Type "hunter2" into the ${ad} field`;
+      expect(adimGercekKimlikIsterMi(tirnakliAdim), tirnakliAdim).toBe(false);
+    }
+    for (const adim of [
+      'Type "hunter2" into the token field', 'Enter "hunter2" as the authentication token',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('tetiklenmiş adımda C0/C1 kontrol karakterlerini zehirli sayar', () => {
+    expect(adimGercekKimlikIsterMi(
+      'Type "wrongpassword" into the confirm field, then type \u00000\u0000hunter2 into the password field',
+    )).toBe(true);
+    for (const kod of [0x01, 0x1f, 0x7f, 0x85]) {
+      const adim = `Enter a wrong password, then type ${String.fromCharCode(kod)}hunter2 into the field`;
+      expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+    }
+    for (const kontrol of ['\t', '\n', '\r']) {
+      const adim = `Type "wrongpassword"${kontrol}into the password field`;
+      expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    }
+  });
+
+  it('geniş Türkçe fiilleri T1 dışında, R1 içinde tutar', () => {
+    for (const adim of [
+      'Şifreyi değiştir sayfasını aç', 'Şifre Değiştir butonuna tıkla',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
+    for (const adim of [
+      'Şifreyi "hunter2" ile değiştir', 'Şifre alanına "hunter2" yerleştir',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(true);
+  });
+
+  it('bilinçli sınırları sabitler', () => {
+    expect(adimGercekKimlikIsterMi('Replace it with hunter2')).toBe(false);
+    expect(adimGercekKimlikIsterMi('Check the password "hunter2" works')).toBe(false);
+    for (const adim of [
+      'Type "Wrong_Pass_2024" into the password field',
+      'Type "badkey1" into the password field',
+    ]) expect(adimGercekKimlikIsterMi(adim), adim).toBe(false);
   });
 
   it('ortak kural: başlığa bakmaz, giriş yapılandırılmamışsa kapalıdır', () => {

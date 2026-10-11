@@ -1,7 +1,12 @@
 import { createServer, type Server } from 'node:http';
 import { chromium, type Browser } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
-import { girisFormuBul, girisiGonder, LoginDidNotReturnError } from '../../src/kesif/index.js';
+import {
+  CredentialLeakBlockedError,
+  girisFormuBul,
+  girisiGonder,
+  LoginDidNotReturnError,
+} from '../../src/kesif/index.js';
 
 /**
  * Karar 6 (giriş sonunda `baseUrl` origin'ine dönüş), gerçek Chromium ile ve kısa dönüş
@@ -36,8 +41,11 @@ async function dinle(isle: (yol: string, yontem: string) => { kod: number; basli
     });
   });
   sunucular.push(sunucu);
-  return new Promise((coz) => {
+  return new Promise((coz, reddet) => {
+    const hata = (neden: Error): void => { reddet(neden); };
+    sunucu.once('error', hata);
     sunucu.listen(0, '127.0.0.1', () => {
+      sunucu.off('error', hata);
       const adres = sunucu.address();
       coz(typeof adres === 'object' && adres !== null ? adres.port : 0);
     });
@@ -49,32 +57,38 @@ beforeAll(async () => {
     tarayici = await chromium.launch({ headless: true });
   } catch (hata) {
     tarayiciEngeli = hata;
+    return;
   }
-  ucuncuOrigin = `http://kotu.localhost:${await dinle(() => ({ kod: 200, govde: html('<h1>Elsewhere</h1>') }))}`;
-  appOrigin = `http://127.0.0.1:${await dinle((yol, yontem) => {
-    // Liste boş: giriş uygulamada, ama başarı sonrası üçüncü origin'e yönlendirir.
-    if (yol === '/giris' && yontem === 'POST') return { kod: 302, basliklar: { location: `${ucuncuOrigin}/hos-geldin` } };
-    // SSO dönüşü uygulamaya iner, ardından gecikmeli JavaScript yönlendirmesiyle üçüncü origin'e kaçar.
-    if (yol === '/donus-kacak') {
-      return { kod: 200, govde: html(`<h1>Back</h1><script>setTimeout(()=>{location.href=${JSON.stringify(`${ucuncuOrigin}/kacak`)};},300);</script>`) };
-    }
-    if (yol === '/login') return { kod: 200, govde: html(FORM) };
-    return { kod: 200, govde: html('<h1>App</h1>') };
-  })}`;
-  authOrigin = `http://localhost:${await dinle((yol, yontem) => {
-    if (yol === '/ucuncu/giris' && yontem === 'POST') return { kod: 302, basliklar: { location: `${ucuncuOrigin}/sso-son` } };
-    // Bir süre auth sitesinde "yönlendiriliyor" sayfası, sonra uygulamaya dönüş.
-    if (yol === '/gecikmeli/giris' && yontem === 'POST') {
-      return { kod: 200, govde: html(`<p>Redirecting</p><script>setTimeout(()=>{location.href=${JSON.stringify(`${appOrigin}/donus-kacak`)};},1500);</script>`) };
-    }
-    if (yol.endsWith('/login')) return { kod: 200, govde: html(FORM.replace('action="/giris"', `action="${yol.replace('/login', '/giris')}"`)) };
-    return { kod: 404 };
-  })}`;
+  try {
+    ucuncuOrigin = `http://kotu.localhost:${await dinle(() => ({ kod: 200, govde: html('<h1>Elsewhere</h1>') }))}`;
+    appOrigin = `http://127.0.0.1:${await dinle((yol, yontem) => {
+      // Liste boş: giriş uygulamada, ama başarı sonrası üçüncü origin'e yönlendirir.
+      if (yol === '/giris' && yontem === 'POST') return { kod: 302, basliklar: { location: `${ucuncuOrigin}/hos-geldin` } };
+      // SSO dönüşü uygulamaya iner, ardından gecikmeli JavaScript yönlendirmesiyle üçüncü origin'e kaçar.
+      if (yol === '/donus-kacak') {
+        return { kod: 200, govde: html(`<h1>Back</h1><script>setTimeout(()=>{location.href=${JSON.stringify(`${ucuncuOrigin}/kacak`)};},300);</script>`) };
+      }
+      if (yol === '/login') return { kod: 200, govde: html(FORM) };
+      return { kod: 200, govde: html('<h1>App</h1>') };
+    })}`;
+    authOrigin = `http://localhost:${await dinle((yol, yontem) => {
+      if (yol === '/ucuncu/giris' && yontem === 'POST') return { kod: 302, basliklar: { location: `${ucuncuOrigin}/sso-son` } };
+      // Bir süre auth sitesinde "yönlendiriliyor" sayfası, sonra uygulamaya dönüş.
+      if (yol === '/gecikmeli/giris' && yontem === 'POST') {
+        return { kod: 200, govde: html(`<p>Redirecting</p><script>setTimeout(()=>{location.href=${JSON.stringify(`${appOrigin}/donus-kacak`)};},1500);</script>`) };
+      }
+      if (yol.endsWith('/login')) return { kod: 200, govde: html(FORM.replace('action="/giris"', `action="${yol.replace('/login', '/giris')}"`)) };
+      return { kod: 404 };
+    })}`;
+  } catch (hata) {
+    tarayiciEngeli = hata;
+  }
 });
 
 afterAll(async () => {
   await tarayici?.close();
-  await Promise.all(sunucular.map((sunucu) => new Promise((coz) => { sunucu.close(coz); })));
+  await Promise.all(sunucular.filter((sunucu) => sunucu.listening)
+    .map((sunucu) => new Promise((coz) => { sunucu.close(coz); })));
 });
 
 function tarayiciMumkun(context: TestContext): boolean {
@@ -117,11 +131,12 @@ describe('giriş sonunda uygulamanın origin\'ine dönüş şartı (karar 6)', (
     expect(String(sonuc)).toContain(`ended on ${ucuncuOrigin}`);
   });
 
-  it('uygulamaya döndükten sonra gecikmeli yönlendirmeyle ayrılan giriş de reddedilir', async (context) => {
+  it('uygulamaya döndükten sonra gecikmeli yabancı navigasyon kesilir ve origin adıyla reddedilir', async (context) => {
     if (!tarayiciMumkun(context)) return;
     // Dönüş süresi auth sitesindeki 1,5 sn beklemeden uzun: dönüş gerçekleşir, sonra kaçış olur.
     const sonuc = await girisDene(`${authOrigin}/gecikmeli/login`, [authOrigin], 5_000);
-    expect(sonuc).toBeInstanceOf(LoginDidNotReturnError);
-    expect(String(sonuc)).toContain(`ended on ${ucuncuOrigin}`);
+    expect(sonuc).toBeInstanceOf(CredentialLeakBlockedError);
+    expect(String(sonuc)).toContain(`blocked 1 cross-origin document load during login: ${ucuncuOrigin}`);
+    expect(String(sonuc)).not.toContain('ended on null');
   });
 });

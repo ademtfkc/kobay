@@ -3,7 +3,15 @@ import { dirname } from 'node:path';
 import type { BrowserContext, Page } from '@playwright/test';
 import { authOriginNormallestir, type Kimlik } from '../depo/index.js';
 import type { GirisFormu } from './giris.js';
-import { girisKorumasiKur, izinliKumedeMi, izinliMetni } from './giris-korumasi.js';
+import {
+  authOriginIpucu,
+  CredentialLeakBlockedError,
+  girisKorumasiKur,
+  izinliKumedeMi,
+  izinliMetni,
+  yabanciBelgeHatasi,
+  yabanciCerceveler,
+} from './giris-korumasi.js';
 
 /**
  * Ayrı giriş sitesi (SSO) için kullanıcıya gösterilen yol; "desteklenmiyor" cümlesinin yerini aldı.
@@ -170,6 +178,15 @@ export async function girisiGonder(
   const koruma = await girisKorumasiKur(sayfa.context(), kimlik, izinli);
   // Giriş penceresi: parola sayfadayken siteler-arası yazma ve yeni WebSocket de kesilir;
   // `denetle` pencereyi kapatır, sonrasında yalnız parolayı taşıyan istek kesilir.
+  const yabanciCerceveOriginleri = yabanciCerceveler(
+    sayfa.context().pages().flatMap((baglamSayfasi) => baglamSayfasi.frames().map((cerceve) => cerceve.url())),
+    hedefOrigin,
+    authOrigins,
+  );
+  if (yabanciCerceveOriginleri.length > 0) {
+    const origin = yabanciCerceveOriginleri[0] as string;
+    throw yabanciBelgeHatasi(origin);
+  }
   koruma.pencereyiAc();
   await form.kullaniciAlani.fill(kimlik.username);
   await form.parolaAlani.fill(kimlik.password);
@@ -197,17 +214,37 @@ export async function girisiGonder(
       donulmeyenOrigin = new URL(sayfa.url()).origin;
     }
   }
-  const girisBasarili = urlDegisti && donulmeyenOrigin === null;
-  // Sızıntı varsa önce o bildirilir: dönüş hatası daha ağır bir nedeni örtmesin.
-  koruma.denetle(girisBasarili);
   // Dönüşten sonraki ağ durulmasında gecikmeli meta-refresh ya da JavaScript yönlendirmesi
-  // sayfayı uygulamadan çıkarmış olabilir: origin bir kez daha doğrulanır.
+  // sayfayı uygulamadan çıkarmış olabilir. `denetle`den önce başarısız sayılır ki kesilen
+  // yabancı ana-çerçeve origin'i chrome-error sayfasının `null` origin'inden önce bildirilsin.
   if (urlDegisti && donulmeyenOrigin === null && !uygulamadaMi()) donulmeyenOrigin = new URL(sayfa.url()).origin;
+  const girisBasarili = urlDegisti && donulmeyenOrigin === null;
+  // Tarayıcıya bir gidiş-dönüş (en iyi çaba): tarayıcının bu yanıttan önce yaydığı istek/commit
+  // olayları (pencere sonunda başlamış bir yönlendirme ayağı dahil) aynı sıralı bağlantıdan önce
+  // gelir ve `denetle` evreyi kapatmadan işlenir. Playwright'ın kendi içinde ertelediği olaylar
+  // için kesin sıra garantisi yoktur; bu bekleme yarışı daraltır, kanıtlanmış bir kapı değildir.
+  await sayfa.context().cookies().catch(() => undefined);
+  // Sızıntı varsa önce o bildirilir: dönüş hatası daha ağır bir nedeni örtmesin.
+  const kesilemeyenBelgeYondirmeleri = koruma.denetle(girisBasarili);
   if (donulmeyenOrigin !== null) {
+    const belgeNotu = kesilemeyenBelgeYondirmeleri.length === 0
+      ? ''
+      : ` During login, kobay detected ${kesilemeyenBelgeYondirmeleri.length} cross-origin document redirect`
+        + `${kesilemeyenBelgeYondirmeleri.length === 1 ? '' : 's'} that Chromium did not expose to the route guard: `
+        + `${[...new Set(kesilemeyenBelgeYondirmeleri)].slice(0, 3).join(', ')}.`;
     throw new LoginDidNotReturnError(
       `Login did not return to the app origin (ended on ${donulmeyenOrigin}, expected ${hedefOrigin}`
         + ` within ${Math.round(donusBeklemeMs / 1000)} s); the session was not saved.`
+        + belgeNotu
         + ' Check the credentials and that login redirects back to the app.',
+    );
+  }
+  if (kesilemeyenBelgeYondirmeleri.length > 0) {
+    const ornekOriginler = [...new Set(kesilemeyenBelgeYondirmeleri)].slice(0, 3);
+    throw new CredentialLeakBlockedError(
+      `Login refused: kobay detected ${kesilemeyenBelgeYondirmeleri.length} cross-origin document redirect`
+        + `${kesilemeyenBelgeYondirmeleri.length === 1 ? '' : 's'} during login that Chromium did not expose to `
+        + `the route guard (${ornekOriginler.join(', ')}). ${authOriginIpucu(ornekOriginler)}`,
     );
   }
   return girisBasarili;

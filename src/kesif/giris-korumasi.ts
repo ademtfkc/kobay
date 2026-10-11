@@ -1,4 +1,4 @@
-import type { BrowserContext, Request, Route, WebSocketRoute } from '@playwright/test';
+import type { BrowserContext, Frame, Page, Request, Route, WebSocketRoute } from '@playwright/test';
 import type { Kimlik } from '../depo/index.js';
 
 /**
@@ -23,15 +23,19 @@ import type { Kimlik } from '../depo/index.js';
  *    - parola taşıyan istek kesilir, giriş reddedilir;
  *    - yazma (POST/PUT/PATCH/DELETE, sendBeacon) kesilir: parola kodlanıp gizlenmiş olabilir.
  *      Parola görünmüyorsa bilgi amaçlıdır; giriş başarılıysa hata yok, başarısızsa nedeni söylenir;
+ *    - yabancı belge navigasyonları (ana çerçeve, iframe ve popup) kesilir; pencere açılırken
+ *      bitmemiş yabancı belge isteği varsa parola yazılmadan reddedilir, pencere içinde yine de
+ *      yabancı origin'e commit eden çerçeve sızıntı sayılır (`framenavigated`; açılır pencerenin
+ *      `page` olayından önce commit olan ilk belgesi o anki URL'den okunur);
  *    - yeni WebSocket sunucuya hiç bağlanmaz, açık WebSocket'in mesajı iletilmez.
  * 2. Giriş sonrası (ve pencere açılmadan önce): yalnız parolayı görünür biçimde taşıyan
  *    siteler-arası istek / WebSocket adresi / WebSocket mesajı kesilir ve keşif reddedilir
  *    (`sonDenetim`). Siteler-arası yazmalar ve WebSocket'ler serbesttir: uygulamanın kendi
  *    API'si keşfi bozmasın. Kodlanmış parola bu evrede yakalanmaz.
  *
- * Engellenemeyen yol: aynı origin'deki uç 307/308 ile başka siteye yönlendirirse Chromium
- * gövdeyi kendisi yeniden gönderir ve yönlendirilmiş ayak route'a uğramaz. kobay bunu yalnız
- * TESPİT EDER ve girişi reddeder; istek karşı sunucuya ulaşmış olur. Service worker istekleri
+ * Engellenemeyen yol: aynı origin'deki uç 302/307/308 ile başka siteye yönlendirirse Chromium
+ * belge yönlendirmesinin ikinci ayağını route'a uğratmaz. kobay bunu `request` olayında yalnız
+ * TESPİT EDER ve girişi reddeder; istek karşı sunucuya ulaşmış olabilir. Service worker istekleri
  * route'a uğramadığı için kimlikli keşif bağlamı `serviceWorkers: 'block'` ile açılır
  * (bkz. `kesfet`, `sayfayiYenile`).
  */
@@ -240,13 +244,16 @@ function metinParolaTasiyorMu(metin: string, izler: string[]): boolean {
 }
 
 export interface GirisKorumasi {
-  /** Parola alana yazılmadan hemen önce çağrılır: giriş penceresi başlar (sıkı kural). */
+  /**
+   * Parola alana yazılmadan hemen önce çağrılır: giriş penceresi başlar (sıkı kural).
+   * Daha önce başlamış, henüz bitmemiş yabancı belge isteği varsa parola yazılmadan reddeder.
+   */
   pencereyiAc(): void;
   /**
    * Giriş penceresi (gönderim + URL değişimi + kısa ağ durulması) bitince çağrılır;
    * pencereyi kapatır (gevşek kural) ve sızıntı ya da açıklanması gereken engel varsa fırlatır.
    */
-  denetle(girisBasarili: boolean): void;
+  denetle(girisBasarili: boolean): readonly string[];
   /** Keşif bitip sonuç dönmeden önce çağrılır; giriş sonrası bir sızıntı denendiyse fırlatır. */
   sonDenetim(): void;
 }
@@ -257,6 +264,76 @@ const korumalar = new WeakMap<BrowserContext, GirisKorumasi>();
 
 function kokenAdi(url: string): string {
   return httpAdres(url)?.origin ?? url;
+}
+
+/**
+ * Çerçeve adresinin taşıdığı ağ origin'i: http(s) adreste kendisi, `blob:<origin>/<uuid>`
+ * adreste blob'u yaratan origin (blob o origin'in JS'iyle çalışır). `blob:null/...`,
+ * `data:`, `about:blank`, `about:srcdoc` ve diğer şemalarda null: opaque ya da miras alınan
+ * origin'dir, URL'den okunamaz.
+ */
+export function cerceveAgOrigini(url: string): string | null {
+  if (url.startsWith('blob:')) {
+    try {
+      const origin = new URL(url).origin;
+      return httpAdres(origin) === null ? null : origin;
+    } catch {
+      return null;
+    }
+  }
+  return httpAdres(url)?.origin ?? null;
+}
+
+/**
+ * Parola yazılmadan hemen önceki çerçevelerden izinli küme dışındaki http(s) origin'lerini
+ * döndürür; `blob:` adres kendisini yaratan origin'e göre sınıflanır
+ * (`blob:https://evil/...` yabancıdır). `about:blank`, `about:srcdoc`, `blob:null` ve
+ * `data:` listeye girmez: URL'leri bir ağ origin'i taşımaz ve ağ çıkışları yine route'tan geçer.
+ */
+export function yabanciCerceveler(
+  cerceveAdresleri: readonly string[],
+  baseOrigin: string | undefined,
+  authOrigins: readonly string[],
+): string[] {
+  const originler = cerceveAdresleri
+    .map(cerceveAgOrigini)
+    .filter((origin): origin is string => origin !== null && !izinliKumedeMi(origin, baseOrigin, authOrigins));
+  return [...new Set(originler)];
+}
+
+/**
+ * Yabancı origin(ler) için ortak `--auth-origin` ipucu; her mesajın son cümlesi olarak kullanılır.
+ * Tam komut verilmez: `project update --auth-origin` kayıtlı listenin tamamını değiştirir.
+ */
+export function authOriginIpucu(originler: readonly string[]): string {
+  const tekil = [...new Set(originler)];
+  const bayraklar = tekil.map((origin) => `--auth-origin ${origin}`).join(' ');
+  return tekil.length === 1
+    ? `If this origin is part of your login flow, add it with ${bayraklar}`
+    : `If these origins are part of your login flow, add them with ${bayraklar}`;
+}
+
+/**
+ * Parola yazılmadan bulunan yabancı belge için ortak ret ve `--auth-origin` ipucu. Belge iframe,
+ * açılır pencere ya da ana çerçeve navigasyonu olabilir; mesaj türden bağımsızdır.
+ * `yukleniyor`: istek başlamış ama belge henüz commit olmamış (bekleyen istek listesi).
+ */
+export function yabanciBelgeHatasi(origin: string, durum: 'acik' | 'yukleniyor' = 'acik'): CredentialLeakBlockedError {
+  const nerede = durum === 'acik'
+    ? 'is loaded in the browser alongside the login page (in a frame or a popup)'
+    : 'is still loading in the login window';
+  return new CredentialLeakBlockedError(
+    `Login refused: a document from ${origin} ${nerede}, which is outside the trusted set; `
+      + `the password was not typed. ${authOriginIpucu([origin])}`,
+  );
+}
+
+function belgeYuklemeOzeti(eylem: 'blocked', originler: readonly string[]): string {
+  const tekilOriginler = [...new Set(originler)];
+  const ornekler = tekilOriginler.slice(0, 3).join(', ');
+  const devam = tekilOriginler.length > 3 ? ', ...' : '';
+  return `${eylem} ${originler.length} cross-origin document load${originler.length === 1 ? '' : 's'} during login: `
+    + `${ornekler}${devam}`;
 }
 
 /**
@@ -330,6 +407,14 @@ export async function girisKorumasiKur(
   const sizanOriginler = new Set<string>();
   /** Giriş penceresinde kesilen, parola görünmeyen siteler-arası yazmalar (bilgi amaçlı). */
   const kesilenYazmalar = new Set<string>();
+  /** Giriş penceresinde route tarafından kesilen yabancı belge yüklemeleri. */
+  const kesilenBelgeler: string[] = [];
+  /** Chromium route'a uğratmadığı için yalnız tespit edilen yabancı belge yönlendirmeleri. */
+  const tespitEdilenBelgeYondirmeleri: string[] = [];
+  /** Serbest evrede başlamış, cevabı/commit'i henüz bitmemiş yabancı belge istekleri. */
+  const bekleyenYabanciBelgeler = new Map<Request, string>();
+  /** Giriş penceresi açıkken gerçekten yabancı origin'e commit eden çerçeveler. */
+  const commitOlanYabanciBelgeler: string[] = [];
   let evre: Evre = 'serbest';
   const yabanciMi = (url: string): boolean => !izinliKumedeMi(url, baseOrigin, authListesi);
 
@@ -344,6 +429,11 @@ export async function girisKorumasiKur(
       await route.abort('blockedbyclient');
       return;
     }
+    if (evre === 'pencere' && istek.isNavigationRequest()) {
+      kesilenBelgeler.push(kokenAdi(url));
+      await route.abort('blockedbyclient');
+      return;
+    }
     if (evre === 'pencere' && !GUVENLI_YONTEMLER.has(istek.method().toUpperCase())) {
       kesilenYazmalar.add(`${istek.method()} ${kokenAdi(url)}`);
       await route.abort('blockedbyclient');
@@ -351,12 +441,46 @@ export async function girisKorumasiKur(
     }
     await route.fallback();
   };
-  // Yönlendirmenin (ör. 307/308) sonraki ayağı route'a uğramaz: KESİLEMEZ, istek karşı
-  // sunucuya ulaşır. Burada yalnız görülür ve giriş/keşif reddedilir (tespit + ret, engel değil).
+  // Belge yönlendirmesinin (302/307/308) sonraki ayağı Chromium'da route'a uğramıyor:
+  // KESİLEMEZ, istek karşı sunucuya ulaşmış olabilir. `request` olayı ikinci ayağı görür;
+  // burada tespit edilir ve giriş reddedilir (engel değil). Veri yönlendirmesinin eski parola
+  // tespiti de aynı dinleyicide kalır.
   const izle = (istek: Request): void => {
-    if (istek.redirectedFrom() === null) return;
     const url = istek.url();
-    if (httpAdres(url) !== null && yabanciMi(url) && parolaTasiyorMu(istek, izler)) sizanOriginler.add(kokenAdi(url));
+    if (httpAdres(url) === null || !yabanciMi(url)) return;
+    if (evre === 'serbest' && istek.isNavigationRequest()) {
+      bekleyenYabanciBelgeler.set(istek, kokenAdi(url));
+    }
+    if (istek.redirectedFrom() !== null && evre === 'pencere' && istek.isNavigationRequest()) {
+      tespitEdilenBelgeYondirmeleri.push(kokenAdi(url));
+    }
+    if (istek.redirectedFrom() !== null && parolaTasiyorMu(istek, izler)) sizanOriginler.add(kokenAdi(url));
+  };
+  const cercevesiOlmus = (istek: Request): boolean => {
+    try {
+      const cerceve = istek.frame();
+      return cerceve.isDetached() || cerceve.page().isClosed();
+    } catch {
+      return false;
+    }
+  };
+  const bekleyeniKapat = (istek: Request): void => {
+    bekleyenYabanciBelgeler.delete(istek);
+  };
+  const cerceveCommitiniIzle = (cerceve: Frame): void => {
+    if (evre !== 'pencere') return;
+    const origin = cerceveAgOrigini(cerceve.url());
+    if (origin !== null && yabanciMi(origin)) commitOlanYabanciBelgeler.push(origin);
+  };
+  const izlenenSayfalar = new WeakSet<Page>();
+  const sayfayiIzle = (sayfa: Page): void => {
+    if (izlenenSayfalar.has(sayfa)) return;
+    izlenenSayfalar.add(sayfa);
+    sayfa.on('framenavigated', cerceveCommitiniIzle);
+    // Açılır pencerenin ilk belgesi `page` olayından önce commit olmuş olabilir; o commit için
+    // `framenavigated` bu dinleyiciye hiç gelmez. Pencere evresindeyse mevcut URL'ler doğrudan
+    // değerlendirilir (aynı origin iki kez kaydedilirse ret mesajında tekilleşir).
+    if (evre === 'pencere') for (const cerceve of sayfa.frames()) cerceveCommitiniIzle(cerceve);
   };
   // Siteler-arası WebSocket. Adreste parola varsa hiç bağlanmaz ve sızıntı sayılır. Giriş
   // penceresinde açılan sunucuya hiç bağlanmaz (connectToServer çağrılmaz, sayfa `open`
@@ -395,14 +519,42 @@ export async function girisKorumasiKur(
   await context.route('**', yakala);
   await context.routeWebSocket((url) => yabanciMi(url.href), wsYakala);
   context.on('request', izle);
+  context.on('requestfinished', bekleyeniKapat);
+  context.on('requestfailed', bekleyeniKapat);
+  for (const sayfa of context.pages()) sayfayiIzle(sayfa);
+  context.on('page', sayfayiIzle);
 
   const koruma: GirisKorumasi = {
     pencereyiAc() {
       evre = 'pencere';
+      for (const [istek, origin] of bekleyenYabanciBelgeler) {
+        // Bitiş olayını kaçırmış (çerçevesi kopmuş ya da sayfası kapanmış) eski kayıt parolayı
+        // alamaz; yanlış ret vermesin. Çerçevesi henüz yoksa (popup'ın ilk isteği) kayıt geçerli kalır.
+        if (cercevesiOlmus(istek)) {
+          bekleyenYabanciBelgeler.delete(istek);
+          continue;
+        }
+        throw yabanciBelgeHatasi(origin, 'yukleniyor');
+      }
     },
     denetle(girisBasarili) {
       evre = 'serbest';
       if (sizanOriginler.size > 0) throw sizintiHatasi(sizanOriginler, baseOrigin, authListesi, false);
+      const yonlendirmeOriginleri = new Set(tespitEdilenBelgeYondirmeleri);
+      const tehlikeliCommitler = commitOlanYabanciBelgeler.filter((origin) => !yonlendirmeOriginleri.has(origin));
+      if (tehlikeliCommitler.length > 0) {
+        const originler = [...new Set(tehlikeliCommitler)];
+        throw new CredentialLeakBlockedError(
+          `Login refused: a document from ${originler.join(', ')} committed in the browser `
+            + `during the login window; the login was stopped. ${authOriginIpucu(originler)}`,
+        );
+      }
+      if (!girisBasarili && kesilenBelgeler.length > 0) {
+        throw new CredentialLeakBlockedError(
+          `Login did not complete: ${belgeYuklemeOzeti('blocked', kesilenBelgeler)}; credentials are only sent to `
+            + `${izinliMetni(baseOrigin, authListesi)}.${ipucuMetni(authListesi)}`,
+        );
+      }
       if (!girisBasarili && kesilenYazmalar.size > 0) {
         throw new CredentialLeakBlockedError(
           `Login did not complete: during login the page tried to write to a different site `
@@ -412,6 +564,10 @@ export async function girisKorumasiKur(
             + ipucuMetni(authListesi),
         );
       }
+      if (girisBasarili && kesilenBelgeler.length > 0) {
+        process.stderr.write(`[kobay] Warning: ${belgeYuklemeOzeti('blocked', kesilenBelgeler)}.\n`);
+      }
+      return [...tespitEdilenBelgeYondirmeleri];
     },
     sonDenetim() {
       // denetle sızıntıda zaten fırlattığı için buraya gelen her kayıt giriş penceresi dışındadır.

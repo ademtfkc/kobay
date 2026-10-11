@@ -4,7 +4,7 @@ import { chromium } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import { kesfet } from '../../src/kesif/index.js';
 import {
-  ayniSiteMi, ayniSiteOriginMi, izinliKumedeMi, kayitliAlanAdi, parolaIzleri,
+  ayniSiteMi, ayniSiteOriginMi, izinliKumedeMi, kayitliAlanAdi, parolaIzleri, yabanciCerceveler,
 } from '../../src/kesif/giris-korumasi.js';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
@@ -122,6 +122,7 @@ beforeAll(async () => {
     await tarayici.close();
   } catch (hata) {
     tarayiciEngeli = hata;
+    return;
   }
   yabanci = createServer((istek, yanit) => {
     let govde = '';
@@ -501,6 +502,45 @@ describe('izinliKumedeMi: baseUrl aynı-site, auth origin tam eşitlik', () => {
     // Kimliğin origin'i kümede yoksa yalnız auth origin'ler izinli.
     expect(izinliKumedeMi('https://api.example.com/x', undefined, auth)).toBe(false);
     expect(izinliKumedeMi('data:text/plain,x', 'https://app.example.com', auth)).toBe(false);
+  });
+});
+
+describe('yabanciCerceveler', () => {
+  it('yalnız izinli küme dışındaki http(s) çerçeve originlerini döndürür', () => {
+    expect(yabanciCerceveler([
+      'https://app.example.com/login',
+      'https://api.example.com/widget',
+      'https://yourco.okta.com/captcha',
+      'https://evil.example.net/frame',
+      'https://evil.example.net/second',
+      'http://evil.example.net/frame',
+    ], 'https://app.example.com', ['https://yourco.okta.com'])).toEqual([
+      'https://evil.example.net',
+      'http://evil.example.net',
+    ]);
+  });
+
+  it('about:blank, srcdoc, blob:null ve data çerçevelerini yeni origin saymaz', () => {
+    expect(yabanciCerceveler([
+      'about:blank',
+      'about:srcdoc',
+      'blob:null/0f1e2d3c',
+      'data:text/html,<p>frame</p>',
+      'javascript:void(0)',
+    ], 'https://app.example.com', [])).toEqual([]);
+  });
+
+  it('blob: çerçeveyi kendisini yaratan origin\'e göre sınıflar', () => {
+    expect(yabanciCerceveler([
+      'blob:https://app.example.com/0f1e2d3c',
+      'blob:https://api.example.com/0f1e2d3c',
+      'blob:https://yourco.okta.com/0f1e2d3c',
+      'blob:https://evil.example/kimlik',
+      'blob:http://localhost:4010/0f1e2d3c',
+    ], 'https://app.example.com', ['https://yourco.okta.com'])).toEqual([
+      'https://evil.example',
+      'http://localhost:4010',
+    ]);
   });
 });
 
