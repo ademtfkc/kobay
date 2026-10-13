@@ -1,4 +1,4 @@
-import { access, mkdir, readFile, stat } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { dirname, join, sep } from 'node:path';
 import { chromium } from '@playwright/test';
@@ -12,6 +12,9 @@ import {
   kostur,
   testSureciOrtami,
 } from '../../src/kos/index.js';
+import { contextAc, contextKapat, videoSaklanmali, videoyuSonlandir } from '../../src/kos/fixture.js';
+import { eylemZamanAsimiCoz, kaliciConfigMetni } from '../../src/kos/calisma-alani.js';
+import { kanitiYaz } from '../../src/kos/fixture-sablonu.js';
 import { raporuAyristir } from '../../src/kos/rapor.js';
 import { baslat } from '../kobay-demo/sunucu.mjs';
 
@@ -62,6 +65,78 @@ test('verifies the login screen', async ({ page }) => {
 });
 `;
 }
+
+async function webmDosyalari(kok: string): Promise<string[]> {
+  const girdiler = await readdir(kok, { recursive: true, withFileTypes: true });
+  return girdiler.filter((girdi) => girdi.isFile() && girdi.name.endsWith('.webm')).map((girdi) => girdi.name);
+}
+
+describe('video saklama', () => {
+  it('yalnız beklenmeyen sonuçta saklar', () => {
+    expect(videoSaklanmali({ status: 'failed', expectedStatus: 'passed' })).toBe(true);
+    expect(videoSaklanmali({ status: 'timedOut', expectedStatus: 'passed' })).toBe(true);
+    expect(videoSaklanmali({ status: 'passed', expectedStatus: 'passed' })).toBe(false);
+    expect(videoSaklanmali({ status: 'skipped', expectedStatus: 'skipped' })).toBe(false);
+  });
+
+  it('saklanacak videoyu video.webm yapar, saklanmayanı siler, eksik kaynakta hata atmaz', async () => {
+    const kok = await geciciDizinAc('kobay-video-');
+    await mkdir(join(kok, 'pw', 'video'), { recursive: true });
+    const kaynak = join(kok, 'pw', 'video', 'abc.webm');
+    await writeFile(kaynak, 'webm');
+    await videoyuSonlandir(kaynak, kok, true);
+    expect(await webmDosyalari(kok)).toEqual(['video.webm']);
+
+    const ikinci = join(kok, 'pw', 'video', 'def.webm');
+    await writeFile(ikinci, 'webm');
+    await videoyuSonlandir(ikinci, kok, false);
+    expect(await webmDosyalari(kok)).toEqual(['video.webm']);
+
+    await expect(videoyuSonlandir(join(kok, 'yok.webm'), join(kok, 'yok-dizin'), true)).resolves.toBeUndefined();
+    await expect(videoyuSonlandir(undefined, kok, true)).resolves.toBeUndefined();
+  });
+});
+
+describe('video hatası sonucu değiştirmez', () => {
+  it('recordVideo ile context açılamazsa videosuz açar; videosuz da açılamazsa hata yayılır', async () => {
+    const cagrilar: unknown[] = [];
+    const sahteContext = { sahte: true };
+    const tarayici = {
+      newContext: async (secenek?: Record<string, unknown>) => {
+        cagrilar.push(secenek);
+        if (secenek?.recordVideo !== undefined) throw new Error('ffmpeg missing');
+        return sahteContext;
+      },
+    } as unknown as Parameters<typeof contextAc>[0];
+    const yazici = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const sonuc = await contextAc(tarayici, { storageState: 'state.json' }, '/tmp/x/pw/video');
+      expect(sonuc).toEqual({ context: sahteContext, video: false });
+      expect(cagrilar).toEqual([
+        { storageState: 'state.json', recordVideo: { dir: '/tmp/x/pw/video' } },
+        { storageState: 'state.json' },
+      ]);
+      const hepsiDuser = { newContext: async () => { throw new Error('browser gone'); } } as unknown as Parameters<typeof contextAc>[0];
+      await expect(contextAc(hepsiDuser, {}, '/tmp/x/pw/video')).rejects.toThrow('browser gone');
+    } finally {
+      yazici.mockRestore();
+    }
+  });
+
+  it('video varken reddedilen kapanışı yutar; videosuz ya da tarayıcı kopukken hatayı yayar', async () => {
+    const dusen = { close: async () => { throw new Error('video flush failed'); } };
+    const bagli = { isConnected: () => true };
+    const yazici = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await expect(contextKapat(dusen, true, bagli)).resolves.toBe(false);
+      await expect(contextKapat(dusen, false, bagli)).rejects.toThrow('video flush failed');
+      await expect(contextKapat(dusen, true, { isConnected: () => false })).rejects.toThrow('video flush failed');
+      await expect(contextKapat({ close: async () => undefined }, true, bagli)).resolves.toBe(true);
+    } finally {
+      yazici.mockRestore();
+    }
+  });
+});
 
 describe('hedefAyaktaMi', () => {
   it('5xx yanıtını erişilebilir, bağlantı reddini erişilemez sayar', async () => {
@@ -275,6 +350,9 @@ describe('kostur', () => {
     const kosuDizini = await dizin.kosuDizini(sonuc.runId);
     await Promise.all([access(join(kosuDizini, 'step-0.png')), access(join(kosuDizini, 'trace.zip'))]);
     expect(JSON.parse(await readFile(join(kosuDizini, 'steps.json'), 'utf8'))).toHaveLength(3);
+    // Geçen testin videosu diskte hiçbir yerde kalmaz; ara video klasörü de kalmaz.
+    expect(await webmDosyalari(kosuDizini)).toEqual([]);
+    await expect(access(join(kosuDizini, 'pw', 'video'))).rejects.toThrow();
   });
 
   it('düşen adımı, hatasını ve sonraki skipped adımı kaydeder', async (context) => {
@@ -290,7 +368,12 @@ describe('kostur', () => {
     expect(sonuc).toMatchObject({ verdict: 'failed', failedStepIndex: 1 });
     expect(adimlar[1]?.errorMessage).toBeTruthy();
     expect(adimlar[2]).toMatchObject({ status: 'skipped' });
-    await expect(access(join(await dizin.kosuDizini(sonuc.runId), 'step-1.png'))).resolves.toBeUndefined();
+    const kosuDizini = await dizin.kosuDizini(sonuc.runId);
+    await expect(access(join(kosuDizini, 'step-1.png'))).resolves.toBeUndefined();
+    // Düşen testin videosu koşu dizininde tek WebM olarak kalır (EBML imzası).
+    expect(await webmDosyalari(kosuDizini)).toEqual(['video.webm']);
+    const video = await readFile(join(kosuDizini, 'video.webm'));
+    expect(video.subarray(0, 4)).toEqual(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
   });
 
   it('Playwright hatasındaki gizli değer result.json, steps.json ve dönen sonuçta maskelenir (denetim N3)', async (context) => {
@@ -363,6 +446,92 @@ describe('kostur', () => {
     expect(sonuc.errorMessage).toContain('No tests found');
     expect(adimlar.every((adim) => adim.status === 'skipped')).toBe(true);
     expect((await dizin.testOku(test.id)).status).toBe('unknown');
+  });
+});
+
+describe('eylem zaman aşımı ve kanıt koruması', () => {
+  it('kalıcı yapılandırma metni değerlendirilince actionTimeout geçerli değeri verir, geçersizde 15000', () => {
+    const degerlendir = (ortam: Record<string, string>): number => {
+      const govde = kaliciConfigMetni().replace('export default', 'return');
+      const yapilandirma = new Function('process', govde)({ env: ortam }) as { use: { actionTimeout: number } };
+      return yapilandirma.use.actionTimeout;
+    };
+    expect(degerlendir({ KOBAY_ACTION_TIMEOUT_MS: '2500' })).toBe(2500);
+    for (const gecersiz of ['0', '-1', 'abc', '', '1.5', ' ']) {
+      expect(degerlendir({ KOBAY_ACTION_TIMEOUT_MS: gecersiz }), gecersiz).toBe(15000);
+    }
+    expect(degerlendir({})).toBe(15000);
+  });
+
+  it('eylemZamanAsimiCoz yalnız pozitif tam sayıyı kabul eder', () => {
+    expect(eylemZamanAsimiCoz(2500)).toBe(2500);
+    expect(eylemZamanAsimiCoz('2500')).toBe(2500);
+    for (const gecersiz of [0, -1, Number.NaN, 1.5, 'abc', '', '0', '-5', undefined, null]) {
+      expect(eylemZamanAsimiCoz(gecersiz), String(gecersiz)).toBe(15000);
+    }
+  });
+
+  it('screenshot ve content hiç çözülmezse kanitiYaz tavan içinde döner, hata fırlatmaz', async () => {
+    const dizin = await geciciDizinAc('kobay-kanit-');
+    const askida = (): Promise<never> => new Promise<never>(() => undefined);
+    await expect(kanitiYaz({ screenshot: askida, content: askida }, dizin, 1, 20)).resolves.toBeUndefined();
+    expect(await readdir(dizin)).toEqual([]);
+  });
+
+  it('tavandan sonra reddedilen askıdaki çağrı işlenmemiş ret üretmez', async () => {
+    const dizin = await geciciDizinAc('kobay-kanit-');
+    const islenmemis: unknown[] = [];
+    const dinleyici = (neden: unknown): void => { islenmemis.push(neden); };
+    process.on('unhandledRejection', dinleyici);
+    try {
+      let reddet: (hata: Error) => void = () => undefined;
+      const gec = new Promise<never>((_, red) => { reddet = red; });
+      await kanitiYaz({ screenshot: () => gec, content: () => gec }, dizin, 2, 20);
+      reddet(new Error('geç ret'));
+      await new Promise((coz) => setTimeout(coz, 20));
+      expect(islenmemis).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', dinleyici);
+    }
+  });
+
+  it('kanıt yakalama fırlatırsa kanıtiYaz fırlatmaz, alınabilen kanıtı yazar', async () => {
+    const dizin = await geciciDizinAc('kobay-kanit-');
+    const hata = new Error('Target page, context or browser has been closed');
+    await expect(kanitiYaz({
+      screenshot: () => Promise.reject(hata),
+      content: () => Promise.resolve('<html>kalan</html>'),
+    }, dizin, 3)).resolves.toBeUndefined();
+    expect(await readFile(join(dizin, 'step-3.html'), 'utf8')).toBe('<html>kalan</html>');
+    await expect(access(join(dizin, 'step-3.png'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const bos = await geciciDizinAc('kobay-kanit-');
+    await expect(kanitiYaz({
+      screenshot: () => Promise.reject(hata),
+      content: () => Promise.reject(hata),
+    }, bos, 0)).resolves.toBeUndefined();
+  });
+
+  it('kilitli düğmeye tıklama eylem zaman aşımında adım hatası verir, kanıt yazılır, asıl hata korunur', async (context) => {
+    if (!playwrightMumkun(context) || demo === undefined) return;
+    const dizin = await geciciDizin(demo.url);
+    const test = testKaydi('t_abcd1234', [{ index: 0, description: 'Click the locked button' }]);
+    await dizin.testYaz(test);
+    await dizin.kodYaz(test.id, `import { test } from './_fixture';
+test('locked button', async ({ page }) => {
+  await test.step('0: Click the locked button', async () => {
+    await page.setContent('<button disabled>Send</button>');
+    await page.getByRole('button', { name: 'Send' }).click();
+  });
+});
+`);
+    const { sonuc } = await kostur(dizin, test, { baseUrl: demo.url, testZamanAsimiMs: 60_000, eylemZamanAsimiMs: 1_000 });
+    // Sayaç/olay ölçülür, duvar saati değil: test süresi dolmadan, eylem süresinde düştü.
+    expect(sonuc.errorMessage).not.toBe('Run timed out');
+    expect(sonuc.errorMessage).toMatch(/Timeout 1000ms exceeded/);
+    const kosu = await dizin.kosuDizini(sonuc.runId);
+    await access(join(kosu, 'step-0.png'));
+    expect(await readFile(join(kosu, 'step-0.html'), 'utf8')).toContain('disabled');
   });
 });
 

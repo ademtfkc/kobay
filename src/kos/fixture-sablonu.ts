@@ -14,6 +14,43 @@ function adimIndeksi(baslik: string): number | null {
   return eslesme?.[1] === undefined ? null : Number(eslesme[1]);
 }
 
+/** Kanıt toplamanın toplam üst sınırı; aşılırsa kanıt atlanır, adımın asıl hatası bekletilmez. */
+export const KANIT_TAVANI_MS = 5_000;
+
+/**
+ * Adım kanıtını (ekran görüntüsü + html) en iyi çabayla yazar. Sayfa kapalı ya da takılıysa
+ * fırlatmaz ve `tavanMs` içinde döner: aksi halde `finally` içindeki hata adımın asıl hatasını
+ * örter ya da testin kalan süresini yerdi. Biri alınamazsa öteki yine yazılır. Askıda kalan
+ * çağrı sonradan reddedilirse işlenmemiş ret oluşmaz (her çağrıya `catch` bağlıdır).
+ */
+export async function kanitiYaz(
+  sayfa: { screenshot(secenekler?: { timeout?: number }): Promise<Buffer>; content(): Promise<string> },
+  dizin: string,
+  indeks: number,
+  tavanMs: number = KANIT_TAVANI_MS,
+): Promise<void> {
+  const yaz = (alVeYaz: () => Promise<void>): Promise<void> => {
+    try {
+      return alVeYaz().catch(() => undefined);
+    } catch {
+      return Promise.resolve();
+    }
+  };
+  let zamanlayici: NodeJS.Timeout | undefined;
+  const tavan = new Promise<void>((coz) => { zamanlayici = setTimeout(coz, tavanMs); });
+  try {
+    await Promise.race([
+      Promise.all([
+        yaz(async () => { await yazAtomik(`${dizin}/step-${indeks}.png`, await sayfa.screenshot({ timeout: tavanMs })); }),
+        yaz(async () => { await yazAtomik(`${dizin}/step-${indeks}.html`, await sayfa.content()); }),
+      ]),
+      tavan,
+    ]);
+  } finally {
+    clearTimeout(zamanlayici);
+  }
+}
+
 /** Bir test.step çağrısını sarar; adım biter bitmez atomik kanıt dosyaları yazar. */
 export function adimSar<TestArgumanlari extends object, IsciArgumanlari extends object>(
   test: TestType<TestArgumanlari, IsciArgumanlari>,
@@ -30,13 +67,7 @@ export function adimSar<TestArgumanlari extends object, IsciArgumanlari extends 
       return await govde(adim);
     } finally {
       const indeks = adimIndeksi(baslik);
-      if (indeks !== null) {
-        const [ekran, html] = await Promise.all([sayfa.screenshot(), sayfa.content()]);
-        await Promise.all([
-          yazAtomik(`${dizin}/step-${indeks}.png`, ekran),
-          yazAtomik(`${dizin}/step-${indeks}.html`, html),
-        ]);
-      }
+      if (indeks !== null) await kanitiYaz(sayfa, dizin, indeks);
     }
   }, secenekler as never);
 

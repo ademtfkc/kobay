@@ -3,7 +3,16 @@ import { chromium } from '@playwright/test';
 import { authOriginleriDogrula, type Harita, type Kimlik, type Sayfa } from '../depo/index.js';
 import { girisFormuBul } from './giris.js';
 import { girisKorumasiKur, girisKorumasiSonDenetim } from './giris-korumasi.js';
-import { girisiGonder, izinliOriginler, kimlikOriginDogrula, loginUrlDogrula, oturumDurumunuYaz } from './oturum.js';
+import {
+  girisiGonder,
+  girisSayfaMesajiNotu,
+  izinliOriginler,
+  kimlikOriginDogrula,
+  loginUrlDogrula,
+  oturumDurumunuSil,
+  oturumDurumunuYaz,
+  type GirisSonucu,
+} from './oturum.js';
 import { sayfaOzeti } from './sayfa-ozeti.js';
 
 export interface SayfaYenilemeSecenekleri {
@@ -62,6 +71,7 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
     await girisKorumasiKur(context, secenekler.kimlik, izinliOriginler(hedefOrigin, authOrigins));
   }
   const sayfa = await context.newPage();
+  let giris: GirisSonucu | undefined;
 
   try {
     await sayfa.goto(hedef, { waitUntil: 'domcontentloaded', timeout: sayfaZamanAsimiMs });
@@ -79,15 +89,22 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
       }
       const form = await girisFormuBul(sayfa);
       if (form) {
-        await girisiGonder(sayfa, form, secenekler.kimlik, hedefOrigin, authOrigins);
-        await oturumDurumunuYaz(context, secenekler.storageStateYolu);
+        giris = await girisiGonder(sayfa, form, secenekler.kimlik, hedefOrigin, authOrigins);
+        // Reddedilen girişin durumu (parolayı depolamaya koymuş olabilir) diske yazılmaz.
+        // Reddedildiyse önceki (bayat) oturum dosyası da kaldırılır.
+        if (giris.basarili) await oturumDurumunuYaz(context, secenekler.storageStateYolu);
+        else await oturumDurumunuSil(secenekler.storageStateYolu);
         await sayfa.goto(hedef, { waitUntil: 'domcontentloaded', timeout: sayfaZamanAsimiMs });
       }
     }
 
     const gelenYol = new URL(sayfa.url()).pathname;
     if (!yerindeMi()) {
-      throw new Error(`Page could not be refreshed: asked for ${beklenenYol}, got ${gelenYol} (the session may have expired)`);
+      // Yeniden giriş reddedildiyse sayfanın gösterdiği uyarı (maskeli, etiketli) mesaja eklenir.
+      const not = giris?.basarili === false ? girisSayfaMesajiNotu(giris.sayfaMesaji) : '';
+      throw new Error(
+        `Page could not be refreshed: asked for ${beklenenYol}, got ${gelenYol} (the session may have expired)${not === '' ? '' : `.${not}`}`,
+      );
     }
     const ozet = await sayfaOzeti(sayfa, hedefOrigin);
     girisKorumasiSonDenetim(context);

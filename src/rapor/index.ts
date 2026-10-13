@@ -37,7 +37,7 @@ import { dikkatGerekenMi, duzeltmeIstemi, hepsiniDuzeltIstemi } from './istem.js
 import { ozetMarkdown } from './ozet.js';
 
 export { htmlKacis, metniTemizle, raporHtml, sureMetni, yerelYollariGizle } from './html.js';
-export { HATA_SINIRI, duzeltmeIstemi, guvenilmezBlok, hepsiniDuzeltIstemi } from './istem.js';
+export { HATA_SINIRI, duzeltmeIstemi, guvenilmezBlok, hataDokumu, hataDokumuMetni, hepsiniDuzeltIstemi, istemGruplari, topluIstemBasligi } from './istem.js';
 export {
   OZET_ISARETI, OZET_SINIRI, VARSAYILAN_ISTEM_SAYISI, hucreKacisi, ozetMarkdown,
 } from './ozet.js';
@@ -50,7 +50,8 @@ export type { RaporSayimlari, RaporTesti, RaporVerdict, RaporVerisi } from './ht
  *
  * Dolu bir klasör yalnız YAPISAL olarak tamamen kobay raporuysa değiştirilir:
  * geçerli işaret + `index.html` ve klasördeki her girdi beklenen kümeden
- * (`index.html`, `kobay-report.json`, `assets/<runId>/step-<n>.png`), hiçbiri
+ * (`index.html`, `kobay-report.json`, `assets/<runId>/step-<n>.png`,
+ * `assets/<runId>/video.webm`), hiçbiri
  * symlink değil. Tek bir yabancı girdi (`notes.txt`, `.DS_Store`) reddettirir.
  */
 export const RAPOR_ISARETI = 'kobay-report.json';
@@ -64,6 +65,12 @@ const YAYIM_ONEKI = '.kobay-report-';
 const EKRAN_GORUNTUSU = /^step-(\d{1,6})\.png$/;
 const PNG_IMZASI = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const TEST_KAYDI_ADI = /^(t_[a-z0-9]{8})\.json$/;
+/** Başarısız koşunun videosu: adı sabit, yalnız bu adla okunur ve kopyalanır. */
+const VIDEO_ADI = 'video.webm';
+/** WebM/EBML imzası. */
+const WEBM_IMZASI = Buffer.from([0x1a, 0x45, 0xdf, 0xa3]);
+/** Rapora kopyalanan videonun boyut tavanı; aşan video atlanır, rapora not düşülür. */
+export const VIDEO_SINIRI = 50 * 1024 * 1024;
 
 /**
  * Rapor hedefi güvenli değil ya da kobay'ın kendi raporu olduğu kanıtlanamıyor.
@@ -105,6 +112,8 @@ export interface RaporSonucu {
   tests: Array<{ id: string; name: string; verdict: RaporVerdict; runId?: string }>;
   counts: RaporSayimlari;
   screenshots: number;
+  /** Rapora kopyalanan başarısız koşu videosu sayısı. */
+  videos: number;
   /** Silinmeyip yerinde bırakılan, yapısı kobay raporu olarak kanıtlanamayan eski klasörler. */
   keptAside: string[];
   /** Dikkat isteyen her test için ajan istemi (maskeli, yolları gizli); yoksa boş. */
@@ -352,7 +361,7 @@ async function raporYapisi(kok: string, mod: 'rapor' | 'bosVeyaRapor' | 'gecici'
           const resimYolu = join(kosuYolu, resimAdi);
           const resimBilgi = await varsaLstat(resimYolu);
           if (resimBilgi === null) continue;
-          if (resimBilgi.isSymbolicLink() || !resimBilgi.isFile() || !EKRAN_GORUNTUSU.test(resimAdi)) {
+          if (resimBilgi.isSymbolicLink() || !resimBilgi.isFile() || !(EKRAN_GORUNTUSU.test(resimAdi) || resimAdi === VIDEO_ADI)) {
             return yabanci(resimYolu);
           }
           dosyalar.push(resimYolu);
@@ -487,6 +496,63 @@ async function pngOku(dizin: KobayDizini, runId: string, gercekKosu: string, num
   }
 }
 
+/**
+ * Açık tutamaktan en çok `sinir + 1` bayt okur; `sinir`'i aşan dosyada `null` döner.
+ * Okuma 1 MB'lık parçalarla yapılır, bellek tavanın üstüne çıkmaz.
+ */
+export async function sinirliOku(
+  tutamak: { read(tampon: Buffer, ofset: number, uzunluk: number, konum: number | null): Promise<{ bytesRead: number }> },
+  sinir: number,
+): Promise<Buffer | null> {
+  const parcalar: Buffer[] = [];
+  let toplam = 0;
+  const parcaBoyu = 1024 * 1024;
+  while (toplam <= sinir) {
+    const tampon = Buffer.alloc(Math.min(parcaBoyu, sinir + 1 - toplam));
+    const { bytesRead } = await tutamak.read(tampon, 0, tampon.length, null);
+    if (bytesRead === 0) break;
+    parcalar.push(tampon.subarray(0, bytesRead));
+    toplam += bytesRead;
+  }
+  return toplam > sinir ? null : Buffer.concat(parcalar, toplam);
+}
+
+type VideoOkuma = { durum: 'yok' } | { durum: 'gecersiz' } | { durum: 'buyuk' } | { durum: 'tamam'; icerik: Buffer };
+
+/**
+ * Koşunun videosunu `pngOku` ile aynı kurallarla okur (symlink yok, `O_NOFOLLOW`,
+ * tek adlı normal dosya, dev/ino eşleşmesi, gerçek yol koşu dizininin altında);
+ * ek olarak WebM/EBML imzası ve `VIDEO_SINIRI` boyut tavanı. Okumadan önce boyuta bakılır.
+ */
+async function videoOku(dizin: KobayDizini, runId: string, gercekKosu: string): Promise<VideoOkuma> {
+  const denetim = await bilesenleriDenetle(dizin, ['runs', runId, VIDEO_ADI], 'dosya');
+  if (denetim.durum === 'yok') return { durum: 'yok' };
+  if (denetim.durum !== 'tamam') return { durum: 'gecersiz' };
+  let tutamak;
+  try {
+    tutamak = await open(denetim.yol, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch {
+    return { durum: 'gecersiz' };
+  }
+  try {
+    const bilgi = await tutamak.stat();
+    if (!bilgi.isFile() || bilgi.nlink !== 1) return { durum: 'gecersiz' };
+    const gercek = await realpath(denetim.yol);
+    if (dirname(gercek) !== gercekKosu) return { durum: 'gecersiz' };
+    const gercekBilgi = await stat(gercek);
+    if (gercekBilgi.dev !== bilgi.dev || gercekBilgi.ino !== bilgi.ino) return { durum: 'gecersiz' };
+    if (bilgi.size > VIDEO_SINIRI) return { durum: 'buyuk' };
+    // Boyut denetimden sonra büyüyebilir: aynı tutamaktan en çok tavan + 1 bayt okunur.
+    const icerik = await sinirliOku(tutamak, VIDEO_SINIRI);
+    if (icerik === null) return { durum: 'buyuk' };
+    return icerik.subarray(0, WEBM_IMZASI.length).equals(WEBM_IMZASI) ? { durum: 'tamam', icerik } : { durum: 'gecersiz' };
+  } catch {
+    return { durum: 'gecersiz' };
+  } finally {
+    await tutamak.close();
+  }
+}
+
 /** `screenshotPath` değerinden yalnız `step-<n>.png` kalıbının `n`'i okunur. */
 function ekranGoruntusuNumarasi(deger: string | undefined): number | null {
   if (deger === undefined) return null;
@@ -528,6 +594,32 @@ class GorselYazici {
   }
 }
 
+/** Koşu videolarını rapor klasörüne kopyalar (base64 yok); yol yalnız sabit kalıptan kurulur. */
+class VideoYazici {
+  readonly #yazilanlar = new Set<string>();
+
+  constructor(private readonly gecici: string) {}
+
+  get sayi(): number {
+    return this.#yazilanlar.size;
+  }
+
+  async yaz(dizin: KobayDizini, runId: string, gercekKosu: string): Promise<{ video: string } | { not: string } | null> {
+    const goreli = `assets/${runId}/${VIDEO_ADI}`;
+    if (this.#yazilanlar.has(goreli)) return { video: goreli };
+    const okuma = await videoOku(dizin, runId, gercekKosu);
+    if (okuma.durum === 'buyuk') {
+      return { not: `The run video is larger than ${VIDEO_SINIRI / (1024 * 1024)} MB, so it was not added to the report.` };
+    }
+    if (okuma.durum !== 'tamam') return null;
+    const hedef = altYol(this.gecici, 'assets', runId, VIDEO_ADI);
+    await mkdir(dirname(hedef), { recursive: true });
+    await writeFile(hedef, okuma.icerik, { flag: 'wx' });
+    this.#yazilanlar.add(goreli);
+    return { video: goreli };
+  }
+}
+
 /** Yalnız bu koşuya ait, tamamlanmış (`.partial`'sız) ve symlink'siz hata paketi; aksi halde yok. */
 async function kosununHataPaketi(dizin: KobayDizini, testId: string, runId: string): Promise<HataPaketi | null> {
   const paketDizini = await bilesenleriDenetle(dizin, ['failure', testId], 'dizin');
@@ -547,7 +639,12 @@ function planSatirlari(test: TestKaydi): RaporAdimi[] {
   return test.planSteps.map((adim, sira) => ({ index: sira, description: adim.description, type: adim.type }));
 }
 
-async function testiTopla(dizin: KobayDizini, test: TestKaydi, gorseller: GorselYazici): Promise<RaporTesti> {
+async function testiTopla(
+  dizin: KobayDizini,
+  test: TestKaydi,
+  gorseller: GorselYazici,
+  videolar: VideoYazici,
+): Promise<RaporTesti> {
   kimlikDogrula(test.id, 'testId');
   const kodOkuma = await kobayDosyasiOku(dizin, ['tests', `${test.id}.spec.ts`]);
   const ortak = {
@@ -613,6 +710,8 @@ async function testiTopla(dizin: KobayDizini, test: TestKaydi, gorseller: Gorsel
     });
   }
 
+  // Video yalnız geçmemiş koşudan alınır; geçen koşuda duran bir video.webm rapora girmez.
+  const video = gercekKosu === null || kosu.verdict === 'passed' ? null : await videolar.yaz(dizin, runId, gercekKosu);
   const paket = kosu.verdict === 'failed' ? await kosununHataPaketi(dizin, test.id, runId) : null;
   const sure = Date.parse(kosu.finishedAt) - Date.parse(kosu.startedAt);
   return {
@@ -627,6 +726,8 @@ async function testiTopla(dizin: KobayDizini, test: TestKaydi, gorseller: Gorsel
     ...(kosu.failureKind === undefined ? {} : { failureKind: kosu.failureKind }),
     ...(kosu.errorMessage === undefined ? {} : { errorMessage: kosu.errorMessage }),
     steps: satirlar,
+    ...(video !== null && 'video' in video ? { video: video.video } : {}),
+    ...(video !== null && 'not' in video ? { videoNote: video.not } : {}),
     ...(paket === null ? {} : {
       failure: {
         rootCauseHypothesis: paket.failure.rootCauseHypothesis,
@@ -716,6 +817,7 @@ export async function raporUret(secenek: {
   const gecici = join(ust, `${YAYIM_ONEKI}tmp-${randomUUID()}`);
   await mkdir(gecici, { recursive: false });
   const gorseller = new GorselYazici(gecici);
+  const videolar = new VideoYazici(gecici);
   let testler: RaporTesti[];
   let counts: RaporSayimlari;
   let fixPrompts: Array<{ id: string; prompt: string }> = [];
@@ -724,7 +826,7 @@ export async function raporUret(secenek: {
   let summaryMarkdown: string | undefined;
   try {
     testler = [];
-    for (const test of secenek.testler) testler.push(await testiTopla(dizin, test, gorseller));
+    for (const test of secenek.testler) testler.push(await testiTopla(dizin, test, gorseller, videolar));
     counts = sayimlariHesapla(testler);
     const uretimZamani = new Date().toISOString();
     const baseUrl = await guvenliBaseUrl(dizin);
@@ -806,6 +908,7 @@ export async function raporUret(secenek: {
     })),
     counts,
     screenshots: gorseller.sayi,
+    videos: videolar.sayi,
     keptAside: birakilan,
     fixPrompts,
     ...(fixAllPrompt === null ? {} : { fixAllPrompt }),

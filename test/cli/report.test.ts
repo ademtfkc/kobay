@@ -1,5 +1,5 @@
 import {
-  access, chmod, link, mkdir, readFile, readdir, rm, symlink, writeFile,
+  access, chmod, link, mkdir, open, readFile, readdir, rm, symlink, truncate, writeFile,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -19,11 +19,12 @@ import {
 } from '../../src/depo/index.js';
 import { metindekiKimligiGizle } from '../../src/depo/index.js';
 import {
-  adresKimligiGizle, eskiRaporlariSil, raporUret, terminaleGuvenli, yerelYollariGizle,
+  VIDEO_SINIRI, adresKimligiGizle, sinirliOku, eskiRaporlariSil, raporUret, terminaleGuvenli, yerelYollariGizle,
 } from '../../src/rapor/index.js';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('fake-png-body')]);
+const WEBM = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from('fake-webm-body')]);
 const windows = process.platform === 'win32';
 
 function metinTopla(akis: PassThrough): () => string {
@@ -184,6 +185,7 @@ describe('kobay test report', () => {
         ],
         counts: { passed: 1, failed: 1, blocked: 0, inconclusive: 0, notRun: 1 },
         screenshots: 4,
+        videos: 0,
         // Yalnız dikkat isteyen (düşen) test için; tek test olduğundan fixAllPrompt yok.
         fixPrompts: [{ id: 't_bbbbbbbb', prompt: expect.stringContaining('Fix the kobay test t_bbbbbbbb.') as unknown }],
       },
@@ -198,7 +200,7 @@ describe('kobay test report', () => {
     ]);
     const htmlMetni = await raporHtmli(cwd);
     expect(htmlMetni).toContain('Content-Security-Policy');
-    expect(htmlMetni).toContain('Screenshots are not redacted.');
+    expect(htmlMetni).toContain('Screenshots and videos are not redacted.');
     expect(htmlMetni).toContain('href="assets/r_20261005100000_bbbb/step-1.png"');
     expect(htmlMetni).toContain('Open the records page');
     expect(htmlMetni).toContain('4.3 s');
@@ -207,7 +209,7 @@ describe('kobay test report', () => {
 
     const insan = await calistir(['--cwd', cwd, 'test', 'report', 't_bbbbbbbb']);
     expect(insan.kod).toBe(0);
-    expect(insan.stdout).toContain('Report written: 1 test (0 passed, 1 failed, 0 blocked, 0 inconclusive, 0 not run), 2 screenshots.');
+    expect(insan.stdout).toContain('Report written: 1 test (0 passed, 1 failed, 0 blocked, 0 inconclusive, 0 not run), 2 screenshots, 0 videos.');
     expect(insan.stdout).toContain(`Open: ${join(raporDizini, 'index.html')}`);
   });
 
@@ -217,8 +219,8 @@ describe('kobay test report', () => {
     const bos = await calistir(['--cwd', cwd, 'test', 'report', '--all']);
     expect(bos.kod).toBe(0);
     expect(bos.stdout).toContain('0 screenshots');
-    expect(bos.stdout).not.toContain('Screenshots are not redacted');
-    expect(await raporHtmli(cwd)).not.toContain('Screenshots are not redacted');
+    expect(bos.stdout).not.toContain('not redacted');
+    expect(await raporHtmli(cwd)).not.toContain('not redacted');
 
     await testKaydet(dizin, 't_bbbbbbbb', 'Login works', IKI_ADIM, 'r_20261005100000_bbbb');
     await kosuKaydet(dizin, 't_bbbbbbbb', 'r_20261005100000_bbbb', 'passed', {
@@ -226,9 +228,112 @@ describe('kobay test report', () => {
     });
     const dolu = await calistir(['--cwd', cwd, 'test', 'report', '--all']);
     expect(dolu.kod).toBe(0);
-    expect(dolu.stdout).toContain('1 screenshot.');
-    expect(dolu.stdout).toContain('Screenshots are not redacted; review them before sharing the report.');
-    expect(await raporHtmli(cwd)).toContain('Screenshots are not redacted.');
+    expect(dolu.stdout).toContain('1 screenshot, 0 videos.');
+    expect(dolu.stdout).toContain('Screenshots and videos are not redacted; review them before sharing the report.');
+    expect(await raporHtmli(cwd)).toContain('Screenshots and videos are not redacted.');
+  });
+
+  it('copies a failed run video into the report folder, plays it in a <video> element and counts it', async () => {
+    const { cwd, dizin } = await proje();
+    await testKaydet(dizin, 't_aaaaaaaa', 'Records can be saved', IKI_ADIM, 'r_20261005100000_aaaa');
+    await kosuKaydet(dizin, 't_aaaaaaaa', 'r_20261005100000_aaaa', 'failed', {
+      adimlar: adimSonuclari(['passed', 'failed'], 'Assertion failed'),
+    });
+    await writeFile(join(dizin.kok, 'runs', 'r_20261005100000_aaaa', 'video.webm'), WEBM);
+
+    const sonuc = await calistir(['--cwd', cwd, '--output', 'json', 'test', 'report', '--all']);
+
+    expect(sonuc.kod).toBe(0);
+    const veri = (JSON.parse(sonuc.stdout) as { data: { screenshots: number; videos: number } }).data;
+    expect(veri).toMatchObject({ screenshots: 0, videos: 1 });
+    const raporDizini = join(dizin.kok, 'report');
+    expect(await dosyaListesi(raporDizini)).toEqual([
+      'assets/r_20261005100000_aaaa/video.webm',
+      'index.html',
+      'kobay-report.json',
+    ]);
+    expect(await readFile(join(raporDizini, 'assets', 'r_20261005100000_aaaa', 'video.webm'))).toEqual(WEBM);
+    const htmlMetni = await raporHtmli(cwd);
+    expect(htmlMetni).toContain('<video class="video" controls preload="metadata" src="assets/r_20261005100000_aaaa/video.webm">');
+    // Yalnız video varken de uyarı çıkar.
+    expect(htmlMetni).toContain('Screenshots and videos are not redacted.');
+    expect(htmlMetni).toContain("media-src 'self'");
+
+    const insan = await calistir(['--cwd', cwd, 'test', 'report', '--all']);
+    expect(insan.stdout).toContain('0 screenshots, 1 video.');
+    expect(insan.stdout).toContain('Screenshots and videos are not redacted; review them before sharing the report.');
+    // Videolu rapor bir sonraki koşuda kobay raporu olarak tanınır ve değiştirilir.
+    expect(insan.kod).toBe(0);
+    expect(insan.stderr).toBe('');
+  });
+
+  it('leaves out a video that sits in a passed run', async () => {
+    const { cwd, dizin } = await proje();
+    await testKaydet(dizin, 't_aaaaaaaa', 'Login works', IKI_ADIM, 'r_20261005100000_aaaa');
+    await kosuKaydet(dizin, 't_aaaaaaaa', 'r_20261005100000_aaaa', 'passed', { adimlar: adimSonuclari(['passed', 'passed']) });
+    await writeFile(join(dizin.kok, 'runs', 'r_20261005100000_aaaa', 'video.webm'), WEBM);
+
+    const sonuc = await calistir(['--cwd', cwd, '--output', 'json', 'test', 'report', '--all']);
+
+    expect(sonuc.kod).toBe(0);
+    expect((JSON.parse(sonuc.stdout) as { data: { videos: number } }).data.videos).toBe(0);
+    expect(await dosyaListesi(join(dizin.kok, 'report'))).toEqual(['index.html', 'kobay-report.json']);
+    expect(await raporHtmli(cwd)).not.toContain('<video');
+  });
+
+  it('reads at most the cap plus one byte from the open handle', async () => {
+    const kok = await geciciDizinAc('kobay-report-cap-');
+    const yol = join(kok, 'video.webm');
+    await writeFile(yol, Buffer.alloc(100, 7));
+    const tutamak = await open(yol, 'r');
+    try {
+      let okunan = 0;
+      const sayac = {
+        read: async (tampon: Buffer, ofset: number, uzunluk: number, konum: number | null) => {
+          const sonuc = await tutamak.read(tampon, ofset, uzunluk, konum);
+          okunan += sonuc.bytesRead;
+          return sonuc;
+        },
+      };
+      await expect(sinirliOku(sayac, 10)).resolves.toBeNull();
+      expect(okunan).toBe(11);
+    } finally {
+      await tutamak.close();
+    }
+    const ikinci = await open(yol, 'r');
+    try {
+      expect(await sinirliOku(ikinci, 100)).toEqual(Buffer.alloc(100, 7));
+    } finally {
+      await ikinci.close();
+    }
+  });
+
+  it('skips a video without the WebM signature, a symlinked video and one over the size cap; the report is still written', async () => {
+    const { cwd, dizin } = await proje();
+    const disari = await geciciDizinAc('kobay-report-video-outside-');
+    await writeFile(join(disari, 'video.webm'), WEBM);
+    const kosular = ['r_20261005100000_aaaa', 'r_20261005100000_bbbb', 'r_20261005100000_cccc'];
+    const kimlikler = ['t_aaaaaaaa', 't_bbbbbbbb', 't_cccccccc'];
+    for (const [sira, runId] of kosular.entries()) {
+      const testId = kimlikler[sira] ?? '';
+      await testKaydet(dizin, testId, `Video ${sira}`, IKI_ADIM, runId);
+      await kosuKaydet(dizin, testId, runId, 'failed', { adimlar: adimSonuclari(['passed', 'failed'], 'x') });
+    }
+    await writeFile(join(dizin.kok, 'runs', kosular[0] ?? '', 'video.webm'), Buffer.from('not a webm file'));
+    if (!windows) await symlink(join(disari, 'video.webm'), join(dizin.kok, 'runs', kosular[1] ?? '', 'video.webm'));
+    const buyuk = join(dizin.kok, 'runs', kosular[2] ?? '', 'video.webm');
+    await writeFile(buyuk, WEBM);
+    await truncate(buyuk, VIDEO_SINIRI + 1);
+
+    const sonuc = await calistir(['--cwd', cwd, '--output', 'json', 'test', 'report', '--all']);
+
+    expect(sonuc.kod).toBe(0);
+    expect((JSON.parse(sonuc.stdout) as { data: { videos: number } }).data.videos).toBe(0);
+    expect(await dosyaListesi(join(dizin.kok, 'report'))).toEqual(['index.html', 'kobay-report.json']);
+    const htmlMetni = await raporHtmli(cwd);
+    expect(htmlMetni).not.toContain('<video');
+    expect(htmlMetni).not.toContain('not redacted');
+    expect(htmlMetni).toContain('The run video is larger than 50 MB, so it was not added to the report.');
   });
 
   it('rejects missing selection, --all with IDs and unknown IDs as usage errors', async () => {

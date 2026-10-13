@@ -13,6 +13,7 @@ const sahteler = vi.hoisted(() => ({
 vi.mock('../../src/kesif/index.js', async (asilModul) => ({
   ...(await asilModul<typeof import('../../src/kesif/index.js')>()),
   kesfet: vi.fn(async () => { throw new Error('Bu testte tam keşif çalışmamalı'); }),
+  kesfetAyrintili: vi.fn(async () => { throw new Error('Bu testte tam keşif çalışmamalı'); }),
   sayfayiYenile: vi.fn(async ({ url }: { url: string }) => {
     sahteler.yenilenenUrl = url;
     return sahteler.yeniSayfa as Sayfa;

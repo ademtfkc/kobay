@@ -4,7 +4,16 @@ import { authOriginleriDogrula, type Harita, type Kimlik, type Sayfa } from '../
 import { girisFormuBul } from './giris.js';
 import { gez } from './gezgin.js';
 import { girisKorumasiKur, girisKorumasiSonDenetim } from './giris-korumasi.js';
-import { girisiGonder, izinliOriginler, kimlikOriginDogrula, loginUrlDogrula, oturumDurumunuYaz } from './oturum.js';
+import {
+  girisiGonder,
+  izinliOriginler,
+  kimlikOriginDogrula,
+  loginUrlDogrula,
+  oturumDurumunuSil,
+  oturumDurumunuYaz,
+  type GirisSayfaMesaji,
+  type GirisSonucu,
+} from './oturum.js';
 import { sayfaOzeti } from './sayfa-ozeti.js';
 
 export interface KesifSecenekleri {
@@ -24,8 +33,22 @@ export interface KesifSecenekleri {
   ekranGoruntusuDizini?: string;
 }
 
+/**
+ * Keşif sonucu. `girisSayfaMesaji` giriş reddedildiğinde sayfanın gösterdiği uyarıdır; haritanın
+ * parçası değildir (diske yazılmaz), yalnız giriş hatası mesajına eklenir.
+ */
+export interface KesifSonucu {
+  harita: Harita;
+  girisSayfaMesaji?: GirisSayfaMesaji;
+}
+
 /** Uygulamayı güvenli bağlantılarla gezip test üretimine uygun bir harita çıkarır. */
 export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
+  return (await kesfetAyrintili(secenekler)).harita;
+}
+
+/** `kesfet` ile aynı; ayrıca giriş reddedildiyse sayfanın uyarısını döner. */
+export async function kesfetAyrintili(secenekler: KesifSecenekleri): Promise<KesifSonucu> {
   const authOrigins = authOriginleriDogrula(secenekler.baseUrl, secenekler.authOrigins ?? []);
   const hedefOrigin = new URL(secenekler.baseUrl).origin;
   loginUrlDogrula(secenekler.baseUrl, secenekler.loginUrl, authOrigins);
@@ -44,6 +67,9 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
   const derinlik = secenekler.derinlik ?? 3;
   const sayfaZamanAsimiMs = secenekler.sayfaZamanAsimiMs ?? 15_000;
   let girisYapildi = false;
+  /** Giriş denendiyse sonucu; form bulunamadıysa undefined. */
+  let giris: GirisSonucu | undefined;
+  let girisSayfaMesaji: GirisSayfaMesaji | undefined;
   const ilkSayfalar: Sayfa[] = [];
 
   try {
@@ -63,11 +89,22 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
             await sayfa.screenshot({ path: `${secenekler.ekranGoruntusuDizini}/sayfa-1.png` });
           }
         }
-        girisYapildi = await girisiGonder(sayfa, form, secenekler.kimlik, hedefOrigin, authOrigins);
+        giris = await girisiGonder(sayfa, form, secenekler.kimlik, hedefOrigin, authOrigins);
+        girisYapildi = giris.basarili;
+        girisSayfaMesaji = giris.sayfaMesaji;
       }
     }
 
-    await oturumDurumunuYaz(context, secenekler.storageStateYolu);
+    // Kimlik verildiyse oturum yalnız giriş tamamlandıysa yazılır: reddedilen girişte sayfa
+    // parolayı çereze/localStorage'a koymuş olabilir, o durum diske düşmesin.
+    // Reddedilen girişte önceki oturum dosyası da kalmaz (koşucu onu kullanırdı). Form hiç
+    // bulunamadıysa (giriş denenmedi) dosyaya dokunulmaz: geçici algılama hatası geçerli
+    // oturumu silmesin.
+    if (secenekler.kimlik === undefined || girisYapildi) {
+      await oturumDurumunuYaz(context, secenekler.storageStateYolu);
+    } else if (giris?.basarili === false) {
+      await oturumDurumunuSil(secenekler.storageStateYolu);
+    }
 
     const pages = await gez(sayfa, {
       baseUrl: secenekler.baseUrl,
@@ -82,12 +119,13 @@ export async function kesfet(secenekler: KesifSecenekleri): Promise<Harita> {
     // Giriş koruması keşif boyunca kurulu kaldı; giriş sonrası bir sayfa parolayı
     // başka origin'e göndermeye çalıştıysa harita dönmez.
     girisKorumasiSonDenetim(context);
-    return {
+    const harita: Harita = {
       baseUrl: secenekler.baseUrl,
       loggedIn: girisYapildi,
       pages,
       exploredAt: new Date().toISOString(),
     };
+    return girisSayfaMesaji === undefined ? { harita } : { harita, girisSayfaMesaji };
   } finally {
     await context.close();
     await tarayici.close();
@@ -98,13 +136,17 @@ export { girisFormuBul } from './giris.js';
 export { CredentialLeakBlockedError } from './giris-korumasi.js';
 export {
   girisiGonder,
+  girisSayfaMesajiNotu,
   CredentialOriginError,
   GIRIS_DONUS_BEKLEME_MS,
   kimlikOriginDogrula,
   LoginDidNotReturnError,
   LoginFormOriginError,
+  LoginSubmitTimeoutError,
   loginUrlDogrula,
   oturumDurumunuYaz,
+  type GirisSayfaMesaji,
+  type GirisSonucu,
 } from './oturum.js';
 export { sayfaOzeti } from './sayfa-ozeti.js';
 export {

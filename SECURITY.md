@@ -17,9 +17,9 @@ choose **Report a vulnerability**
 Include the kobay version, your OS and Node.js version, the brain you use, the
 steps to reproduce and what an attacker gains.
 
-Do not attach `trace.zip`, screenshots, a failure bundle or anything from
-`.kobay/` without checking it first: traces carry session cookies and
-screenshots are not redacted.
+Do not attach `trace.zip`, screenshots, run videos (`video.webm`), an HTML
+report, a failure bundle or anything from `.kobay/` without checking it first:
+traces carry session cookies, and screenshots and videos are not redacted.
 
 This is a small project maintained in spare time. You will get an answer, but
 there is no response-time guarantee.
@@ -35,7 +35,14 @@ Not in scope: the limits that the README's
 [Security model](README.md#security-model) and
 [Known limitations](README.md#known-limitations) already list. In particular,
 generated tests run as your user with no sandbox, the code check is a lexical
-speed bump with known escapes, the browser is not fenced, screenshots and
-traces are not redacted, and the 307/308 redirect and Web Worker WebSocket
-gaps of the login guard are known. Reports that make one of these worse than
-described are welcome.
+speed bump with known escapes, the browser is not fenced, screenshots, videos and
+traces are not redacted, and these gaps of the login guard are known: HTTP
+redirects (301, 302, 303, 307, 308) from a trusted endpoint to another site
+are detected but not blocked, a WebSocket opened from a Web Worker is not
+intercepted, WebTransport and WebRTC are not checked, DNS prefetch has not
+been tested, and `about:blank`/`srcdoc` frames hide their creator's origin.
+The login guard covers only the browser kobay types the password into: test
+runs or a `test refresh` that reuses a saved session send whatever the app
+sends, session cookies included.
+Use a test account, not a production one. Reports that make one of these
+worse than described are welcome.

@@ -10,6 +10,7 @@ const sahteler = vi.hoisted(() => ({
   errorMessage: undefined as string | undefined,
   loggedIn: false,
   hedefAyakta: true,
+  girisSayfaMesaji: undefined as { tur: 'alinti'; metin: string } | { tur: 'gizlendi' } | undefined,
 }));
 
 const dosyaDurumu = vi.hoisted(() => ({
@@ -39,8 +40,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-vi.mock('../../src/kesif/index.js', () => ({
-  kesfet: vi.fn(async ({ baseUrl }: { baseUrl: string }) => ({
+vi.mock('../../src/kesif/index.js', async (asilModul) => {
+  const kesfet = vi.fn(async ({ baseUrl }: { baseUrl: string }) => ({
     baseUrl,
     loggedIn: sahteler.loggedIn,
     exploredAt: '2026-09-17T00:00:00.000Z',
@@ -48,8 +49,18 @@ vi.mock('../../src/kesif/index.js', () => ({
       url: `${baseUrl}/`, title: 'Ana sayfa', headings: ['Ana sayfa'], links: [],
       forms: [], buttons: [], menu: [],
     }],
-  })),
-}));
+  }));
+  const { girisSayfaMesajiNotu } = await asilModul<typeof import('../../src/kesif/index.js')>();
+  return {
+    girisSayfaMesajiNotu,
+    kesfet,
+    // CLI ayrıntılı keşfi kullanır; sahte keşif `kesfet` sahtesinden geçer (çağrı sayımı ortak kalır).
+    kesfetAyrintili: vi.fn(async (secenekler: { baseUrl: string }) => ({
+      harita: await kesfet(secenekler),
+      ...(sahteler.girisSayfaMesaji === undefined ? {} : { girisSayfaMesaji: sahteler.girisSayfaMesaji }),
+    })),
+  };
+});
 
 vi.mock('../../src/kos/index.js', () => ({
   hedefAyaktaMi: vi.fn(async () => sahteler.hedefAyakta),
@@ -98,7 +109,7 @@ import {
   testRun,
 } from '../../src/cli/komutlar/index.js';
 import { kesfet } from '../../src/kesif/index.js';
-import { CHROMIUM_ONERISI, nodeSurumuYeterliMi } from '../../src/cli/komutlar/doctor.js';
+import { CHROMIUM_ONERISI, gitBashDenetle, nodeSurumuYeterliMi } from '../../src/cli/komutlar/doctor.js';
 
 function metinTopla(akis: PassThrough): { oku: () => string } {
   let metin = '';
@@ -185,6 +196,7 @@ afterEach(() => {
   sahteler.kosturHatasi = undefined;
   sahteler.errorMessage = undefined;
   sahteler.loggedIn = false;
+  sahteler.girisSayfaMesaji = undefined;
   sahteler.hedefAyakta = true;
   dosyaDurumu.rmKosulu = undefined;
   dosyaDurumu.renameKosulu = undefined;
@@ -414,6 +426,51 @@ describe('CLI komut fonksiyonları', () => {
     expect(sonuc.json).toEqual({
       error: expect.objectContaining({ code: 'PermissionError' }),
     });
+    // Sayfa uyarısı yoksa mesaj A6 öncesiyle birebir aynı.
+    expect(JSON.stringify(sonuc.json)).toContain('"Login failed; check the username, the password, and the login URL"');
+  });
+
+  it('A6: başarısız girişte sayfanın uyarısı etiketli alıntı olarak eklenir, haritaya yazılmaz', async () => {
+    const cwd = await geciciDizin();
+    await projectCreate({
+      cwd,
+      url: 'http://uygulama.test',
+      login: { username: 'yanlis', password: 'yanlis' },
+      beyin: { adaptor: 'sahte' },
+    });
+    sahteler.girisSayfaMesaji = { tur: 'alinti', metin: 'Invalid username or password' };
+
+    const sonuc = await explore({ cwd });
+    expect(sonuc.exitCode).toBe(5);
+    expect(sonuc.json).toEqual({
+      error: expect.objectContaining({
+        code: 'PermissionError',
+        message: 'Login failed; check the username, the password, and the login URL. The page showed this message'
+          + ' (untrusted page text, quoted): "Invalid username or password"',
+      }),
+    });
+    await expect(access(join(cwd, '.kobay', 'map.json'))).rejects.toThrow();
+  });
+
+  it('A6: uyarı gizlendiyse yalnız "withheld" notu eklenir', async () => {
+    const cwd = await geciciDizin();
+    await projectCreate({
+      cwd,
+      url: 'http://uygulama.test',
+      login: { username: 'yanlis', password: 'yanlis' },
+      beyin: { adaptor: 'sahte' },
+    });
+    sahteler.girisSayfaMesaji = { tur: 'gizlendi' };
+
+    const sonuc = await explore({ cwd });
+    expect(sonuc.exitCode).toBe(5);
+    expect(sonuc.json).toEqual({
+      error: expect.objectContaining({
+        code: 'PermissionError',
+        message: 'Login failed; check the username, the password, and the login URL.'
+          + ' The page showed a message; kobay withheld it to protect credentials.',
+      }),
+    });
   });
 
   it('yarım hata paketini exit 4 olarak eşler', async () => {
@@ -632,7 +689,8 @@ describe('CLI komut fonksiyonları', () => {
     expect(hata.oku()).toBe('');
     expect(cikti.oku()).toBe(`${sonuc.metin ?? ''}\n`);
     expect(cikti.oku()).not.toContain('\t');
-    expect(cikti.oku().trim().split('\n')).toHaveLength(6);
+    // Windows'ta fazladan bir `Git Bash` satırı gelir.
+    expect(cikti.oku().trim().split('\n')).toHaveLength(process.platform === 'win32' ? 7 : 6);
 
     const jsonCikti = new PassThrough();
     const jsonHata = new PassThrough();
@@ -1088,6 +1146,126 @@ describe('hata mesajları eyleme yönlendirir', () => {
     expect(cliYok.mesaj).not.toContain('cli_missing');
     expect(basarisiz(new BrainError('schema')).mesaj).toContain('.kobay/logs/');
     expect(basarisiz(new BrainError('key_missing')).mesaj).toContain('OPENROUTER_API_KEY');
+  });
+
+  describe('doctor Git Bash denetimi', () => {
+    const programFiles = 'C:\\Program Files';
+    const dosyalar = (...yollar: string[]) => async (yol: string) => yollar.includes(yol);
+
+    it('win32 dışında satır yoktur', async () => {
+      for (const platform of ['darwin', 'linux'] as const) {
+        const sonuc = await gitBashDenetle({
+          platform, ortam: { ProgramFiles: programFiles }, dosyaVar: dosyalar(`${programFiles}\\Git\\bin\\bash.exe`),
+        });
+        expect(sonuc).toBeNull();
+      }
+    });
+
+    it('Program Files altında Git Bash varsa ok', async () => {
+      const sonuc = await gitBashDenetle({
+        platform: 'win32', ortam: { ProgramFiles: programFiles }, dosyaVar: dosyalar(`${programFiles}\\Git\\bin\\bash.exe`),
+      });
+      expect(sonuc?.ok).toBe(true);
+    });
+
+    it('CLAUDE_CODE_GIT_BASH_PATH geçerli bir bash.exe ise ok, öneri yok', async () => {
+      const yol = 'D:\\Tools\\Git\\bin\\bash.exe';
+      const sonuc = await gitBashDenetle({ platform: 'win32', ortam: { CLAUDE_CODE_GIT_BASH_PATH: yol }, dosyaVar: dosyalar(yol) });
+      expect(sonuc?.ok).toBe(true);
+      expect(sonuc?.oneri).toBe('');
+    });
+
+    it('geçersiz env yolu yok sayılır; ProgramFiles adayı varsa ok', async () => {
+      const sonuc = await gitBashDenetle({
+        platform: 'win32',
+        ortam: { CLAUDE_CODE_GIT_BASH_PATH: 'D:\\yok\\bash.exe', ProgramFiles: programFiles },
+        dosyaVar: dosyalar(`${programFiles}\\Git\\bin\\bash.exe`),
+      });
+      expect(sonuc?.ok).toBe(true);
+    });
+
+    it('geçersiz env yolu ve aday yoksa ok değil; optional ve geçersiz yolu söyler', async () => {
+      const yol = 'D:\\yok\\bash.exe';
+      const sonuc = await gitBashDenetle({
+        platform: 'win32', ortam: { CLAUDE_CODE_GIT_BASH_PATH: yol, ProgramFiles: programFiles }, dosyaVar: dosyalar(),
+      });
+      expect(sonuc?.ok).toBe(false);
+      expect(sonuc?.oneri.startsWith('optional:')).toBe(true);
+      expect(sonuc?.oneri).toContain(yol);
+      expect(sonuc?.oneri).toContain('is ignored');
+    });
+
+    it('env System32 bash.exe (WSL) ise reddedilir; aday yoksa ok değil', async () => {
+      const wsl = 'c:/WINDOWS/system32/BASH.EXE';
+      const sonuc = await gitBashDenetle({
+        platform: 'win32', ortam: { CLAUDE_CODE_GIT_BASH_PATH: wsl }, dosyaVar: async () => true,
+      });
+      expect(sonuc?.ok).toBe(false);
+      expect(sonuc?.oneri).toContain(wsl);
+    });
+
+    it('env System32 bash.exe ama aday varsa ok', async () => {
+      const sonuc = await gitBashDenetle({
+        platform: 'win32',
+        ortam: { CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Windows\\System32\\bash.exe', ProgramFiles: programFiles },
+        dosyaVar: dosyalar('C:\\Windows\\System32\\bash.exe', `${programFiles}\\Git\\bin\\bash.exe`),
+      });
+      expect(sonuc?.ok).toBe(true);
+    });
+
+    it('env yolu sh.exe ise geçerli sayılır', async () => {
+      const yol = 'D:\\Tools\\Git\\bin\\sh.exe';
+      const sonuc = await gitBashDenetle({ platform: 'win32', ortam: { CLAUDE_CODE_GIT_BASH_PATH: yol }, dosyaVar: dosyalar(yol) });
+      expect(sonuc?.ok).toBe(true);
+    });
+
+    it('env yolu mevcut ama bash/sh değilse (git.exe) yok sayılır', async () => {
+      const yol = 'D:\\Tools\\Git\\cmd\\git.exe';
+      const sonuc = await gitBashDenetle({
+        platform: 'win32', ortam: { CLAUDE_CODE_GIT_BASH_PATH: yol }, dosyaVar: dosyalar(yol),
+      });
+      expect(sonuc?.ok).toBe(false);
+      expect(sonuc?.oneri).toContain(yol);
+      expect(sonuc?.oneri).toContain('is ignored');
+    });
+
+    it('ileri eğik çizgili ve büyük harfli env yolu geçerli sayılır', async () => {
+      const yol = 'D:/Tools/Git/bin/BASH.EXE';
+      const sonuc = await gitBashDenetle({ platform: 'win32', ortam: { CLAUDE_CODE_GIT_BASH_PATH: yol }, dosyaVar: dosyalar(yol) });
+      expect(sonuc?.ok).toBe(true);
+    });
+
+    it('System32 bash.exe (WSL) Git Bash sayılmaz', async () => {
+      const wsl = 'C:\\Windows\\System32\\bash.exe';
+      const sonuc = await gitBashDenetle({
+        platform: 'win32', ortam: { ProgramFiles: programFiles, SystemRoot: 'C:\\Windows', PATH: 'C:\\Windows\\System32' },
+        dosyaVar: dosyalar(wsl),
+      });
+      expect(sonuc?.ok).toBe(false);
+      expect(sonuc?.oneri).toContain('Git for Windows');
+      expect(sonuc?.oneri).toContain('optional');
+    });
+
+    it('doctor win32 enjekte edilince Git Bash satırı verir; ok satırda öneri yoktur', async () => {
+      const cwd = await geciciDizin('kobay-doctor-gitbash-');
+      const yok = await doctor({ cwd, platform: 'win32', ortam: {}, dosyaVar: dosyalar() });
+      const satirlar = (yok.metin ?? '').split('\n');
+      expect(satirlar).toHaveLength(7);
+      expect(satirlar.find((s) => s.includes('Git Bash'))).toContain('✗ Git Bash — optional:');
+      const kontroller = yok.json as Array<{ name: string; ok: boolean; hint?: string }>;
+      expect(kontroller.find((k) => k.name === 'Git Bash')?.hint).toBeTruthy();
+
+      const var_ = await doctor({
+        cwd, platform: 'win32', ortam: { ProgramFiles: programFiles }, dosyaVar: dosyalar(`${programFiles}\\Git\\bin\\bash.exe`),
+      });
+      const satir = (var_.json as Array<{ name: string; ok: boolean; hint?: string }>).find((k) => k.name === 'Git Bash');
+      expect(satir?.ok).toBe(true);
+      expect(satir).not.toHaveProperty('hint');
+
+      const mac = await doctor({ cwd, platform: 'darwin', ortam: {}, dosyaVar: dosyalar() });
+      expect((mac.metin ?? '').split('\n')).toHaveLength(6);
+      expect(mac.metin).not.toContain('Git Bash');
+    });
   });
 
   it('doctor eksik bileşen için yapılacak işi yazar', async () => {

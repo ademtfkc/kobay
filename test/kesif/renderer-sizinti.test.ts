@@ -101,9 +101,12 @@ function formSayfasi(senaryo: string): string {
     betik = "e.preventDefault();location.href='/belge-302';";
   } else if (senaryo === 'popup-302') {
     betik = "e.preventDefault();window.open('/belge-302');setTimeout(()=>e.target.submit(),100);";
-  } else if (senaryo === 'kalan-risk-302-postmessage') {
-    // Kalan risk: 302 ile yabancıya yönlenen iframe'e parola postMessage ile tekrar tekrar verilir.
-    betik = "e.preventDefault();const i=document.createElement('iframe');i.src='/belge-302';document.body.append(i);"
+  } else if (senaryo === 'kalan-risk-302-postmessage' || senaryo === 'kalan-risk-302-postmessage-oncul') {
+    // 302 ile yabancıya yönlenen iframe'e parola postMessage ile tekrar tekrar verilir. `-oncul`
+    // türünde giriş sayfası yabancı origin'den parola yazılmadan önce betik yükler (eski öncül
+    // küme zehirlemesi, Codex P1-1): bu, kimlikli evrede o origin'e ayrıcalık vermez.
+    if (senaryo === 'kalan-risk-302-postmessage-oncul') once = `<script src="${yabanciOrigin}/oncul.js"></script>`;
+    betik ="e.preventDefault();const i=document.createElement('iframe');i.src='/belge-302';document.body.append(i);"
       + "setInterval(()=>i.contentWindow&&i.contentWindow.postMessage(p,'*'),50);setTimeout(()=>e.target.submit(),500);";
   } else if (senaryo === 'onceden-blob') {
     once = `<iframe id="yabanci" src="${yabanciOrigin}/blob-tasi"></iframe>`;
@@ -278,7 +281,7 @@ async function girisDene(senaryo: string, authOrigins: readonly string[] = []): 
     let hata: unknown;
     let basarili: boolean | undefined;
     try {
-      basarili = await girisiGonder(sayfa, form, kimlik, uygulamaOrigin, authOrigins, 750, 750);
+      basarili = (await girisiGonder(sayfa, form, kimlik, uygulamaOrigin, authOrigins, 750, 750)).basarili;
     } catch (yakalanan) {
       hata = yakalanan;
     }
@@ -483,16 +486,27 @@ describe('giriş penceresinde renderer belge sızıntısı', () => {
     expect(yabanciIstekleri.some((istek) => istek.startsWith('GET /yonlendirilmis-belge '))).toBe(true);
   });
 
-  it('kalan risk (spec §7): 302 ile yüklenen yabancı iframe postMessage ile kodlanmış parolayı alır; giriş yine reddedilir', async (context) => {
-    // Kabul edilmiş kalan riski sabitler: 302 ayağı kesilemez, yalnız tespit edilir. Sayfa parolayı
-    // yönlendirilmiş yabancı belgeye postMessage ile geçirir, o da kodlayıp serbest bir GET ile
-    // dışarı çıkarır. Bu test korumayı değil, korumanın KAPATMADIĞI yolu ölçer.
+  it('302 ile yüklenen yabancı iframe postMessage ile kodlanmış parolayı alır ama GET\'le dışarı çıkaramaz; giriş reddedilir', async (context) => {
+    // 302 ayağı kesilemez, yalnız tespit edilir: yabancı belge yüklenir ve parolayı postMessage ile
+    // alır. Kodlayıp kendi origin'ine attığı GET ise kimlikli evre kuralıyla kesilir.
+    // Kimlikli bağlam çıkış spec'i §5(e2), §6.
     if (!ortamMumkun(context)) return;
     const sonuc = await girisDene('kalan-risk-302-postmessage');
     expect(String(sonuc.hata)).toContain('Login refused: kobay detected 1 cross-origin document redirect');
     expect(String(sonuc.hata)).toContain(`add it with --auth-origin ${yabanciOrigin}`);
     expect(yabanciIstekleri.some((istek) => istek.startsWith('GET /yonlendirilmis-belge '))).toBe(true);
-    expect(yabanciParolayiGordu()).toBe(true);
+    expect(yabanciParolayiGordu()).toBe(false);
+  });
+
+  it('302 ile yüklenen yabancı iframe, giriş sayfasının parola yazılmadan önce kullandığı origin\'e de kodlanmış parolayı GET ile çıkaramaz; giriş reddedilir', async (context) => {
+    // Öncül küme zehirlemesine karşı kilit (kimlikli bağlam çıkış spec'i §6 Revizyon 1): sayfa
+    // yabancı origin'i parola yazılmadan önce kullanmış olsa da kimlikli evrede oraya GET kesilir.
+    if (!ortamMumkun(context)) return;
+    const sonuc = await girisDene('kalan-risk-302-postmessage-oncul');
+    expect(yabanciIstekleri.some((istek) => istek.startsWith('GET /oncul.js '))).toBe(true);
+    expect(String(sonuc.hata)).toContain('Login refused: kobay detected 1 cross-origin document redirect');
+    expect(yabanciIstekleri.some((istek) => istek.startsWith('GET /yonlendirilmis-belge '))).toBe(true);
+    expect(yabanciParolayiGordu()).toBe(false);
   });
 
   it('srcdoc içinden parolayı taşıyan fetch mevcut sızıntı kuralıyla kesilir', async (context) => {

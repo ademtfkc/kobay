@@ -99,6 +99,7 @@ export async function testReport(a: {
       tests: sonuc.tests,
       counts: sonuc.counts,
       screenshots: sonuc.screenshots,
+      videos: sonuc.videos,
       // Yalnız bir şey yerinde bırakıldıysa: kullanıcı yolu bilsin.
       ...(sonuc.keptAside.length === 0 ? {} : { keptAside: sonuc.keptAside }),
       // Ajan istemleri: yalnız düşen/engellenen/sonuçsuz test varsa (CI bunları PR yorumunda kullanabilir).
@@ -110,11 +111,13 @@ export async function testReport(a: {
     const metin = [
       `Report written: ${cogul(sonuc.tests.length, 'test')} (${c.passed} passed, ${c.failed} failed,`
       + ` ${c.blocked} blocked, ${c.inconclusive} inconclusive, ${c.notRun} not run),`
-      + ` ${cogul(sonuc.screenshots, 'screenshot')}.`,
+      + ` ${cogul(sonuc.screenshots, 'screenshot')}, ${cogul(sonuc.videos, 'video')}.`,
       // Yol kullanıcının --out'undan gelir; insan çıktısında kontrol karakteri ham basılmaz (JSON zarfı aynı kalır).
       `Open: ${terminaleGuvenli(sonuc.indexPath)}`,
       ...(ozetHedefi === undefined ? [] : [`Summary written: ${terminaleGuvenli(ozetHedefi)}`]),
-      ...(sonuc.screenshots === 0 ? [] : ['Screenshots are not redacted; review them before sharing the report.']),
+      ...(sonuc.screenshots === 0 && sonuc.videos === 0
+        ? []
+        : ['Screenshots and videos are not redacted; review them before sharing the report.']),
     ].join('\n');
     return basariliMetin(veri, metin);
   });

@@ -1,7 +1,7 @@
 import { gizliDegerleriMaskele } from '../beyin/ortak.js';
 import { metindekiKimligiGizle } from '../depo/adres.js';
 import type { FailureKind, Oncelik, Verdict } from '../depo/index.js';
-import { dikkatGerekenMi, duzeltmeIstemi, hepsiniDuzeltIstemi, type IstemBaglami } from './istem.js';
+import { dikkatGerekenMi, duzeltmeIstemi, hataDokumuMetni, hepsiniDuzeltIstemi, topluIstemBasligi, type IstemBaglami } from './istem.js';
 import { dikkatCumlesi } from './ozet.js';
 
 /**
@@ -209,6 +209,10 @@ export interface RaporTesti {
   note?: string;
   /** Koşunun düşen adımı (result.json `failedStepIndex`). */
   failedStepIndex?: number;
+  /** Rapor klasörüne göre video yolu; yalnız `assets/<runId>/video.webm` biçiminde kurulur. */
+  video?: string;
+  /** Video rapora eklenemediyse kısa görünür not (ör. boyut tavanı aşıldı). */
+  videoNote?: string;
 }
 
 export interface RaporSayimlari {
@@ -387,6 +391,15 @@ function hataBlogu(test: RaporTesti): GuvenliHtml {
   return html`<h3 class="bolum-basligi">Error</h3><pre class="hata">${test.errorMessage}</pre>`;
 }
 
+/** Koşu videosu: kontrollü, kendiliğinden oynamaz; yalnız üst veri önceden yüklenir. */
+function videoBlogu(test: RaporTesti): GuvenliHtml {
+  if (test.video !== undefined) {
+    return html`<h3 class="bolum-basligi">Video</h3><video class="video" controls preload="metadata" src="${test.video}">Your browser cannot play this video. Open <a href="${test.video}">${test.video}</a> instead.</video>`;
+  }
+  if (test.videoNote !== undefined) return html`<p class="not" role="note">${test.videoNote}</p>`;
+  return html``;
+}
+
 function testIcerigi(test: RaporTesti, baglam: IstemBaglami): GuvenliHtml {
   return html`${ozellikler(test)}
 ${test.note === undefined ? html`` : html`<p class="not" role="note">${test.note}</p>`}
@@ -395,6 +408,7 @@ ${dikkatGerekenMi(test) ? istemKutusu('Fix with your coding agent', 'Paste this 
 ${test.failure === undefined ? hataBlogu(test) : html``}
 <h3 class="bolum-basligi">Steps</h3>
 ${adimListesi(test)}
+${videoBlogu(test)}
 ${test.failure === undefined ? html`` : hataBlogu(test)}
 ${kodBlogu(test)}`;
 }
@@ -519,6 +533,7 @@ code { overflow-wrap: anywhere; }
 .ozet { background: var(--yuzey); border: 1px solid var(--cizgi); border-radius: 14px; box-shadow: var(--golge); padding: 24px 20px 20px; }
 .ozet h1 { font-family: var(--goruntu); font-weight: 800; font-size: clamp(1.9rem, 6vw, 2.9rem); line-height: 1.08; letter-spacing: -.025em; margin: 0; }
 .ozet-alt { margin: 8px 0 20px; color: var(--silik); font-size: 1.05rem; }
+.ozet-dokum { margin: -12px 0 20px; font-size: .95rem; font-weight: 600; }
 .cubuk { display: flex; gap: 3px; height: 14px; border-radius: 7px; overflow: hidden; background: var(--bos-zemin); }
 .dilim { display: block; min-width: 6px; }
 .dilim-passed { background: var(--gecti); } .dilim-failed { background: var(--dustu); } .dilim-blocked { background: var(--engel); }
@@ -629,6 +644,7 @@ pre.hata { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dustu); 
 .kare img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; object-position: top left; border: 1px solid var(--cizgi); border-radius: 8px; background: var(--yuzey-2); }
 .kare:hover img { border-color: var(--vurgu); }
 .kare-etiket { display: block; font-size: .72rem; margin-top: 4px; }
+.video { display: block; width: 100%; max-width: 720px; height: auto; border: 1px solid var(--cizgi); border-radius: 8px; background: var(--yuzey-2); }
 
 .kod-blogu { margin-top: 20px; }
 .kod-blogu summary { cursor: pointer; font-weight: 650; font-size: .92rem; }
@@ -686,15 +702,16 @@ function raporGovdesi(veri: RaporVerisi): string {
   const oran = kosan === 0 ? '–' : `${Math.round((veri.counts.passed / kosan) * 100)}%`;
   const { baslik, alt } = anaCumle(veri);
   const hepsi = hepsiniDuzeltIstemi(veri.tests, baglam);
-  // Uyarı yalnız raporda ekran görüntüsü varken anlamlı; boş raporda basılmaz.
-  const gorselVar = veri.tests.some((test) => test.steps.some((adim) => adim.screenshot !== undefined));
+  const dokum = hataDokumuMetni(veri.tests);
+  // Uyarı yalnız raporda ekran görüntüsü ya da video varken anlamlı; boş raporda basılmaz.
+  const gorselVar = veri.tests.some((test) => test.video !== undefined || test.steps.some((adim) => adim.screenshot !== undefined));
 
   const govde = html`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'">
 <meta name="referrer" content="no-referrer">
 <title>${baslik} · kobay run report</title>
 <style>${new GuvenliHtml(STIL, URETICI)}</style>
@@ -708,6 +725,7 @@ function raporGovdesi(veri: RaporVerisi): string {
 <section class="ozet" aria-label="Summary">
 <h1>${baslik}</h1>
 <p class="ozet-alt">${alt}</p>
+${dokum === null ? html`` : html`<p class="ozet-dokum">${dokum}</p>`}
 ${kosuCubugu(veri)}
 <dl class="olcumler">
 <div><dt>Pass rate</dt><dd class="buyuk">${oran}</dd></div>
@@ -715,9 +733,9 @@ ${kosuCubugu(veri)}
 <div><dt>Base URL</dt><dd><code>${veri.baseUrl}</code></dd></div>
 <div><dt>Generated</dt><dd class="veri">${zaman(veri.generatedAt)}</dd></div>
 </dl>
-${gorselVar ? html`<p class="uyari" role="note"><svg class="ikon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6l7 12.6H1z" stroke-linejoin="round" stroke-width="1.2"/><path d="M8 6v3.6M8 11.6v.2" fill="none" stroke-width="1.6" stroke-linecap="round"/></svg><span><strong>Screenshots are not redacted.</strong> They may show any data your app displayed during the run. Do not share this report publicly before reviewing them.</span></p>` : html``}
+${gorselVar ? html`<p class="uyari" role="note"><svg class="ikon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.6l7 12.6H1z" stroke-linejoin="round" stroke-width="1.2"/><path d="M8 6v3.6M8 11.6v.2" fill="none" stroke-width="1.6" stroke-linecap="round"/></svg><span><strong>Screenshots and videos are not redacted.</strong> They may show any data your app displayed during the run. Do not share this report publicly before reviewing them.</span></p>` : html``}
 </section>
-${hepsi === null ? html`` : html`<section class="bolum">${istemKutusu('Fix all failures with your coding agent', `One prompt for all ${dikkat.length} tests that need attention. Paste it into Claude Code, Codex or Cursor, opened in this project.`, hepsi, 'prompt-all')}</section>`}
+${hepsi === null ? html`` : html`<section class="bolum">${istemKutusu(`${topluIstemBasligi(veri.tests)} with your coding agent`, `One prompt for all ${dikkat.length} tests that need attention. Paste it into Claude Code, Codex or Cursor, opened in this project.`, hepsi, 'prompt-all')}</section>`}
 ${veri.tests.length === 0
     ? html`<p class="bos bolum">No tests were selected. Create tests with <code>kobay test plan generate</code>, run them with <code>kobay test run --all</code>, then run <code>kobay test report --all</code> again.</p>`
     : html``}

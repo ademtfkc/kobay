@@ -1,5 +1,5 @@
 import type { RaporSayimlari, RaporTesti } from './html.js';
-import { dikkatGerekenMi, guvenilmezBlok } from './istem.js';
+import { guvenilmezBlok, hataDokumuMetni, topluIstemBasligi } from './istem.js';
 
 /**
  * `kobay test report --summary`: PR yorumuna ve iş özetine hazır GitHub-flavored
@@ -123,7 +123,7 @@ export function ozetMarkdown(g: OzetGirdisi): string {
   const sinir = g.sinir ?? OZET_SINIRI;
   const maxIstem = Math.max(0, g.maxIstem ?? VARSAYILAN_ISTEM_SAYISI);
   const adlar = new Map(g.testler.map((test) => [test.id, test.name]));
-  const dikkatSayisi = g.testler.filter(dikkatGerekenMi).length;
+  const dokum = hataDokumuMetni(g.testler);
 
   const bas = [
     OZET_ISARETI,
@@ -131,6 +131,7 @@ export function ozetMarkdown(g: OzetGirdisi): string {
     '',
     durumSatiri(g.testler, g.counts),
     '',
+    ...(dokum === null ? [] : [dokum, '']),
     ...sayiTablosu(g.counts),
     '',
   ].join('\n');
@@ -146,7 +147,7 @@ export function ozetMarkdown(g: OzetGirdisi): string {
   ));
   const hepsiBlogu = g.fixAllPrompt === undefined
     ? undefined
-    : istemBlogu(`Fix all ${dikkatSayisi} tests that need attention with your coding agent`, g.fixAllPrompt);
+    : istemBlogu(`${topluIstemBasligi(g.testler)} with your coding agent`, g.fixAllPrompt);
 
   const kur = (tablo: string[], istemSayisi: number, hepsi: boolean, kesildi: boolean): string => {
     g.kurulumIzleyici?.();

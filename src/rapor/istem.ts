@@ -267,22 +267,133 @@ export function duzeltmeIstemi(test: RaporTesti, baglam: IstemBaglami): string {
   ].join('\n');
 }
 
+/** Kodun değişmesini gerektiren hata türleri: yalnız bunlar toplu istemin "Fix" grubuna girer. */
+const KOD_DEGISTIREN_TURLER: ReadonlySet<FailureKind> = new Set<FailureKind>(['product_bug', 'product_changed', 'test_bug']);
+
+/** Toplu istemin "Fix" grubu: düşen ve analizi kodda bir şeyin değişmesi gerektiğini söyleyen test. */
+export function duzeltmeGrubuMu(test: RaporTesti): boolean {
+  return test.verdict === 'failed' && test.failureKind !== undefined && KOD_DEGISTIREN_TURLER.has(test.failureKind);
+}
+
+/** Dikkat isteyen testler iki gruba ayrılır: kod değişikliği (`duzelt`) ve inceleme (`incele`). Sıra: düşen, engellenen, sonuçsuz. */
+export function istemGruplari(testler: readonly RaporTesti[]): { duzelt: RaporTesti[]; incele: RaporTesti[] } {
+  const sira: Record<string, number> = { failed: 0, blocked: 1, inconclusive: 2 };
+  const dikkat = testler.filter(dikkatGerekenMi).sort((a, b) => (sira[a.verdict] ?? 3) - (sira[b.verdict] ?? 3));
+  return { duzelt: dikkat.filter(duzeltmeGrubuMu), incele: dikkat.filter((test) => !duzeltmeGrubuMu(test)) };
+}
+
+/** Toplu istem kutusunun (HTML) ve özet bloğunun (Markdown) başlığı; gruplara göre doğru konuşur. */
+export function topluIstemBasligi(testler: readonly RaporTesti[]): string {
+  const { duzelt, incele } = istemGruplari(testler);
+  if (incele.length === 0) return `Fix all ${duzelt.length} tests that need attention`;
+  if (duzelt.length === 0) return `Review the ${incele.length} test${incele.length === 1 ? '' : 's'} that need attention`;
+  return `Fix ${duzelt.length} test${duzelt.length === 1 ? '' : 's'}, review ${incele.length} more`;
+}
+
+/** Özetteki hata türü dökümünün sırası (ciddiyete göre) ve analizsiz koşuların etiketi. */
+const DOKUM_SIRASI: readonly FailureKind[] = ['product_bug', 'product_changed', 'test_bug', 'env', 'flaky', 'unknown'];
+export const ANALIZSIZ_ETIKETI = 'not analysed';
+
+/**
+ * Düşen testlerin türe göre sayısı, ciddiyet sırasıyla; sıfır olanlar yok. Analizi atlanmış
+ * (`--no-analysis`) ya da türü olmayan düşen koşu `not analysed` sayılır, `unknown`'a karışmaz.
+ * HTML raporu ve Markdown özeti aynı sayıyı buradan alır.
+ */
+export function hataDokumu(testler: readonly RaporTesti[]): Array<{ etiket: string; sayi: number }> {
+  const sayilar = new Map<string, number>();
+  for (const test of testler) {
+    if (test.verdict !== 'failed') continue;
+    const etiket = analizsizMi(test) || test.failureKind === undefined ? ANALIZSIZ_ETIKETI : test.failureKind;
+    sayilar.set(etiket, (sayilar.get(etiket) ?? 0) + 1);
+  }
+  return [...DOKUM_SIRASI, ANALIZSIZ_ETIKETI].flatMap((etiket) => {
+    const sayi = sayilar.get(etiket) ?? 0;
+    return sayi > 0 ? [{ etiket, sayi }] : [];
+  });
+}
+
+/** `Failure kinds: 1 test_bug · 1 env · 3 unknown`; düşen test yoksa `null`. */
+export function hataDokumuMetni(testler: readonly RaporTesti[]): string | null {
+  const dokum = hataDokumu(testler);
+  return dokum.length === 0 ? null : `Failure kinds: ${dokum.map((d) => `${d.sayi} ${d.etiket}`).join(' · ')}`;
+}
+
+/** Kanıt var mı: bu koşuya ait analizli paket ve en az bir kanıt kaydı. */
+function kanitliMi(test: RaporTesti): boolean {
+  return paketVar(test) && (test.failure?.evidence.length ?? 0) > 0;
+}
+
+/** İnceleme grubundaki bir test için türe göre tek cümle; yalnız sabit metin ve doğrulanmış değer. */
+function incelemeCumlesi(test: RaporTesti): string {
+  const id = test.id;
+  const rerun = `\`kobay test rerun ${id} --output json\``;
+  if (kodsuzEngelMi(test)) return `it has no up-to-date generated code; run \`kobay test run ${id} --output json\` locally to generate and run it.`;
+  if (test.verdict === 'blocked' || test.failureKind === 'env') {
+    return `bring the environment up and check it with \`kobay doctor --output json\`, then run ${rerun}. Do not change code.`;
+  }
+  if (!kanitliMi(test)) return `get evidence locally with ${rerun}. Do not change code.`;
+  return `read the evidence (\`${ayrintiKomutu(test)}\`) and find the cause. Do not change code.`;
+}
+
 /** İki ya da daha çok test dikkat istiyorsa hepsini sırayla ele alan tek, temizlenmiş istem; yoksa `null`. */
 export function hepsiniDuzeltIstemi(testler: readonly RaporTesti[], baglam: IstemBaglami): string | null {
-  const dikkat = testler.filter(dikkatGerekenMi);
-  if (dikkat.length < 2) return null;
-  const sira: Record<string, number> = { failed: 0, blocked: 1, inconclusive: 2 };
-  const sirali = [...dikkat].sort((a, b) => (sira[a.verdict] ?? 3) - (sira[b.verdict] ?? 3));
-  const liste = sirali.map((test, no) => {
-    const tur = test.verdict === 'failed' && test.failureKind !== undefined ? `, failure kind \`${test.failureKind}\`` : '';
+  const { duzelt, incele } = istemGruplari(testler);
+  const sirali = [...duzelt, ...incele];
+  if (sirali.length < 2) return null;
+  const duzeltSatiri = (test: RaporTesti, no: number): string => {
+    const tur = test.failureKind === undefined ? '' : `, failure kind \`${test.failureKind}\``;
     const kaynak = paketVar(test) ? 'evidence' : 'details';
-    return `${no + 1}. ${test.id}: ${test.verdict}${tur}; ${kaynak}: \`${ayrintiKomutu(test)}\``;
-  });
+    return `${no}. ${test.id}: ${test.verdict}${tur}; ${kaynak}: \`${ayrintiKomutu(test)}\``;
+  };
+  const inceleSatiri = (test: RaporTesti, no: number): string => {
+    const tur = test.verdict === 'failed' && test.failureKind !== undefined ? `, failure kind \`${test.failureKind}\`` : '';
+    return `${no}. ${test.id}: ${test.verdict}${tur}; ${incelemeCumlesi(test)}`;
+  };
+  const duzeltListe = duzelt.map((test, no) => duzeltSatiri(test, no + 1));
+  const inceleListe = incele.map((test, no) => inceleSatiri(test, duzelt.length + no + 1));
+  const s = (n: number): string => (n === 1 ? 'test' : 'tests');
+  let giris: string[];
+  if (incele.length === 0) {
+    giris = [`Fix the ${duzelt.length} kobay tests that need attention, one at a time, in this order:`, ...duzeltListe];
+  } else if (duzelt.length === 0) {
+    giris = [`Review the ${incele.length} kobay ${s(incele.length)} that need attention, one at a time. None of them is a code change yet:`, ...inceleListe];
+  } else {
+    giris = [
+      `Fix the ${duzelt.length} kobay ${s(duzelt.length)} under "Fix", one at a time, in this order. ${incele.length} more ${incele.length === 1 ? 'needs' : 'need'} review, not a code change.`,
+      'Fix (code change):', ...duzeltListe,
+      'Review (not a code change):', ...inceleListe,
+    ];
+  }
   const ayrintilar = sirali.map((test) => ({ id: test.id, ...guvenilmezAyrinti(test, baglam) }));
   const kesilenler = sirali.filter((_test, sira) => ayrintilar[sira]?.kesildi === true);
+  const duzeltAdimlari = [
+    'For each test' + (incele.length === 0 ? '' : ' under "Fix"') + ':',
+    '1. Run the evidence or details command listed next to it above. After an evidence command, read'
+      + ' `.kobay/failure-out/<ID>/failure.json`.',
+    '2. Act on the failure kind: `product_bug` → fix the app, not the test; `test_bug` → fix'
+      + ' `.kobay/tests/<ID>.spec.ts` (or `kobay test refresh <ID> --output json` if the plan steps are outdated);'
+      + ' `product_changed` → if the UI change was intentional run `kobay test refresh <ID> --output json`,'
+      + ' otherwise revert it in the app.',
+    `3. ${GIT_KURALI.replace('this', 'a failure')}`,
+    '4. Verify with `kobay test rerun <ID> --output json` (`ok: true`, verdict `passed`) before moving on.',
+    '5. If a test still fails after two fix attempts, stop and report to me with what you tried and the output'
+      + ' of its evidence or details command.',
+  ];
+  const incelemeAdimlari = duzelt.length === 0
+    ? [
+      'For each test: do the action in its line above. Do not change app or test code for these tests.',
+      'If you find a real cause, tell me what you found instead of fixing it.',
+    ]
+    : [
+      'For each test under "Review": do the action in its line above. Do not change app or test code for these tests;'
+        + ' if you find a real cause, tell me what you found instead of fixing it.',
+    ];
+  const kapanis = duzelt.length === 0
+    ? `${BUTCE_KURALI} When you are done, tell me what you found for each test.`
+    : `${ZAYIFLATMA.replace('the test pass', 'a test pass')} ${BUTCE_KURALI}`
+      + ` When all fixes are done, run \`kobay test report --all\` and tell me what you changed for each test${incele.length === 0 ? '' : ' and what you found for the others'}.`;
   return [
-    `Fix the ${sirali.length} kobay tests that need attention, one at a time, in this order:`,
-    ...liste,
+    ...giris,
     '',
     UYARI,
     '',
@@ -291,21 +402,10 @@ export function hepsiniDuzeltIstemi(testler: readonly RaporTesti[], baglam: Iste
       ? []
       : ['', `Error output in the block was truncated for ${kesilenler.map((test) => test.id).join(', ')}; get the full output with the evidence or details command listed for that test.`]),
     '',
-    'For each test:',
-    '1. Run the evidence or details command listed next to it above. After an evidence command, read'
-      + ' `.kobay/failure-out/<ID>/failure.json`.',
-    '2. Act on the failure kind: `product_bug` → fix the app, not the test; `test_bug` → fix'
-      + ' `.kobay/tests/<ID>.spec.ts` (or `kobay test refresh <ID> --output json` if the plan steps are outdated);'
-      + ' `product_changed` → if the UI change was intentional run `kobay test refresh <ID> --output json`,'
-      + ' otherwise revert it in the app; `env` or `blocked` → bring the app or environment up, checked with'
-      + ' `kobay doctor --output json`; `inconclusive`, `flaky` or `unknown` → read the evidence and find the cause'
-      + ' before changing anything.',
-    `3. ${GIT_KURALI.replace('this', 'a failure')}`,
-    '4. Verify with `kobay test rerun <ID> --output json` (`ok: true`, verdict `passed`) before moving on.',
-    '5. If a test still fails after two fix attempts, stop and report to me with what you tried and the output'
-      + ' of its evidence or details command.',
+    ...(duzelt.length === 0 ? [] : duzeltAdimlari),
+    ...(duzelt.length === 0 || incele.length === 0 ? [] : ['']),
+    ...(incele.length === 0 ? [] : incelemeAdimlari),
     '',
-    `${ZAYIFLATMA.replace('the test pass', 'a test pass')} ${BUTCE_KURALI}`
-      + ' When all are fixed, run `kobay test report --all` and tell me what you changed for each test.',
+    kapanis,
   ].join('\n');
 }

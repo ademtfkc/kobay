@@ -7,6 +7,199 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-13
+
+### Added
+
+- When the server rejects a login (the URL does not change), the `Login failed`
+  error adds the message the page showed, for example `Login failed; check the
+  username, the password, and the login URL. The page showed this message
+  (untrusted page text, quoted): "Invalid username or password"`. kobay reads
+  visible `role=alert`, `role=status` and `aria-live` regions first, then the
+  lines that appeared next to the login form after submit; at most two parts,
+  160 characters each and 200 in total. The username, the password (including
+  their URL, form, JSON and base64 forms, and their whitespace-collapsed and
+  whitespace-free forms, because the browser collapses spaces in page text)
+  and the saved cookie and storage values are masked as `[redacted]` both in
+  the raw text and after control characters and ANSI escapes are removed.
+  Straight double quotes in the page text become `”`, so the page cannot close
+  the quote. The text is withheld (only `The page showed a message; kobay
+  withheld it to protect credentials.` is added) when kobay cannot build a full
+  secret inventory, the mask fails, a credential still shows up once the parts
+  are joined or the whitespace is removed (a password split across two alerts
+  or a line break), the final quoted text (after joining with ` | `, the quote
+  swap and the cut) still contains a credential, or the page has more than 50
+  alert/status regions or more than 4,096 characters of alert text. Exit code 5 and `PermissionError` are unchanged, and nothing is added
+  when the page shows no message. The text is never written to `map.json`, the
+  session file or logs. A rejected re-login during `kobay test refresh` adds
+  the same sentence.
+  Known limits: kobay reads the page once, after the URL wait (5 s after the
+  click) and the network-idle wait (up to 2 s); a message that appears after
+  that read (slow asynchronous validation) is missed, and the read itself gives
+  up after 2 s. For a live-updating `aria-live` region only the text at that
+  moment is read. A site that sends a wrong password to another origin goes
+  through the `Login did not return to the app origin` error, which carries no
+  page text. A site that changes the URL within the app's own origin on a wrong
+  password (for example `/login?error=1`) is still counted as a successful
+  login and its session file is written; this is older behavior and is not
+  changed here. A visible status region elsewhere on the page (for example a cookie
+  notice with `role=status`) wins over a plain message next to the form. The
+  mask is a fixed list of forms: a credential the page shows in another
+  encoding (base64url, hex, reversed, HTML entities left in text) is not
+  caught. The label is a warning to the reader, not a sandbox for an agent that
+  reads the error. The caps limit what kobay carries out of the page, not the
+  work the page's renderer does to produce the text. A successful login now
+  includes one more page read (up to 2 s) before the fields are filled. A page
+  whose script makes reading its text slow can still delay the login by up to
+  the read limits, because a started page read cannot be cancelled.
+
+- The HTML report summary and the Markdown summary (`--summary`) show a one-line
+  breakdown of the failed tests by failure kind, in severity order and without
+  zero counts (for example `Failure kinds: 1 test_bug · 1 env · 3 unknown`).
+  Failed runs without an analysis (`--no-analysis`) are counted as
+  `not analysed`.
+
+- `kobay doctor` adds a `Git Bash` row on Windows only. Git for Windows is
+  optional for the `claude` CLI (without it, `claude` falls back to PowerShell
+  for its shell tool), so a failing row carries an "optional" hint. It passes
+  when `CLAUDE_CODE_GIT_BASH_PATH` names an existing `bash.exe` or `sh.exe`
+  outside `\Windows\System32\`. An invalid or ignored value is not an error:
+  kobay falls back to `Git\bin\bash.exe` under Program Files, Program Files
+  (x86), ProgramW6432 and `%LOCALAPPDATA%\Programs`. If none exists the row
+  fails with an install hint that also names the ignored path. The WSL
+  `bash.exe` in `System32` is not Git Bash and does not count. macOS
+  and Linux output is unchanged. Verified by unit tests only, not on a physical
+  Windows machine.
+
+- Named-address (slug) path patterns: when a parent path (never the root) has at
+  least 5 distinct named children (`/city/london`, `/city/paris`, ...), they
+  collapse into `/city/:slug`. Discovery counts all links of a page before it
+  picks pages to visit, so a list of 80 city links no longer eats the page
+  budget; the plan step uses the same rule on the map's pages and links, so a
+  "city that does not exist" proposal is no longer dropped.
+  Known limit: functional sub-pages (`/admin/users`, `/admin/reports`, ...) can
+  also count as a pattern. Discovery still visits them, but deferred: siblings
+  over the per-pattern quota wait until the unique pages are done and are
+  visited if the page budget allows, smallest pattern group first (a small
+  group is likely functional pages, a big one content copies; `:id` patterns
+  still drop the extras). In
+  the plan, a sibling address that is not in the map (e.g. `/account/delete-all`)
+  can be accepted by pattern match; the test then fails with a 404. Nested
+  templates (`/city/:slug/:slug`) are counted at pattern level on purpose.
+- When a test fails, `kobay test run` keeps the browser video of that run as
+  `.kobay/runs/<runId>/video.webm`; a passing test's video is deleted. The
+  video is recorded in kobay's own `page` fixture, and a recording error never
+  changes the test result.
+- `kobay test report` copies that video into the report folder
+  (`assets/<runId>/video.webm`) and shows it on the test with a `<video>`
+  player (controls, no autoplay). The page's Content-Security-Policy gains
+  `media-src 'self'` and nothing else. The video is read with the same checks
+  as screenshots (no symlinks, a regular file inside the run folder) plus the
+  WebM signature; a video over 50 MB is left out with a note on the test.
+- The report's redaction warning now reads "Screenshots and videos are not
+  redacted" and also shows when the report holds only videos. The CLI summary
+  line adds the video count (`…, 2 screenshots, 1 video.`) and `--output json`
+  adds a `videos` field; existing fields are unchanged. The MCP `test_report`
+  description mentions videos.
+
+### Changed
+
+- The fix-all prompt (and the report box and summary block that carry it) now
+  has two groups. "Fix" holds failed tests whose failure kind is `product_bug`,
+  `product_changed` or `test_bug`; "Review" holds the rest (`env`, `flaky`,
+  `unknown`, blocked, inconclusive, runs without analysis), each with a one-line
+  action that is not a code change (bring the environment up and check it with
+  `kobay doctor`, get evidence with `kobay test rerun`, or read the evidence).
+  With both groups the prompt's first sentence gives both counts (with only one
+  group it gives that one count), the box title no longer says
+  "Fix all" when nothing needs a code change, and the fenced block for untrusted
+  text is unchanged. `fixAllPrompt` in `--output json` keeps its name.
+
+- In the browser kobay types the password into (`explore`, and `test refresh`
+  when it has to log in again), from the moment the password is typed until
+  that browser closes, kobay blocks HTTP(S) requests and WebSockets to sites
+  outside the trusted set (the `baseUrl` site and the auth origins you
+  listed): GET, HEAD and OPTIONS requests, writes (POST, PUT and the like,
+  `sendBeacon`), main-frame, iframe and popup documents, and new WebSockets.
+  A cross-site WebSocket opened before the password was typed stays open, but
+  its messages and its close code and reason are no longer forwarded to the
+  other server. Before, the app's own cross-site traffic went through after
+  login. Exploration goes on and ends with one stderr warning that names the
+  origins, for example
+  `blocked 3 third-party requests after login to protect the password: https://cdn.example.net. Add --auth-origin https://cdn.example.net if you trust it with the password.`
+  The warning says `during login` instead when the login did not complete.
+  Pages that load third-party scripts, fonts or maps after login render
+  without them; the only way to allow such an origin is `--auth-origin`.
+- When the login does not complete, a blocked cross-site GET, HEAD or OPTIONS
+  request no longer refuses the login on its own (no exit `5`); it is added as
+  a hint to the error that is reported. Blocked writes and documents still
+  refuse a login that did not complete, as in 0.4.0.
+- A redirect from a trusted endpoint to another site cannot be blocked (see
+  the limits below). For a document during login it still refuses the login,
+  as in 0.4.0. For any other request (an avatar image redirected to a storage
+  bucket, say) the login goes on and the warning counts it separately:
+  `N requests reached <origin> via redirect during login` (or `after login`).
+
+### Security
+
+- A rejected login no longer writes the session file (`storageState.json`).
+  Before, `kobay explore` and `kobay test refresh` saved the browser state
+  even when login failed, so a page that put the typed password into
+  `localStorage` or a cookie during submit left it on disk. A session file left
+  from an earlier successful login is now removed when login is rejected, so
+  `kobay test run` does not reuse an expired session or another user's.
+
+- Page JavaScript that reads the password while kobay types it and sends it to
+  another site in an encoded form (base64, XOR, split into parts) can no
+  longer do so with a direct HTTP(S) request or WebSocket from that browser,
+  during or after login, and also not to a third-party origin the login page
+  already used before the password was typed. Before, after login only
+  requests that visibly carried the password were blocked, and an encoded
+  password could leave in any cross-site request.
+- Known limits:
+  - HTTP redirects (301, 302, 303, 307 and 308) from a trusted endpoint, such
+    as an open redirect on your own site, to another site are only detected:
+    Chromium does not let kobay intercept the redirected request, which
+    reaches the other server. A password visible in the redirected request
+    still refuses the login or the exploration; an encoded one can leave this
+    way.
+  - A WebSocket opened from a Web Worker is not intercepted.
+  - WebTransport and WebRTC are not checked by the guard.
+  - DNS prefetch has not been tested as a way out.
+  - `about:blank` and `srcdoc` frames inherit the origin of the document that
+    created them, so the pre-login frame scan does not see a foreign document
+    hidden behind one.
+  - Test runs, and a `test refresh` that reuses a saved session without typing
+    the password, are not limited: the password is not in that browser, and
+    the app's own traffic, its session cookie included, goes where the app
+    sends it. Use a test account, not a production one.
+
+### Fixed
+
+- A single action in a generated test (such as clicking a disabled button) now
+  gives up after 15 s (`use.actionTimeout`; set `KOBAY_ACTION_TIMEOUT_MS` in
+  milliseconds to change it) instead of waiting out the 120 s test timeout, so
+  the step fails and its `step-N.png` / `step-N.html` evidence is still
+  captured. Capturing that evidence is now best effort: if the page is already
+  gone or hangs, the step's real error is kept (capture stops after 5 s) and
+  whatever could be captured is written. Only a positive whole number is a valid
+  `KOBAY_ACTION_TIMEOUT_MS`; anything else falls back to 15 s.
+- Login during discovery no longer fails with a raw 30 s Playwright timeout
+  when the submit button never becomes clickable (for example a login that
+  stays locked until a captcha is solved). The click now gives up after 15 s
+  and kobay exits with code 5 and one readable error: whether the button is
+  disabled, `aria-disabled`, hidden or covered by another element (or not
+  locked at all), its title and text, the third-party requests blocked during
+  login with an `--auth-origin <origin>` hint, and Playwright's last step as a
+  trailing hint. Login errors and warnings, including addresses and text taken
+  from the page, are masked for the username and password (at any length, also
+  URL-encoded) and the session's cookie and localStorage values (plain web
+  addresses stored there are not treated as secrets, so the `--auth-origin`
+  hint stays readable). A button that unlocks late and then submits
+  successfully is no longer counted as a failed login. A login page whose
+  JavaScript hangs after the credentials are typed no longer hangs kobay: those
+  reads give up after 2 s and page text is then withheld.
+
 ## [0.4.0] - 2026-10-10
 
 ### Changed
@@ -660,7 +853,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ademtfkc/kobay/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ademtfkc/kobay/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ademtfkc/kobay/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/ademtfkc/kobay/compare/v0.2.1...v0.3.0

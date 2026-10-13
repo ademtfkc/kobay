@@ -14,9 +14,11 @@ import {
 import {
   CredentialLeakBlockedError,
   haritadaSayfaBul,
+  girisSayfaMesajiNotu,
   haritadaSayfayiDegistir,
-  kesfet,
+  kesfetAyrintili,
   sayfayiYenile,
+  type KesifSonucu,
 } from '../../kesif/index.js';
 import { CredentialOriginError, LoginFormOriginError, kimlikOriginDogrula } from '../../kesif/oturum.js';
 import { hedefAyaktaMi } from '../../kos/index.js';
@@ -261,9 +263,9 @@ export async function kesfiYenile(dizin: KobayDizini): Promise<Harita> {
   const [config, kimlik] = await Promise.all([dizin.configOku(), dizin.kimlikOku()]);
   if (kimlik !== null) kimlikHedefeUyar(kimlik, config);
   await hedefiDogrula(config.baseUrl);
-  let harita: Harita;
+  let sonuc: KesifSonucu;
   try {
-    harita = await kesfet({
+    sonuc = await kesfetAyrintili({
       baseUrl: config.baseUrl,
       storageStateYolu: dizin.storageStateYolu(),
       ...(kimlik === null ? {} : { kimlik }),
@@ -274,8 +276,12 @@ export async function kesfiYenile(dizin: KobayDizini): Promise<Harita> {
     girisHatasiniCevir(hata);
     agHatasiniCevir(hata, config.baseUrl);
   }
+  const { harita } = sonuc;
   if (kimlik !== null && !harita.loggedIn) {
-    throw new PermissionError('Login failed; check the username, the password, and the login URL');
+    // Sayfanın ret gerekçesi (maskeli, etiketli alıntı ya da "withheld" notu) varsa eklenir;
+    // yoksa mesaj eskisiyle birebir aynı kalır.
+    const not = girisSayfaMesajiNotu(sonuc.girisSayfaMesaji);
+    throw new PermissionError(`Login failed; check the username, the password, and the login URL${not === '' ? '' : `.${not}`}`);
   }
   await dizin.haritaYaz(harita);
   return harita;

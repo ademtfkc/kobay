@@ -399,7 +399,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
   sunucu.registerTool('test_report', {
     description: 'Writes a static HTML report of the selected tests\' latest runs (default .kobay/report/) and, with summary,'
       + ' a Markdown summary with up to maxPrompts fix prompts. Reads only what is on disk; failed tests do not make it an error.'
-      + ' Relative out and summary paths resolve against projectDir and must stay inside the project root. Screenshots are not redacted.',
+      + ' Relative out and summary paths resolve against projectDir and must stay inside the project root. Screenshots and failed-run videos are not redacted.',
     annotations: YAZAR,
     inputSchema: {
       ...PROJE_DIZINI_SEMASI,

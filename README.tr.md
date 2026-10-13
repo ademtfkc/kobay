@@ -106,18 +106,22 @@ kobay explore
 
 ```sh
 kobay test plan generate
-#> 16 proposals generated; 3 dropped: Login page renders correctly (A step needs the real credentials, …), …
+#> 15 proposals generated; 1 dropped: Unknown page returns a not-found error (URL is not in the map and no path pattern matched: /records/999999 (pattern: /records/:id))
+#> Brain: 1 call, $0.28
 #> { "proposals": [
-#>     { "id": "p_5j4p9f", "priority": "p1", "title": "Record List displays existing records with Delete buttons", "stepCount": 4 },
-#>     { "id": "p_bc7p1e", "priority": "p0", "title": "Create a new record and see it in the list", "stepCount": 9 },
-#>     { "id": "p_e0kklk", "priority": "p1", "title": "Submit New Record form with empty name", "stepCount": 7 },
-#>     … 13 more …
+#>     … 2 more …
+#>     { "id": "p_ig7gen", "priority": "p1", "title": "Login with invalid credentials shows an error", "stepCount": 5 },
+#>     … 3 more …
+#>     { "id": "p_io2io8", "priority": "p1", "title": "Record list shows existing records with Delete buttons", "stepCount": 4 },
+#>     … 1 more …
+#>     { "id": "p_mwg331", "priority": "p0", "title": "Create a new record and see it in the list", "stepCount": 7 },
+#>     … 6 more …
 
-kobay test plan accept --ids p_5j4p9f,p_bc7p1e,p_e0kklk
+kobay test plan accept --ids p_io2io8,p_mwg331,p_ig7gen
 #> 3 proposals accepted
-#> t_s7k7kkdn  Record List displays existing records with Delete buttons  …
-#> t_jqt9aypj  Create a new record and see it in the list                 …
-#> t_v5hpedx1  Submit New Record form with empty name                     …
+#> t_nwzz1a22  Login with invalid credentials shows an error                  …
+#> t_vv7ct7z4  Record list shows existing records with Delete buttons         …
+#> t_xankd0tf  Create a new record and see it in the list                      …
 ```
 
 **4. Kendi testini ekle** (isteğe bağlı). Elle yazılmış bir plan, beynin
@@ -126,10 +130,10 @@ satırı:
 
 ```sh
 kobay test create --plan monthly-total.plan.json
-#> Test created: t_6t11idff
+#> Test created: t_m66f61mn
 #> Name: Record list shows a monthly total
 #> Steps: 2, priority: p0, status: draft
-#> Next: kobay test run t_6t11idff
+#> Next: kobay test run t_m66f61mn
 ```
 
 **5. Koştur.** Kodu olmayan testler için önce Playwright kodu üretilir (LLM
@@ -137,52 +141,58 @@ kobay test create --plan monthly-total.plan.json
 
 ```sh
 kobay test run --all
-#> failed t_6t11idff — test_bug
-#>   failure bundle: kobay test failure get t_6t11idff
-#> passed t_jqt9aypj
-#> passed t_s7k7kkdn
-#> failed t_v5hpedx1 — product_bug
-#>   failure bundle: kobay test failure get t_v5hpedx1
+#> failed t_m66f61mn — product_bug
+#>   failure bundle: kobay test failure get t_m66f61mn
+#> passed t_nwzz1a22
+#> passed t_vv7ct7z4
+#> failed t_xankd0tf — test_bug
+#>   failure bundle: kobay test failure get t_xankd0tf
+#> Brain: 6 calls, $0.74
 ```
 
 Çıkış kodu `1`: bir test düştü. İki hata iki ayrı hikâyedir ve `failureKind`
 ikisini birbirinden ayırır:
 
-- **`t_v5hpedx1` — `product_bug`.** Paketteki demoda bilinen bir hata var:
-  boş isimli kaydı kabul ediyor. Analiz listede dördüncü, isimsiz satırı buldu
-  ve formun POST işleyicisini işaret etti:
+- **`t_m66f61mn` — `product_bug`.** Aylık toplam demo uygulamanın hiçbir zaman
+  parçası olmadı; plan, sayfada olmayan bir özelliği anlatıyor. Analiz planı
+  sözüne aldı, kayıt listesinde böyle bir satır bulamadı ve ürünün onu
+  göstermediğini söyledi:
 
   ```json
   "failureKind": "product_bug",
-  "recommendedFixTarget": {
-    "kind": "code",
-    "reference": "POST handler for the New Record form at http://127.0.0.1:3999/new (the 'Save' submission that creates a record and redirects to /records) — the 'Name' field is not validated as required",
-    "rationale": "The record was persisted with an empty name instead of being rejected. …"
-  }
+  "rootCauseHypothesis": "… No row, cell or text containing 'Monthly total' or any 'total' exists in the DOM … The most likely cause is that the product does not render the expected monthly total row",
+  "recommendedFixTarget": { "kind": "code", … }
   ```
 
-- **`t_6t11idff` — `test_bug`.** Aylık toplam uygulamanın hiçbir zaman parçası
-  olmadı. Analiz sayfayı keşif haritasıyla karşılaştırdı, hiçbir şeyin
-  değişmediğini gördü ve beklentinin üründen değil plandan geldiği sonucuna
-  vardı. Bir ajanı kayıt listesini "düzeltmeye" göndermek yerine o doğrulamayı
-  bırakmayı önerdi — ya da aylık toplam gerçek bir gereksinimse, eksik bir
-  özellik olarak ortaya koymayı.
+  Aylık toplam gerçek bir gereksinimse bu doğru karardır; değilse plan adımını
+  kaldır ya da yeniden yaz. Model bunu `unknown` da diyebilir: aynı plan önceki
+  koşularda öyle sınıflandı.
+
+- **`t_xankd0tf` — `test_bug`.** Uygulama işini yaptı, üretilen test yapmadı.
+  Yeni kaydı `\b` ile biten bir regex'le aradı (`/QA Test Record 1\b/`), ama
+  sayfa metni ismi, tutarı ve Delete düğmesini bitişik veriyor
+  (`QA Test Record 142Delete`); yani `1`'den sonra sözcük sınırı yok. Analiz
+  ürünü değil seçiciyi işaret etti ve `\b`'yi atmayı önerdi:
+
+  ```json
+  "failureKind": "test_bug",
+  "recommendedFixTarget": { "kind": "selector", "rationale": "Drop the \b word boundary …" }
+  ```
 
 **6. Kanıtı oku ve raporu gör.**
 
 ```sh
-kobay test failure get t_v5hpedx1
-#> Failure bundle copied: ~/kobay-demo/.kobay/failure-out/t_v5hpedx1
+kobay test failure get t_m66f61mn
 
 kobay test report --all
-#> Report written: 4 tests (2 passed, 2 failed, 0 blocked, 0 inconclusive, 0 not run), 20 screenshots.
+#> Report written: 4 tests (2 passed, 2 failed, 0 blocked, 0 inconclusive, 0 not run), 18 screenshots, 2 videos.
 #> Open: ~/kobay-demo/.kobay/report/index.html
-#> Screenshots are not redacted; review them before sharing the report.
+#> Screenshots and videos are not redacted; review them before sharing the report.
 ```
 
 Düzeltmeden sonra `kobay test rerun <id>` aynı kodu yeniden koşturur. Bu turun
 tamamı — bir plan, dört kod üretimi, iki analiz — 7 beyin çağrısıydı ve
-`claude` CLI ile yaklaşık 1,10 $ tuttu. İşin bitince demoyu Ctrl+C ile durdur.
+`claude` CLI ile yaklaşık 1,02 $ tuttu. İşin bitince demoyu Ctrl+C ile durdur.
 
 Her adımın bayraklarıyla birlikte daha uzun anlatımı
 [Ayrıntılı hızlı başlangıç](#ayrıntılı-hızlı-başlangıç) bölümünde.
@@ -345,6 +355,14 @@ Başka bir origin için kaydedilmiş giriş MCP üzerinden taşınamaz; bir term
 `kobay project create --url <URL> --login --force` çalıştır. Bu değişkenleri
 çoğunlukla commit edilen `.mcp.json`'ın dışında tut.
 
+> **Bir kodlama ajanının içinde parolayı ajana verme.** Bazı ajanlar ortamında
+> parola taşıyan bir komutu kimlik bilgisi sızıntısı sayıp engeller. Bunun
+> yerine kullanıcı ayrı bir terminalde `kobay project create --url <URL> --login`
+> (ya da `kobay project update --login`) çalıştırsın; parola bir istemde
+> yazılır, ekrana basılmaz. Sonra `explore` ve `test_refresh` kayıtlı girişi
+> (`.kobay/credentials.json`) kullanır, `KOBAY_LOGIN_PASS` gerekmez; `test_run`
+> giriş yapmaz, `explore`'un kaydettiği oturum durumunu kullanır.
+
 </details>
 
 ## CI (GitHub Actions)
@@ -385,14 +403,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.4.0
+      - uses: ademtfkc/kobay@v0.5.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.4.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.5.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -467,7 +485,8 @@ koşturur. Yapışkan yorum, `github-actions[bot]` tarafından yazılan ve işar
 başlayan yorumdur; kendi `github-token`'ınla yorum o hesap altında yazılır ve her
 koşuda yeni bir yorum eklenir.
 
-**Artifact uyarısı.** HTML rapor maskelenmemiş ekran görüntüleri içerir; açık
+**Artifact uyarısı.** HTML rapor maskelenmemiş ekran görüntüleri ve düşen
+koşu videoları içerir; açık
 (public) bir depoda iş akışı artifact'lerini GitHub'a giriş yapmış herkes
 görebilir. Bu önemliyse `upload-report: false` ver.
 
@@ -493,35 +512,45 @@ ve `network.json` pakete yalnız analiz onlara atıf yaparsa girer. Trace'i
 
 <p align="center">
   <img alt="A failed test card in the kobay HTML report: failure kind product_bug, the failure analysis, the recommended fix target, the evidence list and the start of the fix prompt" src="https://raw.githubusercontent.com/ademtfkc/kobay/main/assets/readme/report-failure.png" width="720">
-  <br><sub>Hızlı başlangıçtaki boş isim testi: analiz, düzeltme hedefi ve düzeltme isteminin başı.</sub>
+  <br><sub>Önceki bir demo koşusundan bir hata: kayıt formu boş ismi kabul etti. Görünen: analiz, düzeltme hedefi ve düzeltme isteminin başı.</sub>
 </p>
 
 **HTML rapor.** `kobay test report --all`, her testin son koşusundan
 `.kobay/report/index.html` yazar; bir tarayıcıda aç. Rapor bir özetle açılır
-(koşu çubuğu, geçme oranı, toplam koşu süresi), düşen, engellenen ve sonuçsuz
-testleri adımları, ekran görüntüleri ve hata analizleriyle en üste koyar, geçen
+(koşu çubuğu, geçme oranı, toplam koşu süresi ve düşen testlerin hata türüne göre
+tek satırlık dökümü; "uygulamam bozuk mu?" sorusu hemen cevaplanır), düşen, engellenen ve sonuçsuz
+testleri adımları, ekran görüntüleri, koşu videosu ve hata analizleriyle en üste koyar, geçen
 testleri kapalı tutar. Dikkat isteyen her test, Claude Code, Codex ya da Cursor'a
 yapıştırılacak bir **Fix with your coding agent** istemi taşır: hata türünü
 söyler, hata metnini ve analizi güvenilmez veri olarak alıntılar ve kanıtı almak,
 düzeltmek ve doğrulamak için kobay komutlarını sıralar (`test failure get`,
 `test rerun` ya da `product_changed` için `test refresh`). İki ya da daha çok
-böyle test varsa rapor hepsini kapsayan tek bir istem de içerir. Alıntılanan her
+böyle test varsa rapor hepsini kapsayan tek bir istem de içerir. Bu istem ajandan
+yalnız kod değişikliği gerektiren hataları (`product_bug`, `product_changed`,
+`test_bug`) düzeltmesini ister; kalanları (ortam, engellenen, sonuçsuz, kararsız,
+bilinmeyen) ayrı bir inceleme listesinde, kod değişikliği değil çalıştırılacak
+kobay komutuyla verir. Alıntılanan her
 değer isteme girmeden önce tek başına sır maskelemesinden geçer ve 2.000
 karakterden uzun hata çıktısı kesilir, tam pakete bir yol gösterilir. Bir isteme
 tıklayınca tamamı seçilir, sonra kopyalayabilirsin.
 `--output json` aynı istemleri `fixPrompts` ve `fixAllPrompt` olarak döndürür.
-Klasör kendi içinde bütündür (ekran görüntüleri içine kopyalanır), yani
+Klasör kendi içinde bütündür (ekran görüntüleri ve videolar içine kopyalanır), yani
 taşıyabilir ya da CI artifact'i olarak yükleyebilirsin. Sayfada betik ve dış
 kaynak yoktur; içindeki her metin sır maskelemesinden ve HTML kaçışından geçer;
 proje kökü, kobay'ın kendi kurulumu (yığın izi satırları) ve ev dizinin
-`[project]`, `[kobay]` ve `~` olarak görünür. **Ekran görüntüleri
+`[project]`, `[kobay]` ve `~` olarak görünür. **Ekran görüntüleri ve videolar
 maskelenmez:** uygulamanın ekranda ne gösterdiyse onu gösterirler, bu yüzden
 raporu paylaşmadan önce onlara bak (`test report` bu uyarıyı basar, sayfa da
-yalnız raporda ekran görüntüsü varsa gösterir).
+yalnız raporda ekran görüntüsü ya da video varsa gösterir).
+Bir test düşünce `test run` o koşunun tarayıcı videosunu
+`.kobay/runs/<runId>/video.webm` olarak saklar; geçen testin videosu silinir.
+Rapor videoyu düz bir `<video>` oynatıcısıyla gösterir (kendiliğinden oynamaz).
+50 MB'tan büyük video rapora eklenmez, testin altına bir not düşülür.
+`--output json` sayıyı `videos` alanında verir.
 `--out <dir>` ile rapor başka bir yere yazılır (proje dışı olabilir, nokta ile
 başlayan yollar olamaz). Dolu bir klasör yalnızca bütünüyle bir kobay raporuysa
 değiştirilir: geçerli bir `kobay-report.json`, `index.html` ve
-`assets/<runId>/step-<n>.png` dışında hiçbir şey yok. Tek bir başka girdi
+`assets/<runId>/step-<n>.png` ve `assets/<runId>/video.webm` dışında hiçbir şey yok. Tek bir başka girdi
 (`notes.txt`, `.DS_Store`) komutun `2` ile çıkmasına ve o girdiyi adıyla
 söylemesine yol açar, hiçbir şeye dokunulmaz. Eski rapor dosya dosya kaldırılır,
 özyinelemeli silmeyle asla; beklenmeyen her şey yerinde bırakılır ve yolu
@@ -532,10 +561,15 @@ test `not run` görünür.
 
 ## Durum ve sınırlar
 
-**0.3.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.3.0'da yeni olanlar:
-düzeltme istemli [HTML rapor](#neler-elde-edersin), `test run --no-analysis` ile
-[GitHub Action](#ci-github-actions) ve
-[ayrı bir giriş sitesinde (SSO) giriş](#ayrı-giriş-sitesi-sso). Tam liste
+**0.5.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.5.0'da yeni olanlar:
+HTML rapor düşen testin videosunu gösterir; başarısız bir giriş artık giriş
+sayfasının gösterdiği mesajı taşır (maskeli ve güvenilmeyen sayfa metni diye
+etiketli); rapor özetine `Failure kinds` satırı eklendi; "hepsini düzelt"
+istemi Fix ve Review gruplarına ayrılır; parola yazılırken güvenilen küme
+dışındaki sitelere HTTP(S) istekleri ve WebSocket bağlantıları engellenir
+(`--auth-origin`, bkz. [güvenlik modeli](#güvenlik-modeli)); çok sayıda adlı
+çocuğu olan sayfalar tek bir `/city/:slug` deseni sayılır; tek bir eylem 15
+sn'de pes eder; Windows'ta `kobay doctor` Git Bash'i denetler. Tam liste
 [CHANGELOG.md](CHANGELOG.md) içinde.
 
 Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
@@ -543,7 +577,7 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
 | | |
 | --- | --- |
 | **Kime** | Claude Code (ya da Codex / Cursor) kullanan, yerel web uygulamasını ajana "çalışıyor" dedirtmek yerine gerçekten doğrulattırmak isteyen geliştiriciler. |
-| **Uçtan uca doğrulandı** | `claude` CLI beyni, MCP üzerinden bir Claude Code ajanıyla: ajan bir ürün hatası buldu, kök nedene indi, düzeltti ve testi yeşil olarak yeniden koştu. [Hızlı başlangıç](#hızlı-başlangıç)'taki döngü ayrıca paketlenmiş bir derlemeden, paketteki demo uygulamaya karşı gerçek beyinle koşuldu: 16 öneri (3'ü düşürüldü), 4 test, 2'si geçti, 2'si düştü; biri `product_bug`, biri `test_bug` olarak sınıflandı (orada anlatıldığı gibi); 7 beyin çağrısı, yaklaşık 1,10 $. |
+| **Uçtan uca doğrulandı** | `claude` CLI beyni, MCP üzerinden bir Claude Code ajanıyla: ajan bir ürün hatası buldu, kök nedene indi, düzeltti ve testi yeşil olarak yeniden koştu. [Hızlı başlangıç](#hızlı-başlangıç)'taki döngü ayrıca paketlenmiş bir derlemeden, paketteki demo uygulamaya karşı gerçek beyinle koşuldu: 15 öneri (1'i düşürüldü), 4 test, 2'si geçti, 2'si düştü; biri `product_bug`, biri `test_bug` olarak sınıflandı (orada anlatıldığı gibi); 7 beyin çağrısı, yaklaşık 1,02 $. |
 | **Gerçek CLI ile bir kez denendi** | `codex` beyni. 28 Eylül 2026'da paketteki demo uygulamada gerçek bir `codex exec` ile (Codex CLI 0.154.0, ChatGPT aboneliği) bir tur koşuldu: plan üretti, test kodu üretti, bir hatayı analiz etti; her beyin çağrısı ilk denemede şemaya uydu. Tek tur, uzun kullanım değil. |
 | **Pratikte denenmedi** | `openrouter` beyni. Adaptör birim testli ama gerçek API ile hiç koşturulmadı. Doğrulanmamış say. |
 | **Platform** | macOS'ta geliştirildi. Herkese açık depoda CI, tam katı (strict) test paketini ubuntu-latest, macos-latest ve windows-latest üzerinde Node 22 ve 24 ile, üçünde de bir paketleme duman testini ve Ubuntu'da GitHub Action'ın bir duman testini koşuyor. Windows fiziksel bir makinede doğrulanmadı; bkz. [Kurulum ve gereksinimler](#kurulum-ve-gereksinimler). |
@@ -557,7 +591,7 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
   hiç koşmadı.
 - **Windows'un CI kapsamı var, fiziksel makine kapsamı yok.** Doğrulanmayanlar:
   öksüz süreç temizliği, açık dosyada rename `EPERM`, 8.3 ve UNC yolları ve
-  `claude` CLI'ın Git Bash gereksinimi. Sorunları lütfen bildir.
+  `claude` CLI'ın PowerShell yedek yolu (aşağıya bak). Sorunları lütfen bildir.
 - **Üretilen testler için kum havuzu (sandbox) yok.** Bkz. [Güvenlik modeli](#güvenlik-modeli).
 - **HTML rapor yarış penceresi.** `test report` bir klasörü denetleyip sonra
   yeniden adlandırır ya da siler; aynı anda o klasörü değiştiren yerel bir süreç
@@ -598,7 +632,7 @@ kobay'ı önemli bir şeye yöneltmeden önce bunu oku. Kısaca:
 - **Kimlik bilgileri origin'e kilitlidir** ve uygulamanın sitesinde (artı
   listelediğin auth origin'lerde) kalır; onları başka yere göndermeye çalışan bir
   giriş reddedilir.
-- **Trace'ler oturum çerezi taşır ve ekran görüntüleri maskelenmez.** Bir hata
+- **Trace'ler oturum çerezi taşır; ekran görüntüleri ve videolar maskelenmez.** Bir hata
   paketine ya da rapora parola gibi davran.
 - **Dosya argümanları proje içinde kalır.**
 
@@ -660,12 +694,25 @@ Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
   sitesine taşıyabilir: parolayı başka bir siteye taşıyan bir istek (`fetch`,
   XHR, `sendBeacon`, resim isteği) engellenir ve giriş reddedilir, siteler-arası
   yazmalar (POST, PUT ve benzerleri) engellenir ve siteler-arası WebSocket'ler
-  bağlanmadan kapatılır; zaten açık olan bir siteler-arası WebSocket'e bu pencere
-  boyunca (en fazla yaklaşık 7 sn) gönderilen mesajlar sessizce düşürülür.
-  *Giriş sonrasında*, o `explore` ya da `test refresh` tarayıcısı kapanana kadar,
-  yalnız parolayı açıkça taşıyan siteler-arası istekler ve WebSocket mesajları
-  engellenir ve keşif reddedilir; uygulamanın kendi siteler-arası API çağrıları
-  ve WebSocket'leri geçer. Aynı sitedeki alt alanlara izin verilir
+  bağlanmadan kapatılır; zaten açık olan bir siteler-arası WebSocket açık kalır,
+  ama mesajları ve kapanış kodu/nedeni artık karşı sunucuya iletilmez (aşağıdaki
+  uyarıda sayılır). Siteler-arası GET, HEAD ve OPTIONS istekleri de engellenir.
+  *Giriş sonrasında*, parolayı yazan `explore` ya da `test refresh` tarayıcısı
+  kapanana kadar, sayfa JavaScript'i parolayı kodlanmış biçimde hâlâ tutuyor
+  olabileceği için güvenilen küme dışındaki sitelere HTTP(S) istekleri ve
+  WebSocket'ler engelli kalır: parolayı açıkça taşıyan istek engellenir ve
+  keşif reddedilir; diğer siteler-arası istekler (GET, HEAD ve OPTIONS dahil),
+  belgeler ve WebSocket mesajları da engellenir. Bu engeller keşfi durdurmaz;
+  keşif, origin'leri sayan tek bir stderr uyarısıyla biter
+  (`blocked N third-party requests after login to protect the password: ... Add --auth-origin <origin> ...`;
+  giriş tamamlanmadıysa `during login`).
+  Giriş sonrasında üçüncü taraf betik, yazı tipi ya da harita yükleyen sayfalar
+  bunlar olmadan çizilir; bir origin'i `--auth-origin` ile yalnız parolayı ona
+  emanet edecek kadar güveniyorsan ekle. Giriş tamamlanmazsa engellenen GET
+  istekleri hataya ipucu olarak eklenir, tek başlarına girişi reddettirmez.
+  Test koşuları ve kayıtlı oturumu parola yazmadan kullanan `test refresh`
+  sınırlanmaz: uygulamanın kendi trafiği, oturum çerezi dahil, uygulamanın
+  gönderdiği yere gider; bu yüzden test hesabı kullan. Aynı sitedeki alt alanlara izin verilir
   (`app.example.com` ve `api.example.com`, aynı şema); ayrı bir kimlik doğrulama
   sitesine (SSO) ise yalnız listelersen ve o zaman yalnız o tam origin'e izin
   verilir, aşağıya bak.
@@ -678,13 +725,21 @@ Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
   (`github.io`, `vercel.app`, `a.run.app`, `up.railway.app` ve diğerleri) ayrı
   sitelerdir ve `amazonaws.com` ya da `cloudfront.net` altındaki her şey tam
   origin ister. Barındırma platformun listede yoksa bildir ki eklensin. Kimlik
-  bilgileri yapılandırıldığında service worker'lar kapatılır. Sınırlar: 307/308
-  yönlendirmesinde kobay girişi tespit eder ve reddeder, ama yönlendirilen
-  isteğin kendisini engelleyemez, yani parola diğer sunucuya çoktan ulaşmış
-  olabilir; bir Web Worker içinden açılan WebSocket kesilmez; kobay'ın tanımadığı
-  biçimde kodlanmış bir parola yine de siteler-arası bir GET ile, giriş
-  sonrasında ise herhangi bir siteler-arası istekle çıkabilir. Giriş bu
-  nedenlerden biriyle reddedildiğinde `explore` ve `test refresh` `5` ile çıkar.
+  bilgileri yapılandırıldığında service worker'lar kapatılır. Sınırlar: güvenilen
+  bir uçtan başka siteye HTTP yönlendirmesi (301, 302, 303, 307 ya da 308;
+  belge ya da başka bir istek) engellenemez, çünkü Chromium yönlendirilen
+  isteği kobay'ın kesmesine izin vermez ve istek karşı sunucuya ulaşır. kobay
+  bunu yalnız tespit eder: giriş sırasında yönlendirilen belge girişi
+  reddettirir, ama parola diğer sunucuya çoktan ulaşmış olabilir; başka her
+  yönlendirilen istek (örneğin bir depolama kovasına yönlendirilen avatar
+  resmi) uyarıda sayılır (`reached ... via redirect during login` ya da
+  `after login`) ve kodlanmış bir parola bu yoldan çıkabilir; `about:blank` ve
+  `srcdoc` çerçeveleri kendilerini oluşturan belgenin origin'ini alır ve
+  URL'lerinde origin taşımaz, bu yüzden parola öncesi çerçeve taraması
+  arkalarına saklanan yabancı belgeyi görmez; bir Web Worker içinden açılan
+  WebSocket kesilmez; WebTransport ve WebRTC denetlenmez; DNS ön çözümleme
+  çıkış yolu olarak denenmedi. Giriş bu nedenlerden biriyle reddedildiğinde `explore` ve
+  `test refresh` `5` ile çıkar.
 - **Trace'ler oturum çerezleri içerir.** `runs/`, `failure/` ve herhangi bir
   `failure-out/` kopyasındaki `trace.zip` tarayıcı oturumunu içerir. Bir pakete
   parola gibi davran — herkese açık issue'lara ekleme.
@@ -694,8 +749,9 @@ Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
   ama ekran görüntüleri ve `trace.zip` geçemez: ekranda ya da ağ izlerinde
   görünen sırları içerebilirler, bu yüzden paketin tamamını hassas say
   (`.kobay/failure-out/` git dışıdır).
-- **HTML rapordaki ekran görüntüleri maskelenmez.** `test report` yazdığı her
-  metni maskeler ve kaçışlar, ama adım ekran görüntülerini olduğu gibi kopyalar.
+- **HTML rapordaki ekran görüntüleri ve videolar maskelenmez.** `test report`
+  yazdığı her metni maskeler ve kaçışlar, ama adım ekran görüntülerini ve düşen
+  koşu videolarını olduğu gibi kopyalar.
   Onlara bakmadan bir raporu yayımlama. `.kobay/report/` git dışıdır; raporu
   `--out` ile başka yere yazarsan o klasörü de git dışı bırak.
 - **Yol sınırları.** Dosya argümanları (`--docs`, `--docs-path`, `--plan`; MCP'de
@@ -813,12 +869,22 @@ Node 22 ve 24 ile, ayrıca bir paketleme duman testini (pack, kurulum,
 `install-browser`, demo `explore`) koşuyor. PATH/PATHEXT komut çözümü, `.cmd`
 shim'leri, göreli Playwright spec'leri ve süreç ağacı sonlandırması bu kapsamda.
 Henüz fiziksel bir Windows makinesinde doğrulamadık: öksüz süreç temizliği, açık
-dosyada rename `EPERM`, 8.3 ve UNC yolları ile `claude` CLI'ın Git Bash
-gereksinimi hâlâ o kapsamı bekliyor. Windows sorunlarını lütfen bildir.
+dosyada rename `EPERM`, 8.3 ve UNC yolları hâlâ o kapsamı bekliyor. Git for
+Windows `claude` CLI için isteğe bağlıdır: yoksa `claude` kabuk aracı için
+PowerShell kullanır ([Claude Code kurulum rehberi](https://code.claude.com/docs/en/setup),
+13 Ekim 2026'da bakıldı). Beyin çağrılarının bu PowerShell yolundan çalıştığı
+**doğrulanmadı**; yalnız Git Bash'li bir Windows 11 makinesinde çalıştığı
+görüldü. Windows sorunlarını lütfen bildir.
 
 `doctor` Node'u, beyin CLI'larını, Chromium'u, mevcut projeyi ve hedefin cevap
 verip vermediğini denetler. Her zaman `0` ile çıkar, yani satırları oku. Bir
-proje yokken son ikisi, beklendiği gibi, düşer:
+proje yokken son ikisi, beklendiği gibi, düşer. Windows'ta yedinci bir satır,
+`Git Bash`, eklenir: Git for Windows isteğe bağlıdır (yoksa `claude` CLI kabuk
+aracı için PowerShell kullanır), ama bulunamazsa satır "isteğe bağlı" ipucuyla düşer.
+`CLAUDE_CODE_GIT_BASH_PATH`'e bakar; değer geçersizse yok sayılır ve Git for
+Windows'un olağan klasörlerine bakılır (`System32` içindeki WSL `bash.exe`
+sayılmaz). macOS ve Linux'ta bu satır
+yoktur.
 
 ```
 ✓ Node 26.8.1
@@ -853,8 +919,11 @@ ayarındaki `brain` bloğunda (`model`, `effort`) ver. Codex oturumu hâlâ
 
 **Proje oluşturma.** `--login`, `KOBAY_LOGIN_USER` ve `KOBAY_LOGIN_PASS`'i okur;
 yoksa sorar (parola ekrana yazılmaz), terminal de değişken de yoksa `2` ile çıkar
-— cevapları stdin'e boru ile vermek desteklenmez. URL `http://` ya da `https://`
-olmalıdır. Giriş URL'si, giriş ayrı bir auth sitesinde yapılmıyorsa `--url`'nin
+— cevapları stdin'e boru ile vermek desteklenmez. Bir kodlama ajanının içinde
+(Claude Code, Codex vb.) `KOBAY_LOGIN_PASS`'i ajana verme; parolayı ayrı bir
+terminalde `--login` ile kendin yaz; `explore` ve `test refresh` kayıtlı girişi kullanır,
+`test run` ise `explore`'un kaydettiği oturum durumunu. URL
+`http://` ya da `https://` olmalıdır. Giriş URL'si, giriş ayrı bir auth sitesinde yapılmıyorsa `--url`'nin
 origin'ini paylaşmalıdır (bkz. [Ayrı giriş sitesi (SSO)](#ayrı-giriş-sitesi-sso)).
 Demo koşusunun tam çıktısı:
 
@@ -920,7 +989,9 @@ kobay test list
 
 **Koşturma.** Kodu olmayan bir test için önce Playwright kodu üretilir (LLM
 çağrısı), sonra koşar; düşen test sonra analiz edilir (bir LLM çağrısı daha).
-Test başına 120 sn. Çıkış kodu `1` bir testin düştüğü anlamına gelir; `test list`
+Test başına 120 sn; tek bir eylem (ör. kilitli düğmeye tıklama) 15 sn'de pes eder,
+böylece adım kanıtıyla birlikte düşer. Süreyi `KOBAY_ACTION_TIMEOUT_MS` (pozitif tam sayı, milisaniye;
+geçersiz değer 15 sn'ye döner) ile değiştirebilirsin. Çıkış kodu `1` bir testin düştüğü anlamına gelir; `test list`
 bu durumda `draft` yerine karar değerlerini (`passed`, `failed`, …) gösterir.
 
 **Hatayı okuma.** `--out` olmadan paket `.kobay/failure-out/<id>/` altına iner;
@@ -957,7 +1028,7 @@ pakete yalnız analiz onlara atıf yaparsa girer. Trace'i
 
 ### Komutlar
 
-Aşağıdaki bayraklar 0.3.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
+Aşağıdaki bayraklar 0.5.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
 örtüşür.
 
 | Komut | Ne yapar |
@@ -965,7 +1036,7 @@ Aşağıdaki bayraklar 0.3.0'da `kobay --help` ve her alt komutun `--help` çık
 | `setup [--brain <b>] [--model <m>] [--effort <e>]` | Varsayılan beyni `~/.kobay/config.json`'a yazar (`claude`, `codex`, `openrouter`). |
 | `install-browser [--with-deps]` | Uyan Chromium'u kurar; `--with-deps` Linux sistem kütüphanelerini ekler. |
 | `demo [--port <port>]` | Paketteki demo uygulamayı başlatır. Varsayılan port 3000; `0` boş birini seçer. |
-| `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi denetler. Her zaman `0` ile çıkar. |
+| `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi (Windows'ta ayrıca Git Bash'i) denetler. Her zaman `0` ile çıkar. |
 | `project create --url <url> [--docs <path>] [--login] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Burada `.kobay/` oluşturur. `--url` bir `http://` ya da `https://` adresi olmalıdır. `--force` var olan bir projenin yalnız config'ini yeniden yazar; yenilerini vermedikçe beynini ve limitlerini korur. `--auth-origin` `--login` ister. |
 | `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Yalnız verdiğin alanları değiştirir; `--base-url` ve `--login-url` `http://` ya da `https://` olmalıdır. `--login` kimlik bilgilerini yeniden girer; `--auth-origin` auth origin listesinin tamamını değiştirir ve `--clear-auth-origins` gibi `--login` ister. |
 | `project get` | Ayarlar, test sayısı, bir harita olup olmadığı. |
@@ -982,7 +1053,7 @@ Aşağıdaki bayraklar 0.3.0'da `kobay --help` ve her alt komutun `--help` çık
 | `test refresh <id> [--no-run]` | `product_changed` için: yeniden keşfet, planı uyarla, yeniden üret ve koştur. |
 | `test result <id> [--history]` | Son koşu sonucu, ya da hâlâ diskte olan her koşu. |
 | `test failure get <id> [--out <dir>]` | Hata paketini kopyalar. Varsayılan `.kobay/failure-out/<id>/`, yerinde yenilenir. |
-| `test report [ids...] [--all] [--out <dir>] [--summary <path>] [--max-prompts <n>]` | Seçilen her testin son koşusunun (adımlar, ekran görüntüleri, hata, hata analizi, üretilen kod) statik bir HTML raporunu yazar. Yalnız diskte olanı okur; hiçbir şey koşturmaz. Varsayılan `.kobay/report/`, her seferinde bütünüyle değiştirilir. Testler düşmüş olsa da `0` ile çıkar. `--summary` ayrıca bir pull request yorumu için Markdown özet yazar (yalnız metin, en çok `--max-prompts` düzeltme istemi, varsayılan 5). |
+| `test report [ids...] [--all] [--out <dir>] [--summary <path>] [--max-prompts <n>]` | Seçilen her testin son koşusunun (adımlar, ekran görüntüleri, düşen koşu videosu, hata, hata analizi, üretilen kod) statik bir HTML raporunu yazar. Yalnız diskte olanı okur; hiçbir şey koşturmaz. Varsayılan `.kobay/report/`, her seferinde bütünüyle değiştirilir. Testler düşmüş olsa da `0` ile çıkar. `--summary` ayrıca bir pull request yorumu için Markdown özet yazar (yalnız metin, en çok `--max-prompts` düzeltme istemi, varsayılan 5). |
 | `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Eski koşuları, beyin günlüklerini, bayat hata paketlerini ve eski sürümlerden kalan bilinen artıkları kaldırır. Bilinmeyen `failure-out/` dosyaları atlanır. Son düşen koşuyu ya da güncel bir hata paketini asla kaldırmaz. CLI varsayılan olarak siler; `--dry-run` yalnız önizler. `--max-mb` `runs/` için tavandır (varsayılan 500), `--older-than-days` yaş eşiğidir (varsayılan 7). |
 | `agent install --target <claude\|codex\|cursor>` | Ajan becerisini buraya kurar; `claude` için ayrıca MCP sunucusunu `.mcp.json`'a kaydeder. |
 | `mcp` | stdio MCP sunucusunu başlatır. |
@@ -1159,7 +1230,7 @@ Projenin bütün durumu uygulamanın kökündeki `.kobay/` altında yaşar:
 | `runs/r_*/` | Koşu başına bir klasör: `result.json`, adım `.png`/`.html`, `console.json`, `network.json`, `trace.zip`. |
 | `failure/<testId>/` | Test başına son hata paketi, atomik yazılır. |
 | `failure-out/<testId>/` | `test failure get`'in varsayılan hedefi, yerinde yenilenir (git dışı). |
-| `report/` | `test report`'un son HTML raporu: `index.html`, `kobay-report.json` ve `assets/<runId>/step-<n>.png` (git dışı). |
+| `report/` | `test report`'un son HTML raporu: `index.html`, `kobay-report.json`, `assets/<runId>/step-<n>.png` ve `assets/<runId>/video.webm` (git dışı). |
 | `logs/` | Beyin çağrı günlükleri. |
 | `playwright.config.ts` | Üretilen çalıştırıcı config'i. Elle düzenlersen kobay bir uyarıyla ona dokunmaz. |
 | `.credentials-txn` | Süren bir kimlik bilgisi değişikliğinin işareti; `.stale-*` kenara alınan kopyaları tutar. İkisi de git dışı. |

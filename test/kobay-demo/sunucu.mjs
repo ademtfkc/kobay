@@ -1,6 +1,7 @@
 // Kobay bütünleşme testleri için bağımlılıksız, bellekte çalışan demo uygulaması.
 // Kullanıcıya görünen her metin İngilizcedir; kod ve yorumlar depo diliyle Türkçedir.
 // Doğrudan çalıştırma: node test/kobay-demo/sunucu.mjs <port> [--sso <authUrl> | --auth-for <appUrl>]
+//   [--locked-login] [--captcha-origin <url>]
 // Testler baslat(port) ile sunucuyu programatik olarak açıp kapatabilir.
 //
 // Ayrı giriş sitesi (SSO) kipi, iki sunucu:
@@ -39,6 +40,20 @@ function menu() {
 
 function girisFormu() {
   return '<form action="/login" method="post"><label>Username <input name="username" type="text"></label><label>Password <input name="password" type="password"></label><button type="submit">Log in</button></form>';
+}
+
+/**
+ * Kilitli giriş kipi (captcha çözülmeden açılmayan düğme): gönder düğmesi JS'siz `disabled`.
+ * `captchaOrigin` verilirse sayfa, captcha aracı gibi o origin'e yarım saniyede bir GET atar
+ * (giriş penceresinde kobay'ın ağ koruması bunları keser ve kesim notunda sayar).
+ */
+function kilitliGirisFormu(captchaOrigin) {
+  const betik = captchaOrigin === undefined
+    ? ''
+    : `<script>setInterval(() => { fetch(${JSON.stringify(`${captchaOrigin}/challenge`)}, { mode: 'no-cors' }).catch(() => {}); }, 500);</script>`;
+  return '<form action="/login" method="post"><label>Username <input name="username" type="text"></label><label>Password <input name="password" type="password"></label>'
+    + '<button type="submit" disabled title="Complete the security check first">Log in</button></form>'
+    + '<p>Complete the security check to enable login.</p>' + betik;
 }
 
 /** SSO geri dönüşünde taşınan sabit belirteç; yalnız demo içindir. */
@@ -123,7 +138,7 @@ export function baslatAuth(port, { appUrl, donmez = false }) {
   return dinlet(sunucu, port, istekler);
 }
 
-export function baslat(port, { sso } = {}) {
+export function baslat(port, { sso, kilitliGiris = false, captchaOrigin } = {}) {
   const kayitlar = varsayilanKayitlar.map((kayit) => ({ ...kayit }));
   const istekler = [];
   const sunucu = createServer(async (istek, yanit) => {
@@ -149,7 +164,7 @@ export function baslat(port, { sso } = {}) {
     }
 
     if (url.pathname === '/login' && istek.method === 'GET') {
-      html(yanit, `<h1>Login</h1>${girisFormu()}`);
+      html(yanit, `<h1>Login</h1>${kilitliGiris ? kilitliGirisFormu(captchaOrigin) : girisFormu()}`);
       return;
     }
     if (url.pathname === '/login' && istek.method === 'POST') {
@@ -208,6 +223,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   };
   const authIcin = secenek('--auth-for');
   const sso = secenek('--sso');
+  const captchaOrigin = secenek('--captcha-origin');
+  const kilitliGiris = process.argv.includes('--locked-login');
   if (authIcin !== undefined) await baslatAuth(port, { appUrl: authIcin });
-  else await baslat(port, sso === undefined ? {} : { sso });
+  else {
+    await baslat(port, {
+      ...(sso === undefined ? {} : { sso }),
+      ...(kilitliGiris ? { kilitliGiris } : {}),
+      ...(captchaOrigin === undefined ? {} : { captchaOrigin }),
+    });
+  }
 }

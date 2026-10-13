@@ -21,7 +21,19 @@ const AKTIF_PAKET_KOKU = resolve(dirname(fileURLToPath(import.meta.url)), '../..
 /** Önce derlenmiş modül; yoksa kaynaktan çalışan geliştirme kurulumu. */
 const FIXTURE_ADAYLARI = [join('dist', 'kos', 'fixture.js'), join('src', 'kos', 'fixture.ts')];
 
-function kaliciConfigMetni(): string {
+export const VARSAYILAN_EYLEM_ZAMAN_ASIMI_MS = 15_000;
+
+/** Yalnız pozitif tam sayı geçerli; 0 (Playwright'ta "sınırsız"), eksi, NaN, boş → varsayılan. */
+export function eylemZamanAsimiCoz(deger: unknown): number {
+  const sayi = typeof deger === 'number' ? deger : typeof deger === 'string' && deger.trim() !== '' ? Number(deger) : Number.NaN;
+  return Number.isSafeInteger(sayi) && sayi > 0 ? sayi : VARSAYILAN_EYLEM_ZAMAN_ASIMI_MS;
+}
+
+/** Üretilen config'te çalışan, `eylemZamanAsimiCoz` ile aynı kuralın satır içi hali. */
+export const EYLEM_ZAMAN_ASIMI_IFADESI = '(() => { const n = Number(process.env.KOBAY_ACTION_TIMEOUT_MS);'
+  + ` return Number.isSafeInteger(n) && n > 0 ? n : ${String(VARSAYILAN_EYLEM_ZAMAN_ASIMI_MS)}; })()`;
+
+export function kaliciConfigMetni(): string {
   return [
     'export default {',
     "  testDir: 'tests',",
@@ -29,7 +41,7 @@ function kaliciConfigMetni(): string {
     '  workers: 1,',
     '  retries: 0,',
     "  reporter: [['json', { outputFile: process.env.KOBAY_REPORT_FILE }]],",
-    "  use: { baseURL: process.env.KOBAY_BASE_URL, trace: 'on', screenshot: 'only-on-failure', video: 'off' },",
+    `  use: { baseURL: process.env.KOBAY_BASE_URL, trace: 'on', actionTimeout: ${EYLEM_ZAMAN_ASIMI_IFADESI}, screenshot: 'only-on-failure', video: 'off' },`,
     "  outputDir: `${process.env.KOBAY_RUN_DIR}/pw`,",
     '};',
     '',

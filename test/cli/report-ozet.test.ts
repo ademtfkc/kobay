@@ -87,7 +87,9 @@ describe('kobay test report --summary', () => {
     const md = await readFile(ozet, 'utf8');
     expect(md.split('\n')[0]).toBe(OZET_ISARETI);
     expect(md).toContain('| 1 | 2 | 0 | 0 | 0 |');
-    expect(md).toContain('Fix all 2 tests that need attention');
+    // Türü `unknown` olan düşen testler kod değişikliği değil, inceleme grubudur.
+    expect(md).toContain('Review the 2 tests that need attention with your coding agent');
+    expect(md).toContain('Failure kinds: 2 unknown');
     expect(md).not.toContain('hunter22');
     expect(md).not.toContain('s3cretValue9');
     expect(md).toContain('[redacted]');

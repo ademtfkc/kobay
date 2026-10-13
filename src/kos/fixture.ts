@@ -1,4 +1,8 @@
-import { test as temel, expect, type Page } from '@playwright/test';
+import { rename, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  test as temel, expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page,
+} from '@playwright/test';
 import { yazAtomik } from '../depo/index.js';
 import { adimSar } from './fixture-sablonu.js';
 
@@ -31,12 +35,90 @@ function konsolKaydi(mesaj: { type(): string; text(): string }, stepIndex: numbe
   };
 }
 
+/** Video yalnız beklenmeyen sonuçta (düşen, zaman aşımı, kesilen test) saklanır. */
+export function videoSaklanmali(bilgi: { status?: string | undefined; expectedStatus: string }): boolean {
+  return bilgi.status !== bilgi.expectedStatus;
+}
+
+/**
+ * Kapanmış context'in videosunu `<koşu>/video.webm`'e taşır ya da siler. Video en iyi
+ * çabadır: hiçbir hata testi düşürmez ve sonucu değiştirmez (en fazla video yok).
+ */
+export async function videoyuSonlandir(kaynak: string | undefined, dizin: string, sakla: boolean): Promise<void> {
+  if (kaynak === undefined) return;
+  try {
+    if (sakla) {
+      await rename(kaynak, join(dizin, 'video.webm'));
+      return;
+    }
+  } catch {
+    // Taşınamadıysa aşağıda silinir; yarım kalan video ara klasörde durmasın.
+  }
+  try {
+    await rm(kaynak, { force: true });
+  } catch {
+    // Video en iyi çaba.
+  }
+}
+
+function videoUyarisi(mesaj: string): void {
+  try {
+    process.stderr.write(`[kobay] Warning: ${mesaj}; the run continues without a video.\n`);
+  } catch {
+    // Uyarı da en iyi çaba.
+  }
+}
+
+/**
+ * Video kayıtlı context açar; `recordVideo` yüzünden açılamazsa videosuz açar.
+ * Videosuz deneme de düşerse o hata gerçektir ve yayılır.
+ */
+export async function contextAc(
+  tarayici: Pick<Browser, 'newContext'>,
+  secenekler: BrowserContextOptions,
+  videoKlasoru: string | undefined,
+): Promise<{ context: BrowserContext; video: boolean }> {
+  if (videoKlasoru !== undefined) {
+    try {
+      return { context: await tarayici.newContext({ ...secenekler, recordVideo: { dir: videoKlasoru } }), video: true };
+    } catch {
+      videoUyarisi('video recording could not start');
+    }
+  }
+  return { context: await tarayici.newContext(secenekler), video: false };
+}
+
+/**
+ * Context'i kapatır. Video kaydı varken kapanış (video yazımı) reddedilirse tarayıcı
+ * hâlâ bağlıysa hata videoya sayılır ve sonuç değişmez; tarayıcı kopmuşsa ya da
+ * video yoksa hata gerçektir ve yayılır.
+ */
+export async function contextKapat(
+  context: Pick<BrowserContext, 'close'>,
+  video: boolean,
+  tarayici: Pick<Browser, 'isConnected'>,
+): Promise<boolean> {
+  try {
+    await context.close();
+    return true;
+  } catch (hata: unknown) {
+    if (!video || !tarayici.isConnected()) throw hata;
+    videoUyarisi('the run video could not be finished');
+    return false;
+  }
+}
+
 export const test = temel.extend<{ page: Page }>({
-  page: async ({ browser }, kullan, _testBilgisi) => {
+  page: async ({ browser }, kullan, testBilgisi) => {
     const durum = storageState();
-    const context = durum === undefined ? await browser.newContext() : await browser.newContext({ storageState: durum });
-    const page = await context.newPage();
     const dizin = kosuDizini();
+    // Config'teki `use.video` bu özel context'e uygulanmaz; kayıt yalnız burada (çift kayıt yok).
+    const { context, video } = await contextAc(
+      browser,
+      durum === undefined ? {} : { storageState: durum },
+      dizin === undefined ? undefined : join(dizin, 'pw', 'video'),
+    );
+    const page = await context.newPage();
     const konsol: Kayit[] = [];
     const ag: Kayit[] = [];
     let aktifStepIndex: number | undefined;
@@ -95,7 +177,20 @@ export const test = temel.extend<{ page: Page }>({
           ]);
         }
       } finally {
-        await context.close();
+        let videoYolu: string | undefined;
+        try {
+          videoYolu = await page.video()?.path();
+        } catch {
+          videoYolu = undefined;
+        }
+        // Video ancak context kapanınca tamamlanır; taşıma/silme kapanıştan sonra.
+        let kapandi = false;
+        try {
+          kapandi = await contextKapat(context, video, browser);
+        } finally {
+          // Video tamamlanamadıysa (kapanış reddedildi) yarım dosya saklanmaz, silinir.
+          if (dizin !== undefined) await videoyuSonlandir(videoYolu, dizin, kapandi && videoSaklanmali(testBilgisi));
+        }
       }
     }
   },

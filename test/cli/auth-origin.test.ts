@@ -5,10 +5,17 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../src/kesif/index.js', async (asilModul) => ({
-  ...(await asilModul<typeof import('../../src/kesif/index.js')>()),
-  kesfet: vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:3000', loggedIn: true, pages: [], exploredAt: '2026-10-09T00:00:00.000Z' })),
-}));
+vi.mock('../../src/kesif/index.js', async (asilModul) => {
+  const kesfet = vi.fn(async (_secenekler: unknown) => (
+    { baseUrl: 'http://127.0.0.1:3000', loggedIn: true, pages: [], exploredAt: '2026-10-09T00:00:00.000Z' }
+  ));
+  return {
+    ...(await asilModul<typeof import('../../src/kesif/index.js')>()),
+    kesfet,
+    // CLI ayrıntılı keşfi kullanır; sahte `kesfet`ten geçsin (gerçek tarayıcı açılmasın).
+    kesfetAyrintili: vi.fn(async (secenekler: unknown) => ({ harita: await kesfet(secenekler) })),
+  };
+});
 
 vi.mock('../../src/kos/index.js', () => ({
   hedefAyaktaMi: vi.fn(async () => true),

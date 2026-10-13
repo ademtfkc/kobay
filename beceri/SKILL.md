@@ -76,7 +76,9 @@ Rules for reading results:
    the password must come from the environment; never ask for it in chat and
    never put it in a command line. For the CLI that is `KOBAY_LOGIN_USER` and
    `KOBAY_LOGIN_PASS` (without them and without a terminal, `--login` exits
-   `2`). For MCP, pass `loginUser`; the user must start the agent with both
+   `2`). Better still, ask the user to run `kobay project create --url <URL> --login`
+   themselves in a separate terminal (the password is typed, never echoed); later
+   `explore` and test runs use that saved login without any variable. For MCP, pass `loginUser`; the user must start the agent with both
    `KOBAY_LOGIN_PASS` and `KOBAY_LOGIN_ORIGIN` (for example
    `http://localhost:3000`) exported, and the project URL must be on that
    origin, or the call fails. The login URL must be on the same origin as the

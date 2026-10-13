@@ -84,6 +84,33 @@ describe('depo budama', () => {
     }
   });
 
+  it('removes old failed runs that hold a video and its intermediate folder, counting the video bytes', async () => {
+    const dizin = await proje();
+    const testId = 't_abc12345';
+    await testVar(dizin, testId);
+    const eskiBasarisiz = await kosuYaz(dizin, testId, 20, 'failed');
+    await writeFile(dizin.yol('runs', eskiBasarisiz, 'video.webm'), Buffer.alloc(4096));
+    await mkdir(dizin.yol('runs', eskiBasarisiz, 'pw', 'video'), { recursive: true });
+    const sonBasarisiz = await kosuYaz(dizin, testId, 21, 'failed');
+    await writeFile(dizin.yol('runs', sonBasarisiz, 'video.webm'), Buffer.alloc(16));
+    for (let sira = 22; sira < 27; sira += 1) await kosuYaz(dizin, testId, sira);
+
+    const sonuc = await depoyuBuda(dizin);
+
+    expect(sonuc.skipped).toEqual([]);
+    expect(sonuc.deleted).toEqual([expect.objectContaining({ path: `.kobay/runs/${eskiBasarisiz}`, kind: 'run' })]);
+    expect(sonuc.deleted[0]?.bytes).toBeGreaterThanOrEqual(4096);
+    await expect(access(dizin.yol('runs', eskiBasarisiz))).rejects.toThrow();
+    await expect(access(dizin.yol('runs', sonBasarisiz, 'video.webm'))).resolves.toBeUndefined();
+
+    const dizin2 = await proje();
+    const ilk = await kosuYaz(dizin2, testId, 30, 'failed');
+    await writeFile(dizin2.yol('runs', ilk, 'video.webm'), Buffer.alloc(16));
+    await kosuYaz(dizin2, testId, 31, 'failed');
+    for (let sira = 32; sira < 37; sira += 1) await kosuYaz(dizin2, testId, sira);
+    expect(await dizin2.kosulariBuda(testId)).toEqual([ilk]);
+  });
+
   it('removes old runs of a deleted test but keeps its latest failed run', async () => {
     const dizin = await proje();
     const eskiPassed = await kosuYaz(dizin, 't_old12345', 10);

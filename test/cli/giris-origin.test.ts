@@ -3,11 +3,16 @@ import type { Harita } from '../../src/depo/index.js';
 
 const sahteler = vi.hoisted(() => ({ hata: undefined as unknown }));
 
-vi.mock('../../src/kesif/index.js', async (asilModul) => ({
-  ...(await asilModul<typeof import('../../src/kesif/index.js')>()),
-  kesfet: vi.fn(async () => { throw sahteler.hata; }),
-  sayfayiYenile: vi.fn(async () => { throw sahteler.hata; }),
-}));
+vi.mock('../../src/kesif/index.js', async (asilModul) => {
+  const kesfet = vi.fn(async () => { throw sahteler.hata; });
+  return {
+    ...(await asilModul<typeof import('../../src/kesif/index.js')>()),
+    kesfet,
+    // CLI ayrıntılı keşfi kullanır; sahte `kesfet`ten geçsin (gerçek tarayıcı açılmasın).
+    kesfetAyrintili: vi.fn(async () => ({ harita: await kesfet() })),
+    sayfayiYenile: vi.fn(async () => { throw sahteler.hata; }),
+  };
+});
 
 vi.mock('../../src/kos/index.js', () => ({
   hedefAyaktaMi: vi.fn(async () => true),
@@ -16,7 +21,12 @@ vi.mock('../../src/kos/index.js', () => ({
 
 import { explore, testRefresh } from '../../src/cli/komutlar/index.js';
 import { KobayDizini, type TestKaydi } from '../../src/depo/index.js';
-import { CredentialLeakBlockedError, CredentialOriginError, LoginFormOriginError } from '../../src/kesif/index.js';
+import {
+  CredentialLeakBlockedError,
+  CredentialOriginError,
+  LoginFormOriginError,
+  LoginSubmitTimeoutError,
+} from '../../src/kesif/index.js';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const TEST_ID = 't_abc12345';
@@ -58,6 +68,10 @@ const girisHatalari: Array<[string, () => Error]> = [
     'The login form is on a different origin (http://kotu.test); credentials are only sent to http://uygulama.test.',
   )],
   ['CredentialOriginError', () => new CredentialOriginError('The saved credentials belong to another address.')],
+  ['LoginSubmitTimeoutError', () => new LoginSubmitTimeoutError(
+    'Login could not be submitted: clicking the submit button ("Log in") did not complete within 15 s;'
+      + ' the session was not saved. The button is locked: it is disabled.',
+  )],
 ];
 
 describe('giriş origin hataları', () => {

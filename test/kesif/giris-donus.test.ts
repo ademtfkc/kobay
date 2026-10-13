@@ -110,7 +110,7 @@ async function girisDene(loginUrl: string, authOrigins: string[], donusMs = DONU
     if (form === null) throw new Error('form yok');
     const kimlik = { username: 'demo', password: PAROLA, origin: appOrigin, ...(authOrigins.length === 0 ? {} : { authOrigins }) };
     return await girisiGonder(sayfa, form, kimlik, appOrigin, authOrigins, 5_000, donusMs)
-      .then((sonuc) => sonuc, (hata: unknown) => hata);
+      .then((sonuc) => sonuc.basarili, (hata: unknown) => hata);
   } finally {
     await context.close();
   }

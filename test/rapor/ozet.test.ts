@@ -90,12 +90,27 @@ describe('ozetMarkdown (kobay test report --summary)', () => {
   });
 
   it('adds a separate fix-all block for two or more tests that need attention', () => {
-    const testler = [test_(1), test_(2, { verdict: 'blocked', failureKind: undefined })];
+    const testler = [test_(1, { failureKind: 'product_bug' }), test_(2, { failureKind: 'test_bug' })];
     const md = ozetMarkdown(girdi(testler));
     const bloklar = detaylar(md);
     expect(bloklar).toHaveLength(3);
     expect(bloklar[2]?.ozet).toBe('<summary>Fix all 2 tests that need attention with your coding agent</summary>');
     expect(bloklar[2]?.icerik).toBe(hepsiniDuzeltIstemi(testler, baglam));
+  });
+
+  it('puts the failure-kind breakdown under the status line and words the combined block by group', () => {
+    const testler = [
+      test_(1, { failureKind: 'product_bug' }),
+      test_(2, { failureKind: 'env' }),
+      test_(3, { failureKind: 'unknown' }),
+      test_(4, { failureKind: 'unknown' }),
+      test_(5, { verdict: 'passed', failureKind: undefined }),
+    ];
+    const md = ozetMarkdown(girdi(testler));
+    expect(md).toContain('**4 of 5 tests need attention.**\n\nFailure kinds: 1 product_bug · 1 env · 2 unknown\n\n| passed |');
+    expect(detaylar(md).map((b) => b.ozet).at(-1)).toBe('<summary>Fix 1 test, review 3 more with your coding agent</summary>');
+    // Düşen test yoksa döküm satırı yok.
+    expect(ozetMarkdown(girdi([test_(1, { verdict: 'passed', failureKind: undefined })]))).not.toContain('Failure kinds');
   });
 
   it('shows at most --max-prompts prompts and one line for the rest', () => {
@@ -111,7 +126,7 @@ describe('ozetMarkdown (kobay test report --summary)', () => {
 
     const sifir = ozetMarkdown(girdi(testler.slice(0, 2), { maxIstem: 0 }));
     expect(sifir).toContain('2 more failing tests — see the report artifact.');
-    expect(detaylar(sifir).map((b) => b.ozet)).toEqual(['<summary>Fix all 2 tests that need attention with your coding agent</summary>']);
+    expect(detaylar(sifir).map((b) => b.ozet)).toEqual(['<summary>Review the 2 tests that need attention with your coding agent</summary>']);
   });
 
   it('stays within the size limit: drops fix-all first, then prompts from the end, never the table', () => {

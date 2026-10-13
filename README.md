@@ -105,21 +105,22 @@ calls the first time it runs).
 
 ```sh
 kobay test plan generate
-#> 16 proposals generated; 2 dropped: Unknown route returns an error page (URL is not in the map and no path pattern matched: /records/999999 (pattern: /records/:id)), Delete endpoint rejects GET requests (URL is not in the map and no path pattern matched: /records/delete (pattern: /records/delete))
-#> Brain: 1 call, $0.26
+#> 15 proposals generated; 1 dropped: Unknown page returns a not-found error (URL is not in the map and no path pattern matched: /records/999999 (pattern: /records/:id))
+#> Brain: 1 call, $0.28
 #> { "proposals": [
+#>     … 2 more …
+#>     { "id": "p_ig7gen", "priority": "p1", "title": "Login with invalid credentials shows an error", "stepCount": 5 },
 #>     … 3 more …
-#>     { "id": "p_eu2719", "priority": "p1", "title": "Record list shows existing records with delete buttons", "stepCount": 4 },
-#>     { "id": "p_auwnf0", "priority": "p0", "title": "Create a new record and see it in the list", "stepCount": 9 },
+#>     { "id": "p_io2io8", "priority": "p1", "title": "Record list shows existing records with Delete buttons", "stepCount": 4 },
 #>     … 1 more …
-#>     { "id": "p_7ocfuc", "priority": "p1", "title": "Submit new record form with empty name", "stepCount": 6 },
-#>     … 9 more …
+#>     { "id": "p_mwg331", "priority": "p0", "title": "Create a new record and see it in the list", "stepCount": 7 },
+#>     … 6 more …
 
-kobay test plan accept --ids p_eu2719,p_auwnf0,p_7ocfuc
+kobay test plan accept --ids p_io2io8,p_mwg331,p_ig7gen
 #> 3 proposals accepted
-#> t_encpb4jk  Record list shows existing records with delete buttons  …
-#> t_ozcp6xbs  Create a new record and see it in the list              …
-#> t_ak8j9xqh  Submit new record form with empty name                  …
+#> t_nwzz1a22  Login with invalid credentials shows an error                  …
+#> t_vv7ct7z4  Record list shows existing records with Delete buttons         …
+#> t_xankd0tf  Create a new record and see it in the list                      …
 ```
 
 **4. Add one of your own** (optional). A hand-written plan asks for a flow the
@@ -128,10 +129,10 @@ have:
 
 ```sh
 kobay test create --plan monthly-total.plan.json
-#> Test created: t_clwclqnp
+#> Test created: t_m66f61mn
 #> Name: Record list shows a monthly total
 #> Steps: 2, priority: p0, status: draft
-#> Next: kobay test run t_clwclqnp
+#> Next: kobay test run t_m66f61mn
 ```
 
 **5. Run.** Tests without code get Playwright code generated first (LLM call);
@@ -139,54 +140,59 @@ a failing test is then analysed (another LLM call).
 
 ```sh
 kobay test run --all
-#> failed t_ak8j9xqh — product_bug
-#>   failure bundle: kobay test failure get t_ak8j9xqh
-#> failed t_clwclqnp — unknown
-#>   failure bundle: kobay test failure get t_clwclqnp
-#> passed t_encpb4jk
-#> passed t_ozcp6xbs
-#> Brain: 6 calls, $0.80
+#> failed t_m66f61mn — product_bug
+#>   failure bundle: kobay test failure get t_m66f61mn
+#> passed t_nwzz1a22
+#> passed t_vv7ct7z4
+#> failed t_xankd0tf — test_bug
+#>   failure bundle: kobay test failure get t_xankd0tf
+#> Brain: 6 calls, $0.74
 ```
 
 Exit code `1`: a test failed. The two failures are two different stories, and
 the `failureKind` tells them apart:
 
-- **`t_ak8j9xqh` — `product_bug`.** The bundled demo has a known bug: it
-  accepts a record with an empty name. The analysis found the fourth, nameless
-  row in the list and pointed at the form's POST handler:
+- **`t_m66f61mn` — `product_bug`.** The monthly total was never part of the
+  demo app; the plan describes a feature the page does not have. The analysis
+  took the plan at its word, found no such row on the record list and said the
+  product does not render it:
 
   ```json
   "failureKind": "product_bug",
-  "recommendedFixTarget": {
-    "kind": "code",
-    "reference": "POST handler for the form on http://127.0.0.1:3999/new (redirects to /records after save); the Name input should be required and the server should reject an empty name",
-    "rationale": "Search the product code for the redirect to the Received URL '/records' in the new-record form handler and add validation for an empty 'name' field …"
-  }
+  "rootCauseHypothesis": "… No row, cell or text containing 'Monthly total' or any 'total' exists in the DOM … The most likely cause is that the product does not render the expected monthly total row",
+  "recommendedFixTarget": { "kind": "code", … }
   ```
 
-- **`t_clwclqnp` — `unknown`.** The monthly total was never part of the app.
-  The analysis compared the page with the exploration map and saw that nothing
-  had changed, but the map does not track table rows, so it could not tell a
-  feature the product never had from a row that disappeared. Instead of sending
-  an agent off to "fix" the record list, it said so and recommended checking
-  the spec: if a monthly total is a real requirement, treat it as a product
-  bug; if not, remove or rewrite the plan step.
+  If a monthly total is a real requirement, that is the right verdict; if not,
+  remove or rewrite the plan step. The model can also call this `unknown`: the
+  same plan was classified that way in earlier runs.
+
+- **`t_xankd0tf` — `test_bug`.** The app did its job, the generated test did
+  not. It looked for the new record with a regex that ends in `\b`
+  (`/QA Test Record 1\b/`), but the page text runs the name, the amount and the
+  Delete button together (`QA Test Record 142Delete`), so there is no word
+  boundary after the `1`. The analysis pointed at the selector, not the
+  product, and suggested dropping the `\b`:
+
+  ```json
+  "failureKind": "test_bug",
+  "recommendedFixTarget": { "kind": "selector", "rationale": "Drop the \b word boundary …" }
+  ```
 
 **6. Read the evidence and see the report.**
 
 ```sh
-kobay test failure get t_ak8j9xqh
-#> Failure bundle copied: ~/kobay-demo/.kobay/failure-out/t_ak8j9xqh
+kobay test failure get t_m66f61mn
 
 kobay test report --all
-#> Report written: 4 tests (2 passed, 2 failed, 0 blocked, 0 inconclusive, 0 not run), 19 screenshots.
+#> Report written: 4 tests (2 passed, 2 failed, 0 blocked, 0 inconclusive, 0 not run), 18 screenshots, 2 videos.
 #> Open: ~/kobay-demo/.kobay/report/index.html
-#> Screenshots are not redacted; review them before sharing the report.
+#> Screenshots and videos are not redacted; review them before sharing the report.
 ```
 
 After a fix, `kobay test rerun <id>` runs the same code again. This whole round
 — one plan, four code generations, two analyses — was 7 brain calls and cost
-about $1.06 with the `claude` CLI. Stop the demo with Ctrl+C when you are done.
+about $1.02 with the `claude` CLI. Stop the demo with Ctrl+C when you are done.
 
 A longer walkthrough of each step, with the flags, is in
 [Quick start in detail](#quick-start-in-detail).
@@ -349,6 +355,14 @@ origin. A login saved for another origin cannot be moved over MCP; run
 `kobay project create --url <URL> --login --force` in a terminal. Keep these
 variables out of `.mcp.json`, which is usually committed.
 
+> **Inside a coding agent, do not hand it the password.** Some agents block a
+> command that carries a password in its environment as a credential leak. Have
+> the user run `kobay project create --url <URL> --login` (or
+> `kobay project update --login`) in a separate terminal instead; the password
+> is typed at a prompt and never echoed. Afterwards `explore` and `test_refresh`
+> use the saved login (`.kobay/credentials.json`) and need no `KOBAY_LOGIN_PASS`;
+> `test_run` does not log in, it reuses the session state that `explore` saved.
+
 </details>
 
 ## CI (GitHub Actions)
@@ -389,14 +403,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.4.0
+      - uses: ademtfkc/kobay@v0.5.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.4.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.5.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -473,7 +487,8 @@ with your repository's secrets. The sticky comment is the one written by
 `github-token` the comment is posted under that account and a new one is added
 on every run.
 
-**Artifact warning.** The HTML report contains unmasked screenshots; in a
+**Artifact warning.** The HTML report contains unmasked screenshots and
+failed-run videos; in a
 public repository workflow artifacts are visible to anyone who is signed in to
 GitHub. Set `upload-report: false` if that matters.
 
@@ -499,34 +514,42 @@ agent** prompt on each test that needs attention:
 
 <p align="center">
   <img alt="A failed test card in the kobay HTML report: failure kind product_bug, the failure analysis, the recommended fix target, the evidence list and the start of the fix prompt" src="https://raw.githubusercontent.com/ademtfkc/kobay/main/assets/readme/report-failure.png" width="720">
-  <br><sub>The empty-name test from the quick start: the analysis, the fix target and the start of the fix prompt.</sub>
+  <br><sub>A failure from an earlier demo run: the record form accepted an empty name. Shown: the analysis, the fix target and the start of the fix prompt.</sub>
 </p>
 
 **HTML report.** `kobay test report --all` writes `.kobay/report/index.html`
 from the latest run of every test; open it in a browser. It opens with a summary
-(run bar, pass rate, total run time), puts failed, blocked and inconclusive tests
-first with their steps, screenshots and failure analysis, and folds passed tests
+(run bar, pass rate, total run time, and a one-line breakdown of the failed tests
+by failure kind, so "is my app broken?" has a quick answer), puts failed, blocked and inconclusive tests
+first with their steps, screenshots, run video and failure analysis, and folds passed tests
 away. Every test that needs attention carries a **Fix with your coding agent**
 prompt to paste into Claude Code, Codex or Cursor: it states the failure kind,
 quotes the error and analysis as untrusted data, and lists the kobay commands to
 get the evidence, fix and verify (`test failure get`, `test rerun`, or
 `test refresh` for `product_changed`). With two or more such tests the report
-also has one prompt that covers them all. Each quoted value is secret-masked on
+also has one prompt that covers them all. It asks the agent to fix only the
+failures that call for a code change (`product_bug`, `product_changed`, `test_bug`)
+and lists the rest (environment, blocked, inconclusive, flaky, unknown) separately
+for review, with the kobay command to run, not a code change. Each quoted value is secret-masked on
 its own before it goes into the prompt, and error output longer than 2,000
 characters is cut, with a pointer to the full bundle. Click a prompt to select
 it, then copy.
 `--output json` returns the same prompts as `fixPrompts` and `fixAllPrompt`. The folder is
-self-contained (screenshots are copied in), so you can move it or upload it as a
+self-contained (screenshots and videos are copied in), so you can move it or upload it as a
 CI artifact. The page has no scripts and no external resources, and every text
 in it is secret-masked and HTML-escaped; the project root, kobay's own
 installation (stack frames) and your home directory are shown as `[project]`,
-`[kobay]` and `~`. **Screenshots are not redacted:**
+`[kobay]` and `~`. **Screenshots and videos are not redacted:**
 they show whatever your app displayed, so review them before sharing the report
-(`test report` prints this notice, and the page shows it, only when the report has screenshots).
+(`test report` prints this notice, and the page shows it, only when the report has screenshots or videos).
+When a test fails, `test run` keeps the browser video of that run as
+`.kobay/runs/<runId>/video.webm`; a passing test's video is deleted. The report
+plays it with a plain `<video>` player (no autoplay). A video larger than 50 MB
+is left out, with a note on the test. `--output json` reports the count as `videos`.
 With `--out <dir>` the report goes elsewhere (outside the project is allowed,
 dot-prefixed paths are not). A non-empty folder is replaced only if it is
 entirely a kobay report: a valid `kobay-report.json`, `index.html`, and nothing
-else but `assets/<runId>/step-<n>.png`. A single other entry (`notes.txt`,
+else but `assets/<runId>/step-<n>.png` and `assets/<runId>/video.webm`. A single other entry (`notes.txt`,
 `.DS_Store`) makes the command exit `2` and name that entry, touching nothing.
 The old report is removed file by file, never with a recursive delete; anything
 unexpected is left in place and its path is printed. The report reads
@@ -536,18 +559,23 @@ note; a test whose run folder is gone shows as `not run`.
 
 ## Status and limits
 
-**0.3.0.** Usable, not yet smooth. New in 0.3.0: the
-[HTML report](#what-you-get) with fix prompts, the
-[GitHub Action](#ci-github-actions) with `test run --no-analysis`, and
-[login on a separate auth site (SSO)](#separate-login-site-sso). The full list
-is in [CHANGELOG.md](CHANGELOG.md).
+**0.5.0.** Usable, not yet smooth. New in 0.5.0: the HTML report shows the
+video of a failed test; a failed login now carries the message the login page
+showed (masked, and labelled as untrusted page text); the report summary adds a
+`Failure kinds` line; the "fix everything" prompt splits into Fix and Review
+groups; while the password is typed, HTTP(S) requests and WebSockets to sites
+outside the trusted set are blocked (`--auth-origin`, see the
+[security model](#security-model)); pages with many named children count as one
+`/city/:slug` pattern; a single action gives up after 15 s; and on Windows
+`kobay doctor` checks for Git Bash. The full list is in
+[CHANGELOG.md](CHANGELOG.md).
 
 What has and has not been exercised, so you can decide before installing:
 
 | | |
 | --- | --- |
 | **Who it's for** | Developers running Claude Code (or Codex / Cursor) who want the agent to verify a local web app instead of claiming it works. |
-| **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. The loop in the [quick start](#quick-start) was also run from a packed build against the bundled demo app with the real brain: 16 proposals (2 dropped), 4 tests, 2 passed, 2 failed, one classified `product_bug` and one `unknown` as described there; 7 brain calls, about $1.06. |
+| **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. The loop in the [quick start](#quick-start) was also run from a packed build against the bundled demo app with the real brain: 15 proposals (1 dropped), 4 tests, 2 passed, 2 failed, one classified `product_bug` and one `test_bug` as described there; 7 brain calls, about $1.02. |
 | **Tried once with the real CLI** | The `codex` brain. On 28 September 2026 one round against the bundled demo app with a real `codex exec` (Codex CLI 0.154.0, ChatGPT plan) produced a plan, generated test code and analysed a failure; every brain call matched the schema on the first try. One round, not long use. |
 | **Untested in practice** | The `openrouter` brain. The adapter has unit tests but has never been run against the real API. Treat it as unverified. |
 | **Platform** | Developed on macOS. In the public repository, CI runs the full strict suite on ubuntu-latest, macos-latest and windows-latest with Node 22 and 24, a packaging smoke test on all three, and a smoke test of the GitHub Action on Ubuntu. Windows has not been verified on a physical machine; see [Install and requirements](#install-and-requirements). |
@@ -561,7 +589,8 @@ What has and has not been exercised, so you can decide before installing:
   but has never run against the real API.
 - **Windows has CI coverage, not physical-machine coverage.** The unverified
   cases are orphan-process cleanup, rename-on-open-file `EPERM`, 8.3 and UNC
-  paths, and the `claude` CLI's Git Bash requirement. Please report issues.
+  paths, and the `claude` CLI's PowerShell fallback (see below). Please report
+  issues.
 - **No sandbox for generated tests.** See [Security model](#security-model).
 - **HTML report race window.** `test report` checks a folder and then renames or
   deletes it; a local process that swaps that folder at the same moment can
@@ -602,7 +631,7 @@ Read this before pointing kobay at anything that matters. In short:
   data.
 - **Credentials are origin-locked** and stay on the app's site (plus any auth
   origin you list); a login that tries to send them elsewhere is refused.
-- **Traces carry session cookies, and screenshots are not redacted.** Treat a
+- **Traces carry session cookies, and screenshots and videos are not redacted.** Treat a
   failure bundle or report like a password.
 - **File arguments stay inside the project.**
 
@@ -661,16 +690,30 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   origin or its own site: a request (`fetch`, XHR, `sendBeacon`, image request)
   that carries the password to another site is blocked and the login is
   rejected, cross-site writes (POST, PUT and the like) are blocked, and
-  cross-site WebSockets are closed before they connect; messages sent on a
-  cross-site WebSocket that was already open are dropped silently during this
-  window (up to about 7 s). Cross-site main-frame, iframe and popup documents
+  cross-site WebSockets are closed before they connect; a cross-site WebSocket
+  that was already open stays open, but its messages and its close code and
+  reason are no longer forwarded to the other server (they are counted in the
+  warning below). Cross-site GET, HEAD and OPTIONS requests are blocked too.
+  Cross-site main-frame, iframe and popup documents
   are also blocked during this window, and a login page that already embeds
   one (in any frame or open popup, or still loading) is refused before the
   password is typed unless its exact origin is listed with `--auth-origin`. *After login*, until
-  the `explore` or `test refresh` browser closes, only cross-site requests and
-  WebSocket messages that visibly carry the password are blocked, and
-  exploration is rejected; the app's own cross-site API calls and WebSockets go
-  through. Same-site subdomains are allowed (`app.example.com` and
+  the `explore` or `test refresh` browser that typed the password closes, page
+  JavaScript may still hold the password in an encoded form, so HTTP(S)
+  requests and WebSockets to sites outside the trusted set stay blocked: a
+  request that visibly carries the password is blocked and exploration is
+  rejected; other cross-site requests (GET, HEAD and OPTIONS included),
+  documents and WebSocket messages are blocked too. These blocks do not stop
+  exploration, which ends with one stderr warning naming the origins
+  (`blocked N third-party requests after login to protect the password: ... Add --auth-origin <origin> ...`;
+  `during login` when the login did not complete).
+  Pages that load third-party scripts, fonts or maps after login render
+  without them; list an origin with `--auth-origin` only if you trust it with
+  the password. If the login does not complete, blocked GET requests are
+  added to the error as a hint and do not refuse the login on their own. Test
+  runs and a `test refresh` that reuses the saved session without typing the
+  password are not limited: the app's own traffic, session cookies included,
+  goes wherever the app sends it, so use a test account. Same-site subdomains are allowed (`app.example.com` and
   `api.example.com`, same scheme); a separate auth site (SSO) only when you list
   it, and then only that exact origin, see below. On
   `localhost`, IP addresses and single-label hosts the port may differ but the
@@ -682,16 +725,21 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   `up.railway.app` and others) are separate sites, and anything under
   `amazonaws.com` or `cloudfront.net` needs the exact origin. If your hosting
   platform is missing from the list, report it so it can be added. When
-  credentials are configured, service workers are disabled. Limits: on a
-  302/307/308 cross-site redirect kobay detects and rejects the login, it
-  cannot block the redirected request itself, so the password may already have reached the
-  other server, whose page can run JavaScript and receives the source URL's
-  `#fragment`; `about:blank` and `srcdoc` frames inherit the origin of the
+  credentials are configured, service workers are disabled. Limits: an HTTP
+  redirect (301, 302, 303, 307 or 308) from a trusted endpoint to another
+  site, for a document or any other request, cannot be blocked, because
+  Chromium does not let kobay intercept the redirected request, which
+  reaches the other server. kobay only detects it: a redirected document
+  during login rejects the login, but the password may already have reached
+  the other server, whose page can run JavaScript and receives the source
+  URL's `#fragment`; any other redirected request (an avatar image sent on to
+  a storage bucket, say) is counted in the warning
+  (`reached ... via redirect during login` or `after login`), and an encoded
+  password can leave this way; `about:blank` and `srcdoc` frames inherit the origin of the
   document that created them and carry no origin in their URL, so the
   pre-login frame scan does not see a foreign document hidden behind one; a
-  WebSocket opened from a Web Worker is not intercepted; a
-  password encoded in a way kobay does not recognise can still leave in a
-  cross-site GET, and after login in any cross-site request. When login is
+  WebSocket opened from a Web Worker is not intercepted; WebTransport and
+  WebRTC are not checked; DNS prefetch has not been tested as a way out. When login is
   refused for any of these reasons, `explore` and `test refresh` exit `5`.
 - **Traces contain session cookies.** `trace.zip` in `runs/`, `failure/` and any
   `failure-out/` copy includes the browser session. Treat a bundle like a
@@ -701,9 +749,9 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   when copied into the bundle, but screenshots and `trace.zip` cannot be: they
   may contain secrets visible on screen or in network traces, so treat the whole
   bundle as sensitive (`.kobay/failure-out/` is git-ignored).
-- **HTML report screenshots are not redacted.** `test report` masks and escapes
-  every text it writes, but copies step screenshots as they are. Do not publish
-  a report before looking at them. `.kobay/report/` is git-ignored; if you write
+- **HTML report screenshots and videos are not redacted.** `test report` masks
+  and escapes every text it writes, but copies step screenshots and failed-run
+  videos as they are. Do not publish a report before looking at them. `.kobay/report/` is git-ignored; if you write
   the report elsewhere with `--out`, git-ignore that folder too.
 - **Path limits.** File arguments (`--docs`, `--docs-path`, `--plan`; `docs`,
   `docsPath`, `planPath`, `out` over MCP) must stay inside the project; `..` and
@@ -818,12 +866,21 @@ Node 22 and 24, plus a packaging smoke test (pack, install, `install-browser`,
 demo `explore`). It covers PATH/PATHEXT command resolution, `.cmd` shims, relative
 Playwright specs and process-tree termination. We have not yet verified on a
 physical Windows machine: orphan-process cleanup, rename-on-open-file `EPERM`,
-8.3 and UNC paths, and the `claude` CLI's Git Bash requirement still need that
-coverage. Please report Windows issues.
+8.3 and UNC paths still need that coverage. Git for Windows is optional for the
+`claude` CLI: without it, `claude` uses PowerShell for its shell tool (per the
+[Claude Code setup guide](https://code.claude.com/docs/en/setup), checked 13 Oct
+2026). Brain calls through that PowerShell path have **not** been verified; they
+were seen working only on a Windows 11 machine that had Git Bash. Please report
+Windows issues.
 
 `doctor` checks Node, the brain CLIs, Chromium, the current project and whether
 the target answers. It always exits `0`, so read the rows. Before a project
-exists the last two fail, as expected:
+exists the last two fail, as expected. On Windows it adds a seventh row,
+`Git Bash`: Git for Windows is optional (without it the `claude` CLI uses
+PowerShell for its shell tool), but the row fails, with an "optional" hint,
+when none is found. It checks `CLAUDE_CODE_GIT_BASH_PATH`; if that value is
+invalid it is ignored and the usual Git for Windows folders are checked
+instead (the WSL `bash.exe` in `System32` does not count). macOS and Linux show no such row.
 
 ```
 ✓ Node 26.8.1
@@ -858,7 +915,11 @@ The [quick start](#quick-start) in full, with the rules behind each step.
 **Creating a project.** `--login` reads `KOBAY_LOGIN_USER` and
 `KOBAY_LOGIN_PASS`; without them it prompts (the password is not echoed), and
 with no terminal and no variables it exits `2` — piping answers into stdin is
-not supported. The URL must be `http://` or `https://`. The login URL must
+not supported. Inside a coding agent (Claude Code, Codex and the like), type the
+password yourself in a separate terminal with `--login` rather than passing
+`KOBAY_LOGIN_PASS` to the agent; `explore` and `test refresh` then use the saved
+login, and `test run` reuses the session state `explore` saved. The URL
+must be `http://` or `https://`. The login URL must
 share `--url`'s origin, unless the login runs on a separate auth site (see
 [Separate login site (SSO)](#separate-login-site-sso)). The full output of the
 demo run:
@@ -927,7 +988,10 @@ start:
 ```
 
 **Run.** A test with no code gets Playwright code generated first (LLM call),
-then runs; a failing test is then analysed (another LLM call). 120 s per test.
+then runs; a failing test is then analysed (another LLM call). 120 s per test, and a single action (a click on a disabled button, say)
+gives up after 15 s so the step fails with its evidence; set
+`KOBAY_ACTION_TIMEOUT_MS` (a positive whole number of milliseconds; anything else
+falls back to 15 s) to change that.
 Exit code `1` means a test failed; `test list` then shows the verdicts
 (`passed`, `failed`, …) in place of `draft`.
 
@@ -965,14 +1029,14 @@ without regenerating it.
 
 ### Commands
 
-The flags below match `kobay --help` and every subcommand's `--help` in 0.3.0.
+The flags below match `kobay --help` and every subcommand's `--help` in 0.5.0.
 
 | Command | What it does |
 | --- | --- |
 | `setup [--brain <b>] [--model <m>] [--effort <e>]` | Writes the default brain to `~/.kobay/config.json` (`claude`, `codex`, `openrouter`). |
 | `install-browser [--with-deps]` | Installs the matching Chromium; `--with-deps` adds Linux system libraries. |
 | `demo [--port <port>]` | Starts the bundled demo app. Default port 3000; `0` picks a free one. |
-| `doctor` | Checks Node, brain CLIs, Chromium, project and target. Always exits `0`. |
+| `doctor` | Checks Node, brain CLIs, Chromium, project and target (and Git Bash on Windows). Always exits `0`. |
 | `project create --url <url> [--docs <path>] [--login] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Creates `.kobay/` here. `--url` must be an `http://` or `https://` address. `--force` rewrites only an existing project's config, keeping its brain and limits unless you pass new ones. `--auth-origin` requires `--login`. |
 | `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Changes only the fields you pass; `--base-url` and `--login-url` must be `http://` or `https://`. `--login` re-enters the credentials; `--auth-origin` replaces the whole auth origin list and, like `--clear-auth-origins`, requires `--login`. |
 | `project get` | Settings, test count, whether a map exists. |
@@ -989,7 +1053,7 @@ The flags below match `kobay --help` and every subcommand's `--help` in 0.3.0.
 | `test refresh <id> [--no-run]` | For `product_changed`: re-explore, adapt the plan, regenerate and run. |
 | `test result <id> [--history]` | Last run result, or every run still on disk. |
 | `test failure get <id> [--out <dir>]` | Copies the failure bundle. Default `.kobay/failure-out/<id>/`, refreshed in place. |
-| `test report [ids...] [--all] [--out <dir>] [--summary <path>] [--max-prompts <n>]` | Writes a static HTML report of each selected test's latest run (steps, screenshots, error, failure analysis, generated code). Reads only what is on disk; runs nothing. Default `.kobay/report/`, replaced as a whole each time. Exits `0` even when tests failed. `--summary` also writes a Markdown summary for a pull request comment (text only, at most `--max-prompts` fix prompts, default 5). |
+| `test report [ids...] [--all] [--out <dir>] [--summary <path>] [--max-prompts <n>]` | Writes a static HTML report of each selected test's latest run (steps, screenshots, failed-run video, error, failure analysis, generated code). Reads only what is on disk; runs nothing. Default `.kobay/report/`, replaced as a whole each time. Exits `0` even when tests failed. `--summary` also writes a Markdown summary for a pull request comment (text only, at most `--max-prompts` fix prompts, default 5). |
 | `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Removes old runs, brain logs, stale failure bundles and known leftovers from older versions. Unknown `failure-out/` files are skipped. Never removes the last failed run or a current failure bundle. The CLI deletes by default; `--dry-run` only previews. `--max-mb` caps `runs/` (default 500), and `--older-than-days` sets the age threshold (default 7). |
 | `agent install --target <claude\|codex\|cursor>` | Installs the agent skill here; for `claude` also registers the MCP server in `.mcp.json`. |
 | `mcp` | Starts the stdio MCP server. |
@@ -1162,7 +1226,7 @@ All project state lives in `.kobay/` at your app's root:
 | `runs/r_*/` | One folder per run: `result.json`, step `.png`/`.html`, `console.json`, `network.json`, `trace.zip`. |
 | `failure/<testId>/` | Latest failure bundle per test, written atomically. |
 | `failure-out/<testId>/` | Default destination of `test failure get`, refreshed in place (git-ignored). |
-| `report/` | Latest HTML report from `test report`: `index.html`, `kobay-report.json` and `assets/<runId>/step-<n>.png` (git-ignored). |
+| `report/` | Latest HTML report from `test report`: `index.html`, `kobay-report.json`, `assets/<runId>/step-<n>.png` and `assets/<runId>/video.webm` (git-ignored). |
 | `logs/` | Brain call logs. |
 | `playwright.config.ts` | Generated runner config. Edit it by hand and kobay leaves it alone, with a warning. |
 | `.credentials-txn` | Marker of a running credential change; `.stale-*` holds the set-aside copies. Both git-ignored. |

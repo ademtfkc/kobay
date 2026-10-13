@@ -299,3 +299,34 @@ describe('test kaydı dönüşümü', () => {
     })).toThrow(/priority: .*Expected/);
   });
 });
+
+describe('slug yol kalıbı (plan)', () => {
+  const harita: Harita = {
+    baseUrl: 'http://uygulama.test',
+    loggedIn: false,
+    exploredAt: '2026-10-12T00:00:00.000Z',
+    pages: [
+      { ...bosSayfa('http://uygulama.test/', 'Ana'), links: ['/iletisim'] },
+      {
+        ...bosSayfa('http://uygulama.test/sehir/istanbul', 'Istanbul'),
+        links: ['/sehir/ankara', '/sehir/izmir', '/sehir/bursa', '/sehir/adana', '/sehir/konya'],
+      },
+      bosSayfa('http://uygulama.test/sehir/ankara', 'Ankara'),
+    ],
+  };
+
+  it('haritada 2 sayfa + bağlantılarda >=5 şehir varken olmayan şehir kalıpla kabul edilir', () => {
+    expect(oneriUrlKarari('/sehir/olmayan-sehir-xyz', harita))
+      .toEqual({ kabul: true, tur: 'kalip', kalip: '/sehir/:slug' });
+  });
+
+  it('tamamen yeni yol yine düşer; kök sayfa kalıbı genişlemez', () => {
+    expect(oneriUrlKarari('/faturalar', harita).kabul).toBe(false);
+    expect(oneriUrlKarari('/hakkimizda', harita).kabul).toBe(false);
+  });
+
+  it('bağlantılar olmadan (eşik altı) şehir kalıbı oluşmaz', () => {
+    const dar: Harita = { ...harita, pages: harita.pages.map((s) => ({ ...s, links: [] })) };
+    expect(oneriUrlKarari('/sehir/olmayan-sehir-xyz', dar).kabul).toBe(false);
+  });
+});

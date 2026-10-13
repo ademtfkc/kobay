@@ -1,4 +1,4 @@
-import { access, readFile, readdir, rename } from 'node:fs/promises';
+import { access, readFile, readdir, rename, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { join, relative, sep, type PlatformPath } from 'node:path';
@@ -10,7 +10,7 @@ import {
   type KosuSonucu,
   type TestKaydi,
 } from '../depo/index.js';
-import { kaliciCalismaAlaniHazirla } from './calisma-alani.js';
+import { eylemZamanAsimiCoz, kaliciCalismaAlaniHazirla } from './calisma-alani.js';
 import { testSureciOrtami } from './ortam.js';
 import { raporuAyristir } from './rapor.js';
 import { kobayOlurkenAgaciOldur, sureciSonlandir } from '../ortak/komut-coz.js';
@@ -24,6 +24,8 @@ export interface KosturmaAyari {
   baseUrl: string;
   storageStateYolu?: string;
   testZamanAsimiMs?: number;
+  /** Tek bir eylemin (click, fill…) zaman aşımı; yoksa KOBAY_ACTION_TIMEOUT_MS, o da yoksa 15 sn. */
+  eylemZamanAsimiMs?: number;
 }
 
 const require = createRequire(import.meta.url);
@@ -199,6 +201,7 @@ async function kosturHam(
     return { sonuc, adimlar };
   }
   const zamanAsimiMs = s.testZamanAsimiMs ?? 120_000;
+  const eylemZamanAsimiMs = eylemZamanAsimiCoz(s.eylemZamanAsimiMs ?? process.env.KOBAY_ACTION_TIMEOUT_MS);
   const kosuDizini = await dizin.kosuDizini(runId);
   const raporYolu = join(kosuDizini, 'pw-report.json');
   const storageStateYolu = s.storageStateYolu ?? dizin.storageStateYolu();
@@ -209,6 +212,7 @@ async function kosturHam(
     KOBAY_RUN_DIR: join('runs', runId),
     KOBAY_REPORT_FILE: join('runs', runId, 'pw-report.json'),
     KOBAY_TEST_TIMEOUT_MS: String(zamanAsimiMs),
+    KOBAY_ACTION_TIMEOUT_MS: String(eylemZamanAsimiMs),
     ...(await dosyaVarMi(storageStateYolu) ? { KOBAY_STORAGE_STATE: storageStateYolu } : {}),
   });
   const calisma = await kosuSureci(specYolu, configYolu, dizin.kok, env, zamanAsimiMs);
@@ -263,8 +267,22 @@ async function kosturHam(
   const kaynakTrace = join(kosuDizini, 'pw');
   const traceYolu = await traceBul(kaynakTrace);
   if (traceYolu !== undefined) await rename(traceYolu, join(kosuDizini, 'trace.zip'));
+  await videoAraKlasorunuTemizle(kosuDizini);
   await kaydet(dizin, test, sonuc, ayrismis.adimlar);
   return { sonuc, adimlar: ayrismis.adimlar };
+}
+
+/**
+ * Fixture'ın silemediği (ör. Windows dosya kilidi) ara videolar için ikinci şans:
+ * `pw/video` klasörü bütünüyle kaldırılır. Saklanan video zaten `video.webm`'e taşındı.
+ * En iyi çaba; sonucu değiştirmez.
+ */
+async function videoAraKlasorunuTemizle(kosuDizini: string): Promise<void> {
+  try {
+    await rm(join(kosuDizini, 'pw', 'video'), { recursive: true, force: true });
+  } catch {
+    // Video en iyi çaba.
+  }
 }
 
 async function traceBul(kok: string): Promise<string | undefined> {

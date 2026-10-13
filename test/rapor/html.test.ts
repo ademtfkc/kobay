@@ -35,10 +35,47 @@ describe('raporHtml', () => {
     expect(raporHtml(veri([test_(1)]))).not.toContain('test need attention');
   });
 
+  it('özette hata türü dökümü ve gruplara göre toplu istem başlığı', () => {
+    const d = (no: number, kind: RaporTesti['failureKind']): RaporTesti => test_(no, { verdict: 'failed', ...(kind === undefined ? {} : { failureKind: kind }) });
+    const metin = raporHtml(veri([d(1, 'test_bug'), d(2, 'env'), d(3, 'unknown'), d(4, 'unknown'), d(5, 'unknown')]));
+    expect(metin).toContain('<p class="ozet-dokum">Failure kinds: 1 test_bug · 1 env · 3 unknown</p>');
+    expect(metin).toContain('Fix 1 test, review 4 more with your coding agent');
+    expect(metin).not.toContain('Fix all');
+    expect(raporHtml(veri([d(1, undefined), d(2, undefined)]))).toContain('Failure kinds: 2 not analysed');
+    expect(raporHtml(veri([d(1, 'product_bug'), d(2, 'test_bug')]))).toContain('Fix all 2 tests that need attention with your coding agent');
+    expect(raporHtml(veri([test_(1, { verdict: 'passed' })]))).not.toContain('Failure kinds');
+  });
+
   it('ekran görüntüsü yoksa redaksiyon uyarısını basmaz, varsa basar', () => {
-    expect(raporHtml(veri([test_(1)]))).not.toContain('Screenshots are not redacted');
-    expect(raporHtml(veri([]))).not.toContain('Screenshots are not redacted');
+    expect(raporHtml(veri([test_(1)]))).not.toContain('not redacted');
+    expect(raporHtml(veri([]))).not.toContain('not redacted');
     const gorselli = test_(1, { steps: [{ index: 0, screenshot: 'assets/r_20261010000000_0001/step-0.png' }] });
-    expect(raporHtml(veri([gorselli]))).toContain('<strong>Screenshots are not redacted.</strong>');
+    expect(raporHtml(veri([gorselli]))).toContain('<strong>Screenshots and videos are not redacted.</strong>');
+  });
+
+  it('yalnız video varken de redaksiyon uyarısını basar', () => {
+    const videolu = test_(1, { verdict: 'failed', video: 'assets/r_20261010000000_0001/video.webm' });
+    expect(raporHtml(veri([videolu]))).toContain('<strong>Screenshots and videos are not redacted.</strong>');
+  });
+
+  it('videoyu kontrollü, kendiliğinden oynamayan <video> olarak koyar; script ya da olay özniteliği yok', () => {
+    const metin = raporHtml(veri([test_(1, { verdict: 'failed', video: 'assets/r_20261010000000_0001/video.webm' })]));
+    expect(metin).toContain('<video class="video" controls preload="metadata" src="assets/r_20261010000000_0001/video.webm">');
+    expect(metin).not.toMatch(/autoplay/i);
+    expect(metin).not.toMatch(/<script/i);
+    expect(metin).not.toMatch(/<video[^>]*\son[a-z]+=/i);
+  });
+
+  it('video eklenemediyse notu gösterir, <video> koymaz', () => {
+    const metin = raporHtml(veri([test_(1, { verdict: 'failed', videoNote: 'The run video is larger than 50 MB, so it was not added to the report.' })]));
+    expect(metin).toContain('The run video is larger than 50 MB, so it was not added to the report.');
+    expect(metin).not.toContain('<video');
+    expect(metin).not.toContain('not redacted');
+  });
+
+  it('CSP yalnız media-src self ekler, başka gevşetme yok', () => {
+    const metin = raporHtml(veri([test_(1)]));
+    const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(metin)?.[1];
+    expect(csp).toBe("default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'");
   });
 });
