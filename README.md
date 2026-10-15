@@ -105,22 +105,22 @@ calls the first time it runs).
 
 ```sh
 kobay test plan generate
-#> 15 proposals generated; 1 dropped: Unknown page returns a not-found error (URL is not in the map and no path pattern matched: /records/999999 (pattern: /records/:id))
-#> Brain: 1 call, $0.28
-#> { "proposals": [
-#>     … 2 more …
-#>     { "id": "p_ig7gen", "priority": "p1", "title": "Login with invalid credentials shows an error", "stepCount": 5 },
-#>     … 3 more …
-#>     { "id": "p_io2io8", "priority": "p1", "title": "Record list shows existing records with Delete buttons", "stepCount": 4 },
-#>     … 1 more …
-#>     { "id": "p_mwg331", "priority": "p0", "title": "Create a new record and see it in the list", "stepCount": 7 },
-#>     … 6 more …
+#> 16 proposals generated
+#> Brain: 1 call, $0.29
+#> … 1 more …
+#> p_frk8vv	p0	Create a new record with valid data	10 steps
+#> p_4bc4nl	p1	Record list page renders existing records	4 steps
+#> … 10 more …
+#> p_xw9pro	p1	Login with invalid credentials shows an error	5 steps
+#> … 2 more …
+#> dropped	Login page renders its form	A step needs the real credentials, but the session is already authenticated via kobay's login step and generated tests cannot type credentials (step 2: "Verify that a text field labeled 'Username' and a password field labeled 'Password' are visible")
+#> dropped	Unknown URL returns a not-found response	URL is not in the map and no path pattern matched: /records/999999 (pattern: /records/:id)
 
-kobay test plan accept --ids p_io2io8,p_mwg331,p_ig7gen
+kobay test plan accept --ids p_4bc4nl,p_frk8vv,p_xw9pro
 #> 3 proposals accepted
-#> t_nwzz1a22  Login with invalid credentials shows an error                  …
-#> t_vv7ct7z4  Record list shows existing records with Delete buttons         …
-#> t_xankd0tf  Create a new record and see it in the list                      …
+#> t_2d6878ht	Create a new record with valid data	frontend	plan	draft	10 steps	p0	/new	0	2026-10-13T16:20:35.439Z	2026-10-13T16:20:35.439Z
+#> t_7ommeato	Record list page renders existing records	frontend	plan	draft	4 steps	p1	/records	0	2026-10-13T16:20:35.440Z	2026-10-13T16:20:35.440Z
+#> t_iyx35vx5	Login with invalid credentials shows an error	frontend	plan	draft	5 steps	p1	/login	0	2026-10-13T16:20:35.440Z	2026-10-13T16:20:35.440Z
 ```
 
 **4. Add one of your own** (optional). A hand-written plan asks for a flow the
@@ -129,10 +129,10 @@ have:
 
 ```sh
 kobay test create --plan monthly-total.plan.json
-#> Test created: t_m66f61mn
+#> Test created: t_qm8t4cyo
 #> Name: Record list shows a monthly total
 #> Steps: 2, priority: p0, status: draft
-#> Next: kobay test run t_m66f61mn
+#> Next: kobay test run t_qm8t4cyo
 ```
 
 **5. Run.** Tests without code get Playwright code generated first (LLM call);
@@ -140,26 +140,26 @@ a failing test is then analysed (another LLM call).
 
 ```sh
 kobay test run --all
-#> failed t_m66f61mn — product_bug
-#>   failure bundle: kobay test failure get t_m66f61mn
-#> passed t_nwzz1a22
-#> passed t_vv7ct7z4
-#> failed t_xankd0tf — test_bug
-#>   failure bundle: kobay test failure get t_xankd0tf
-#> Brain: 6 calls, $0.74
+#> passed t_2d6878ht
+#> passed t_7ommeato
+#> passed t_iyx35vx5
+#> failed t_qm8t4cyo — product_bug
+#>   failure bundle: kobay test failure get t_qm8t4cyo
+#> Brain: 5 calls, $0.60
 ```
 
-Exit code `1`: a test failed. The two failures are two different stories, and
-the `failureKind` tells them apart:
+Exit code `1`: a test failed. In this run one test failed (`product_bug`); the
+`test_bug` story below is from an earlier run. The `failureKind` tells the two
+apart:
 
-- **`t_m66f61mn` — `product_bug`.** The monthly total was never part of the
+- **`t_qm8t4cyo` — `product_bug`.** The monthly total was never part of the
   demo app; the plan describes a feature the page does not have. The analysis
   took the plan at its word, found no such row on the record list and said the
   product does not render it:
 
   ```json
   "failureKind": "product_bug",
-  "rootCauseHypothesis": "… No row, cell or text containing 'Monthly total' or any 'total' exists in the DOM … The most likely cause is that the product does not render the expected monthly total row",
+  "rootCauseHypothesis": "… the table contains no row with the text 'Monthly total' or any other summary/total row. The test asserts a feature that the page does not provide … the product is missing the monthly total row that the plan step requires",
   "recommendedFixTarget": { "kind": "code", … }
   ```
 
@@ -167,7 +167,7 @@ the `failureKind` tells them apart:
   remove or rewrite the plan step. The model can also call this `unknown`: the
   same plan was classified that way in earlier runs.
 
-- **`t_xankd0tf` — `test_bug`.** The app did its job, the generated test did
+- **`t_xankd0tf` — `test_bug`, from an earlier run.** The app did its job, the generated test did
   not. It looked for the new record with a regex that ends in `\b`
   (`/QA Test Record 1\b/`), but the page text runs the name, the amount and the
   Delete button together (`QA Test Record 142Delete`), so there is no word
@@ -182,17 +182,18 @@ the `failureKind` tells them apart:
 **6. Read the evidence and see the report.**
 
 ```sh
-kobay test failure get t_m66f61mn
+kobay test failure get t_qm8t4cyo
+#> Failure bundle copied: ~/kobay-demo/.kobay/failure-out/t_qm8t4cyo
 
 kobay test report --all
-#> Report written: 4 tests (2 passed, 2 failed, 0 blocked, 0 inconclusive, 0 not run), 18 screenshots, 2 videos.
+#> Report written: 4 tests (3 passed, 1 failed, 0 blocked, 0 inconclusive, 0 not run), 21 screenshots, 1 video.
 #> Open: ~/kobay-demo/.kobay/report/index.html
 #> Screenshots and videos are not redacted; review them before sharing the report.
 ```
 
 After a fix, `kobay test rerun <id>` runs the same code again. This whole round
-— one plan, four code generations, two analyses — was 7 brain calls and cost
-about $1.02 with the `claude` CLI. Stop the demo with Ctrl+C when you are done.
+— one plan, four code generations, one analysis — was 6 brain calls and cost
+about $0.89 with the `claude` CLI. Stop the demo with Ctrl+C when you are done.
 
 A longer walkthrough of each step, with the flags, is in
 [Quick start in detail](#quick-start-in-detail).
@@ -204,7 +205,11 @@ A longer walkthrough of each step, with the flags, is in
 </p>
 
 **explore** uses no LLM; it records each page's title, headings, links, forms,
-buttons and menus. **plan generate** and **test run** call the brain, and
+buttons and menus. Fields outside any `<form>` are kept too, and a page that
+sends you to the login page without a saved login is recorded as
+`requiresLogin` under the URL you asked for. Besides following links, explore
+reads `/sitemap.xml` when the project origin has one and starts from any
+`--seed` URLs. **plan generate** and **test run** call the brain, and
 generated code is checked before it is saved — `page.goto` may only target URLs
 in the map, and every `test.step` title must match its plan step exactly.
 **test refresh** re-explores just that test's page, updates the map in place,
@@ -336,6 +341,10 @@ test_delete     test_run        test_rerun   test_refresh  test_result
 failure_get     test_report     doctor       prune
 ```
 
+The `explore` tool takes `seeds` (up to 50 extra start URLs on the project
+origin), `sitemap` (boolean; `false` skips `/sitemap.xml`), `maxPages` and
+`depth`, the same as the CLI flags. It has no session-file input.
+
 Each tool carries MCP annotation hints: `test_delete`, `prune`, `project_create`
 and `project_update` are marked `destructiveHint`; no tool is marked
 `readOnlyHint`, because any tool may maintain the `.kobay` directory.
@@ -403,14 +412,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.5.0
+      - uses: ademtfkc/kobay@v0.6.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.5.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.6.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -559,23 +568,24 @@ note; a test whose run folder is gone shows as `not run`.
 
 ## Status and limits
 
-**0.5.0.** Usable, not yet smooth. New in 0.5.0: the HTML report shows the
-video of a failed test; a failed login now carries the message the login page
-showed (masked, and labelled as untrusted page text); the report summary adds a
-`Failure kinds` line; the "fix everything" prompt splits into Fix and Review
-groups; while the password is typed, HTTP(S) requests and WebSockets to sites
-outside the trusted set are blocked (`--auth-origin`, see the
-[security model](#security-model)); pages with many named children count as one
-`/city/:slug` pattern; a single action gives up after 15 s; and on Windows
-`kobay doctor` checks for Git Bash. The full list is in
-[CHANGELOG.md](CHANGELOG.md).
+**0.6.0.** Usable, not yet smooth. New in 0.6.0: `kobay explore` reads
+fields outside forms, `select` options, `aria-label` buttons and
+`details`/`summary` texts, and skips hidden fields; a page that sends a visitor
+to the login page is kept in the map as `requiresLogin`, and without a saved
+login the plan proposes only redirect checks there; `--seed`, `/sitemap.xml`
+(`--no-sitemap`), `--max-pages` and `--depth` widen the crawl;
+`--session-file` imports a logged-in Playwright `storageState` for apps whose
+login kobay cannot complete (CAPTCHA, 2FA; see
+[Imported session](#imported-session-captcha-2fa)), with a stricter network
+guard; and the brain cost caps no longer start a call that does not fit under
+`KOBAY_MAX_TOTAL_COST_USD`. The full list is in [CHANGELOG.md](CHANGELOG.md).
 
 What has and has not been exercised, so you can decide before installing:
 
 | | |
 | --- | --- |
 | **Who it's for** | Developers running Claude Code (or Codex / Cursor) who want the agent to verify a local web app instead of claiming it works. |
-| **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. The loop in the [quick start](#quick-start) was also run from a packed build against the bundled demo app with the real brain: 15 proposals (1 dropped), 4 tests, 2 passed, 2 failed, one classified `product_bug` and one `test_bug` as described there; 7 brain calls, about $1.02. |
+| **Verified end to end** | The `claude` CLI brain, driven by a Claude Code agent over MCP: the agent found a product bug, traced the root cause, fixed it and re-ran the test green. The loop in the [quick start](#quick-start) was also run from a packed build against the bundled demo app with the real brain: 16 proposals (2 dropped), 4 tests, 3 passed, 1 failed (`product_bug`); 6 brain calls, about $0.89. |
 | **Tried once with the real CLI** | The `codex` brain. On 28 September 2026 one round against the bundled demo app with a real `codex exec` (Codex CLI 0.154.0, ChatGPT plan) produced a plan, generated test code and analysed a failure; every brain call matched the schema on the first try. One round, not long use. |
 | **Untested in practice** | The `openrouter` brain. The adapter has unit tests but has never been run against the real API. Treat it as unverified. |
 | **Platform** | Developed on macOS. In the public repository, CI runs the full strict suite on ubuntu-latest, macos-latest and windows-latest with Node 22 and 24, a packaging smoke test on all three, and a smoke test of the GitHub Action on Ubuntu. Windows has not been verified on a physical machine; see [Install and requirements](#install-and-requirements). |
@@ -601,14 +611,30 @@ What has and has not been exercised, so you can decide before installing:
 - **Simple login only.** A username/password HTML form. A form on a separate
   auth site works only if you list its origin with `--auth-origin` (see
   [Separate login site (SSO)](#separate-login-site-sso)); OAuth consent screens,
-  CAPTCHA and 2FA are not handled; subdomains of the app's own site may receive
+  CAPTCHA and 2FA are not handled by `--login` (log in in your own browser and
+  import the session with `--session-file`, see
+  [Imported session](#imported-session-captcha-2fa)); subdomains of the app's own site may receive
   the credentials. A
   JavaScript-driven login is covered only by the network guard, not by the
   form-origin check.
-- **Exploration is shallow by design:** `<a href>` links only, no form submits or
-  button clicks, stopping at 40 pages.
+- **Exploration is shallow by design:** `<a href>` links, the sitemap and your
+  `--seed` URLs only; no form submits or button clicks. It stops at 40 pages
+  unless you pass `--max-pages`, and at depth 3 unless you pass `--depth`.
+- **What exploration does not see** (0.6.0): single-page-app navigation through
+  `pushState` or buttons; query-string variants of a page (`/login?mode=signup`
+  and `/login` are one page); `robots.txt`; fields inside an `iframe`; closed
+  shadow roots (open ones are read down to 10 levels). Past the per-page caps
+  (100 fields, 100 links, 50 buttons, 20 options, 20 disclosures) the rest is
+  cut silently.
+- **Login-required detection can be wrong.** A page counts as login-required
+  when the visit ends on a login page; a page that redirects to another origin
+  is marked too, and then only that origin is recorded as `redirectedTo`, so a
+  harmless redirect off-site can be flagged. Exploring with a saved
+  login (`project create --login`) clears the marker.
+- **Sitemap limits.** One origin, 1 MB per file, 500 URLs, 20 child sitemaps,
+  a 15-second budget; see [Commands](#commands).
 - **Some commands still print raw JSON in text mode:** `project get`,
-  `test get`, `test result`, and the body of `test plan generate`.
+  `test get`, and `test result`.
 - **The automatic pruning after a run only touches the test that just ran.**
   Runs of tests you never re-run stay on disk until you run `kobay prune`, which
   sweeps the whole `.kobay` storage (all tests' runs, brain logs and leftovers
@@ -669,7 +695,8 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   or delete records. Never aim kobay at production or real data.
 - **Credentials are origin-locked.** `.kobay/credentials.json` stores the login
   user and password in plain text (mode 0600) for one origin;
-  `.kobay/storageState.json` holds the session cookies (0600). Both are
+  `.kobay/storageState.json` holds the session cookies (0600), either from
+  `--login` or imported with `--session-file`. Both are
   git-ignored. Moving the project to another origin with
   `project update --base-url` or `project create --force` deletes both and lists
   them under `invalidated`. If the saved origin does not match, `explore` and
@@ -710,9 +737,12 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   Pages that load third-party scripts, fonts or maps after login render
   without them; list an origin with `--auth-origin` only if you trust it with
   the password. If the login does not complete, blocked GET requests are
-  added to the error as a hint and do not refuse the login on their own. Test
-  runs and a `test refresh` that reuses the saved session without typing the
-  password are not limited: the app's own traffic, session cookies included,
+  added to the error as a hint and do not refuse the login on their own. An
+  `explore` or `test refresh` that uses an imported session (`--session-file`)
+  runs under the same rules from its first request, see
+  [Imported session](#imported-session-captcha-2fa). Test
+  runs, and a `test refresh` that reuses a `--login` session without typing the
+  password, are not limited: the app's own traffic, session cookies included,
   goes wherever the app sends it, so use a test account. Same-site subdomains are allowed (`app.example.com` and
   `api.example.com`, same scheme); a separate auth site (SSO) only when you list
   it, and then only that exact origin, see below. On
@@ -805,6 +835,116 @@ kobay project update --login --clear-auth-origins
   otherwise `explore` exits `5` with "Login did not return to the app origin".
   This applies to every login, with or without auth origins.
 - `.kobay/storageState.json` (0600) then also holds the auth site's cookies.
+
+### Imported session (CAPTCHA, 2FA)
+
+When the login page has a CAPTCHA, a second factor or anything else kobay
+cannot type, log in in your own browser and hand kobay the session instead of
+the password. Save a Playwright `storageState` file after logging in (for
+example `npx playwright codegen --save-storage state.json <URL>`, or
+`context.storageState({ path })` in a script), then:
+
+```sh
+kobay project create --url http://127.0.0.1:3972 --session-file state.json
+#> Project created: ~/my-app/.kobay
+#> Target: http://127.0.0.1:3972
+#> Brain: claude
+#> Session: imported (1 cookie, 0 storage origins)
+#> Next: kobay explore
+kobay explore
+#> 3 pages explored (logged in, imported session)
+#> Map: ~/my-app/.kobay/map.json
+#> Pages: /, /records, /new
+#> Next: kobay test plan generate
+# later, when the session expires: import a fresh one and explore again
+kobay explore --session-file state.json
+```
+
+A relative `--session-file` path is resolved against `--cwd` (your shell's
+directory unless you pass `--cwd`), as `--plan` is.
+
+- The file must be a Playwright `storageState` JSON (`cookies[]`, `origins[]`)
+  of at most 1 MB. kobay checks it against that format, keeps only the known
+  fields and writes it to `.kobay/storageState.json` (mode 0600, git-ignored);
+  your file is not changed. Test runs, `test refresh` and later `explore` runs
+  use the imported session the same way as one saved by `--login`. The map
+  records `loggedIn: true` and `sessionSource: "imported"`.
+- **Data for other sites is refused** (exit `2`, nothing is imported). The
+  message names each offending cookie domain or storage origin, never a value.
+  The allowed set is narrower than the `--login` guard's: the base URL's exact
+  host (same scheme, any port) and the exact origins you pass with
+  `--auth-origin` (on `project create`, `--auth-origin` works with
+  `--session-file` as well as with `--login`). Other hosts of the same site
+  (`api.example.com` next to `app.example.com`) are not in it. A storage
+  origin must be a full `http(s)` origin in that set. Cookies carry no scheme
+  or port, so a cookie domain is matched by host name: the base URL's host
+  itself, or a dotted parent of it (`.example.com` for `app.example.com`), but
+  never a sibling host and never a public suffix (`.com`, `.co.uk`,
+  `.github.io`). kobay's suffix list is a short built-in approximation, not the
+  Public Suffix List: a suffix it does not know (`.id.au`, say) is accepted as
+  a parent, and a parent-domain cookie reaches every sibling host in the
+  browser. An auth origin's cookie follows the same rule for its host (the
+  host, or a dotted parent such as `.tenant.okta.com`; identity-provider tenant
+  domains such as `okta.com` and `auth0.com` are in the built-in suffix list),
+  and a dotted cookie also reaches that host's subdomains. A
+  cookie for `localhost` reaches every port of `localhost`, as in any browser.
+  `secure` and `sameSite` do not change the decision: neither sends a cookie
+  to a host it would not reach anyway. `expires` must be `-1` (session cookie)
+  or a positive Unix time.
+- `explore` and `test refresh` with an imported session never show the login
+  form and keep the network guard on from the first request (service workers
+  off): HTTP(S) requests, documents and
+  WebSockets to hosts outside the allowed set are blocked, with one warning
+  (`blocked N third-party requests with the imported session to protect the
+  session: ...`). An HTTP(S) request or an interceptable WebSocket to another
+  host that carries a cookie or storage value from the session (in its URL,
+  any request header including `Cookie`, or body; raw, URL-encoded, base64 or
+  base64url) stops exploration (exit `5`). The message names the matching
+  cookie or storage key (`cookie sid`), never the value. Values shorter than
+  8 characters are not treated as secrets (`theme=dark` or
+  `sidebar_state=true` would match ordinary requests such as `?lazy=true`); a
+  short token sent on through a trusted redirect only shows up in the "via
+  redirect" warning. Not covered: WebSockets opened from a Web Worker,
+  WebTransport, WebRTC and DNS prefetch. The redirect limit above applies here
+  too: a trusted endpoint that redirects to another host reaches it; kobay
+  only detects it (and stops if the leg carries a session value).
+- Visible page text that echoes a session value (title, headings, buttons,
+  menu and link text, field labels, placeholders and options) is written to
+  `map.json` and `--output json` as `[redacted]`. Structure is never changed:
+  the page `url`, `links`, form `action`, `redirectedTo` and input `name`s stay
+  as they are, except that a link or form `action` containing a session value
+  of 16+ characters (not URL-shaped) is left out of the map; the page's own
+  address is kept even then (known limit). Only session values of 8+
+  characters are masked (raw, URL-encoded in any letter case, base64 and
+  base64url), and not URL-shaped ones (`https://…`, so a token in the query of
+  such a stored URL can remain in the map: known limit) or plain words under 16
+  characters made of letters, `-` and `_` (`dashboard`, `sidebar-open`,
+  `kullanıcılar`). A form field whose `name` or `type` holds a 16+ character
+  session value is left out. The `--login` password is masked in visible
+  text only, case-insensitively, when it has 8+ characters and is not a plain
+  word (letters, `-`, `_`, under 16 characters); a shorter password (`admin`)
+  or a word password (`password`) is not masked, so "Admin", a `/admin` link
+  or "Reset password" stays intact (known limit). The leak message hides
+  e-mail-like parts and 16+ character letter/digit runs of the cookie or key
+  name.
+- If `.kobay/storageState.json` exists but cannot be read, is over 1 MB, or is
+  not JSON, `explore` exits `2` and leaves it alone; only a missing file means
+  "no session".
+- `--session-file` and `--login` do not mix: `project create` refuses both at
+  once, `project create --session-file --force` removes saved credentials, and
+  `explore --session-file` exits `2` while credentials are saved (kobay would
+  log in and replace the session). The file is re-checked on every `explore`;
+  if it was edited to include another site, `explore` exits `2`. If pages send
+  the imported session to a login page, `explore` warns that the session may
+  have expired.
+- MCP tools cannot import a session file: an agent cannot point kobay at an
+  arbitrary file. Over MCP, `explore` uses a session imported earlier on the
+  CLI.
+- Treat the file like a password: it is one. A test run's `trace.zip` (in
+  `runs/`, `failure/` and the `failure-out/` bundle) records the session
+  cookies and storage in clear, exactly as with a `--login` session, and step
+  screenshots, videos and `step-*.html` show whatever the page displays.
+  **Remove `trace.zip` from a failed test's bundle before you share it.**
 
 ## Reference
 
@@ -942,12 +1082,16 @@ never submitting forms. The result is the *map*, `.kobay/map.json`.
 
 **Generate a plan** — **LLM call.** The brain reads the map (plus a product
 document if you passed `--docs`) and is asked for 8–25 flows; proposals pointing
-at URLs outside the map are dropped. When a login is configured, proposals with
+at URLs outside the map or on another origin than the project (even when the
+path is in the map) are dropped. When a login is configured, proposals with
 a step that enters the real credentials (password, secret, PIN) are dropped too,
 listed under `dropped` with the step; steps that enter invalid or empty values
 are fine. Each proposal also states `requiresRealCredentials`; `true` drops it,
 and the step filter still drops real-credential steps when the flag says
-`false`. Generated code may not silently `test.skip`, and a step that would need
+`false`. Without a saved login, a proposal on a `requiresLogin` page is kept
+only when the brain marks it `loginRedirectCheck: true` (it only checks that the
+page sends you to the login page); the others are dropped, and the output
+(`nextStep` in JSON) says to save a login with `kobay project create --login`. Generated code may not silently `test.skip`, and a step that would need
 the real credentials throws instead of being rewritten. The text output is the
 summary line plus the same JSON body `--output json` returns. In the demo run
 (with `--hint` asking for the login-page check "Verify that a 'Username' text
@@ -1029,7 +1173,7 @@ without regenerating it.
 
 ### Commands
 
-The flags below match `kobay --help` and every subcommand's `--help` in 0.5.0.
+The flags below match `kobay --help` and every subcommand's `--help` in 0.6.0.
 
 | Command | What it does |
 | --- | --- |
@@ -1037,10 +1181,10 @@ The flags below match `kobay --help` and every subcommand's `--help` in 0.5.0.
 | `install-browser [--with-deps]` | Installs the matching Chromium; `--with-deps` adds Linux system libraries. |
 | `demo [--port <port>]` | Starts the bundled demo app. Default port 3000; `0` picks a free one. |
 | `doctor` | Checks Node, brain CLIs, Chromium, project and target (and Git Bash on Windows). Always exits `0`. |
-| `project create --url <url> [--docs <path>] [--login] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Creates `.kobay/` here. `--url` must be an `http://` or `https://` address. `--force` rewrites only an existing project's config, keeping its brain and limits unless you pass new ones. `--auth-origin` requires `--login`. |
+| `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Creates `.kobay/` here. `--url` must be an `http://` or `https://` address. `--force` rewrites only an existing project's config, keeping its brain and limits unless you pass new ones. `--session-file` imports a logged-in Playwright `storageState` file (see [Imported session](#imported-session-captcha-2fa)); `--auth-origin` requires `--login` or `--session-file`. |
 | `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Changes only the fields you pass; `--base-url` and `--login-url` must be `http://` or `https://`. `--login` re-enters the credentials; `--auth-origin` replaces the whole auth origin list and, like `--clear-auth-origins`, requires `--login`. |
 | `project get` | Settings, test count, whether a map exists. |
-| `explore` | Explores the app and rewrites `.kobay/map.json`. |
+| `explore [--seed <url>]... [--no-sitemap] [--max-pages <n>] [--depth <n>] [--session-file <path>]` | Explores the app and rewrites `.kobay/map.json`. Flags below. |
 | `test plan generate [--hint <text>]` | Proposes tests from the map and docs. `--hint` is free text, e.g. "invoice flow only". |
 | `test plan accept [--all] [--ids <id,id>]` | Turns proposals into draft tests. |
 | `test create --plan <path>` | Creates a test from a hand-written plan file (below). |
@@ -1057,6 +1201,22 @@ The flags below match `kobay --help` and every subcommand's `--help` in 0.5.0.
 | `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Removes old runs, brain logs, stale failure bundles and known leftovers from older versions. Unknown `failure-out/` files are skipped. Never removes the last failed run or a current failure bundle. The CLI deletes by default; `--dry-run` only previews. `--max-mb` caps `runs/` (default 500), and `--older-than-days` sets the age threshold (default 7). |
 | `agent install --target <claude\|codex\|cursor>` | Installs the agent skill here; for `claude` also registers the MCP server in `.mcp.json`. |
 | `mcp` | Starts the stdio MCP server. |
+
+`explore` flags (new in 0.6.0):
+
+- `--seed <url>`: extra start URL on the project origin; repeatable. A URL on
+  another origin exits `2`.
+- `--no-sitemap`: do not read `/sitemap.xml` (read by default when present on
+  the project origin). A sitemap index is followed. Limits: 1 MB per file, 500
+  URLs in total, 20 child sitemaps and one 15-second budget for all of it; only
+  a `200` answer counts, redirects are not followed, `.xml.gz` is not read, and
+  `robots.txt` is never read.
+- `--max-pages <n>`: maximum pages in the map, login-required entries included
+  (default: 40).
+- `--depth <n>`: maximum link depth from the start URLs (default: 3).
+- `--session-file <path>`: import a logged-in Playwright `storageState` file
+  first, then explore with it; refused (exit `2`) while credentials are saved.
+  See [Imported session](#imported-session-captcha-2fa).
 
 
 `prune --dry-run` prints a summary (example from a real run on a demo project):
@@ -1175,6 +1335,16 @@ only takes effect in a new process — restart kobay or the MCP server. When a
 limit is hit, kobay tells the agent to ask you for approval rather than change
 the setting itself.
 
+The caps are best effort, not a hard guarantee. `claude` checks its per-call
+budget only after a turn, so a single call can finish above its own limit and
+is still billed; kobay counts that real cost and refuses the next call. A
+`claude` call starts only when its whole per-call budget still fits in the
+remaining total; that rule lowers the risk of overshooting the total cap but
+cannot stop a running call from going past it. The last slice of the total may
+go unused: with the defaults ($5 total, $1 per call) kobay can stop
+once about $4 is spent, and any single call can still end above $1. Comparisons
+use whole micro-dollars, so floating-point noise never rejects a call that fits.
+
 A call that starts and then times out or errors is **not** refunded, because the
 provider may already have billed it; the reported real cost is counted if there
 is one, otherwise the whole reserved amount. The cap can only count cost the
@@ -1194,6 +1364,7 @@ OpenRouter and whatever it routes to):
 | Step | Sent to the LLM |
 | --- | --- |
 | `test plan generate` | The map: page URLs, titles, headings, link/button/menu labels, form field names and labels. Your `--docs` file, first 20,000 characters. Your `--hint`. |
+| `test plan generate`, `test refresh` (0.6.0 fields) | `select` option texts (the first 8 per field, plus the option count) and `details > summary` titles. They are unmasked and come straight from your app's own DOM: if a select lists customer names or e-mail addresses, those go to the LLM. |
 | `test run` (code generation) | The test's plan steps and the map. |
 | `test run` (failure analysis) | The error message, the failing step's cleaned DOM, up to 20 console errors, up to 20 failed network requests, the test code and plan steps. Screenshots are not sent. |
 | `test refresh` | The old and new summary of the test's page, the map diff and the plan steps. |
@@ -1219,7 +1390,7 @@ All project state lives in `.kobay/` at your app's root:
 | --- | --- |
 | `config.json` | Base URL, login URL, docs path, brain settings and limits (under `brain`). |
 | `credentials.json` | Login `username` and `password`, mode 0600, git-ignored. |
-| `storageState.json` | Playwright session state, mode 0600, git-ignored. |
+| `storageState.json` | Playwright session state, mode 0600, git-ignored. An imported one (`--session-file`) also carries `"kobay": { "sessionSource": "imported" }`, which Playwright ignores. |
 | `map.json` | The map: `pages` with `title`, `headings`, `links`, `forms`, `buttons`, `menu`. |
 | `plan/proposals.json` | Proposals from the brain. |
 | `tests/` | Test records (`t_*.json`), generated code (`t_*.spec.ts`), `_fixture.ts`. |
@@ -1230,6 +1401,22 @@ All project state lives in `.kobay/` at your app's root:
 | `logs/` | Brain call logs. |
 | `playwright.config.ts` | Generated runner config. Edit it by hand and kobay leaves it alone, with a warning. |
 | `.credentials-txn` | Marker of a running credential change; `.stale-*` holds the set-aside copies. Both git-ignored. |
+
+**Map fields.** Every field marked 0.6.0 is optional; a `map.json` written by
+an older kobay loads unchanged.
+
+| Level | Field | Meaning |
+| --- | --- | --- |
+| Map | `baseUrl`, `loggedIn`, `pages`, `exploredAt` | As before. |
+| Map | `seeds`, `sitemap` (`url`, `urlCount`) | 0.6.0: the `--seed` URLs and the sitemap that was read; a trace only. |
+| Map | `sessionSource` | 0.6.0: how `loggedIn` came about: `login` (kobay typed the saved credentials) or `imported` (`--session-file`). Absent when not logged in. |
+| Page | `url`, `title`, `headings`, `links`, `forms`, `buttons`, `menu` | As before. Buttons use the visible text, then `aria-label`, `title` or `value`; `role="button"` counts. |
+| Page | `disclosures` | 0.6.0: the `details > summary` texts (at most 20). |
+| Page | `requiresLogin`, `redirectedTo` | 0.6.0: the page sent an unauthenticated visit to a login page. `url` is the one asked for; `redirectedTo` is the login page without its query. `forms` and `buttons` are empty. |
+| Form | `fields`, `action` | As before. |
+| Form | `detached` | 0.6.0: the page's fields outside any `<form>`, as one virtual form per page. |
+| Field | `name`, `type`, `label`, `placeholder` | As before. `type="hidden"` fields are never recorded (this covers Next.js `$ACTION_*` fields and CSRF tokens). |
+| Field | `options`, `optionCount` | 0.6.0: for a `select`, the first 20 usable options, and how many usable (non-empty, non-disabled) options there are. |
 
 `.kobay/tests/_fixture.ts` is rewritten before every run to point at the active
 kobay installation; do not edit it by hand.

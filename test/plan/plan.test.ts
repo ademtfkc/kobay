@@ -1,15 +1,21 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { beyinOlustur } from '../../src/beyin/index.js';
-import { SchemaError, yazAtomik, type Harita, type Oneri } from '../../src/depo/index.js';
+import { PassThrough, Readable } from 'node:stream';
+import { main } from '../../src/cli/index.js';
+import { planGenerate } from '../../src/cli/komutlar/plan.js';
+import { KobayDizini, SchemaError, yazAtomik, type Harita, type Oneri } from '../../src/depo/index.js';
 import {
+  GIRIS_GEREKLI_SONRAKI_ADIM,
   PLAN_SISTEM_ISTEMI,
+  PLAN_YENILEME_SISTEM_ISTEMI,
   haritaYolKaliplari,
   oneriUrlKarari,
   oneriyiTesteCevir,
   planDosyasindanTest,
   planKullaniciIstemiOlustur,
   planUret,
+  planYenilemeKullaniciIstemiOlustur,
   yolKalibi,
 } from '../../src/plan/index.js';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
@@ -31,7 +37,7 @@ const harita: Harita = {
   ],
 };
 
-function taslak(sira: number, url = 'https://farkli-origin.test/urunler/'): Record<string, unknown> {
+function taslak(sira: number, url = 'http://uygulama.test/urunler/'): Record<string, unknown> {
   return {
     title: `Ürün akışı ${sira}`,
     description: 'Kullanıcı ürünleri görür.',
@@ -254,6 +260,336 @@ describe('istem', () => {
       + ' if mixed or unclear, use English.',
     );
     expect(PLAN_SISTEM_ISTEMI).not.toMatch(/[çğıöşüÇĞİÖŞÜ]/);
+  });
+});
+
+describe('istem: keşif derinliği alanları', () => {
+  const secenekler = Array.from({ length: 20 }, (_d, sira) => `Seçenek ${sira + 1}`);
+  const derinHarita: Harita = {
+    baseUrl: 'http://uygulama.test',
+    loggedIn: false,
+    exploredAt: '2026-10-13T00:00:00.000Z',
+    pages: [
+      {
+        url: 'http://uygulama.test/teklif', title: 'Teklif', headings: ['Teklif al'], links: [],
+        forms: [{
+          detached: true,
+          fields: [
+            { name: 'sehir', type: 'select', label: 'Şehir', options: secenekler, optionCount: 81 },
+            { name: 'ad', type: 'text', label: 'Ad' },
+          ],
+        }],
+        buttons: ['Gönder'], menu: [], disclosures: ['Fiyat dökümü', 'İptal koşulları'],
+      },
+      {
+        url: 'http://uygulama.test/panel', title: 'GİZLİ-BAŞLIK', headings: ['GİZLİ-H1'], links: [],
+        forms: [{ fields: [{ name: 'gizli-alan', type: 'text' }] }], buttons: ['GİZLİ-DÜĞME'], menu: [],
+        requiresLogin: true, redirectedTo: 'http://uygulama.test/giris',
+      },
+    ],
+  };
+  const istem = planKullaniciIstemiOlustur(derinHarita, undefined);
+
+  it('form dışı alanları "page-level fields" diye yazar', () => {
+    expect(istem).toContain('page-level fields (outside any <form>): [sehir (select');
+    expect(istem).not.toContain('form fields: page-level fields (outside any <form>): [ad');
+  });
+
+  it('select seçeneklerinin ilk 8\'ini ve toplam sayıyı yazar', () => {
+    expect(istem).toContain('options: Seçenek 1 / Seçenek 2 / Seçenek 3 / Seçenek 4 / Seçenek 5 / Seçenek 6 / Seçenek 7 / Seçenek 8 … (81 options)');
+    expect(istem).not.toContain('Seçenek 9');
+  });
+
+  it('disclosures satırını yazar', () => {
+    expect(istem).toContain('disclosures: Fiyat dökümü | İptal koşulları');
+  });
+
+  it('giriş gerekli sayfayı tek satırda yazar, başlık ve alanları yazmaz', () => {
+    expect(istem).toContain(
+      'url: http://uygulama.test/panel\nlogin required (redirects to http://uygulama.test/giris); '
+      + 'without a saved login propose only redirect checks here (loginRedirectCheck: true)',
+    );
+    expect(istem).not.toContain('GİZLİ');
+    expect(istem).not.toContain('gizli-alan');
+  });
+
+  it('sistem istemi giriş gerekli sayfalarda requiresRealCredentials kuralını söyler', () => {
+    expect(PLAN_SISTEM_ISTEMI).toContain('"login required"');
+    expect(PLAN_SISTEM_ISTEMI).toContain('The requiresRealCredentials rule applies to them unchanged');
+    expect(PLAN_SISTEM_ISTEMI).not.toMatch(/[çğıöşüÇĞİÖŞÜ]/);
+  });
+
+  it('sahte beyinle plan üretimi bu haritada çalışır', async () => {
+    const beyin = await sahteBeyin({ proposals: [taslak(1, 'http://uygulama.test/teklif')] });
+    const sonuc = await planUret(beyin, derinHarita, undefined);
+    expect(sonuc.proposals).toHaveLength(1);
+  });
+
+  it('giriş gerekli sayfaya yazılan öneriyi kayıtlı giriş yokken düşürür, kayıtlı girişte dokunmaz', async () => {
+    const taslaklar = [taslak(1, 'http://uygulama.test/teklif'), taslak(2, 'http://uygulama.test/panel/?x=1#a')];
+    const giriyok = await planUret(await sahteBeyin({ proposals: taslaklar }), derinHarita, undefined);
+    expect(giriyok.proposals).toHaveLength(1);
+    expect(giriyok.dropped).toEqual([{
+      title: 'Ürün akışı 2',
+      reason: `login required, no saved login: http://uygulama.test/panel/?x=1#a`,
+    }]);
+    const girisli = await planUret(
+      await sahteBeyin({ proposals: taslaklar }), { ...derinHarita, loggedIn: true }, undefined,
+    );
+    expect(giriyok.nextStep).toBe(GIRIS_GEREKLI_SONRAKI_ADIM);
+    expect(girisli.proposals).toHaveLength(2);
+    expect(girisli).not.toHaveProperty('nextStep');
+  });
+
+  const yonlendirmeAdimlari = [
+    { type: 'action', description: 'Oturum açmadan panel sayfasına git' },
+    { type: 'assertion', description: 'Giriş sayfasına yönlendiğini doğrula' },
+  ];
+  const panelTaslagi = (sira: number, ek: Record<string, unknown>): Record<string, unknown> => ({
+    ...taslak(sira, 'http://uygulama.test/panel'), steps: yonlendirmeAdimlari, ...ek,
+  });
+
+  it('kayıtlı giriş yokken loginRedirectCheck: true yönlendirme testi tutulur, beyan yerel öneriye taşınmaz', async () => {
+    const sonuc = await planUret(
+      await sahteBeyin({ proposals: [panelTaslagi(1, { loginRedirectCheck: true, requiresRealCredentials: false })] }),
+      derinHarita, undefined,
+    );
+    expect(sonuc.dropped).toEqual([]);
+    expect(sonuc.proposals).toHaveLength(1);
+    expect(sonuc.proposals[0]!.url).toBe('http://uygulama.test/panel');
+    expect(sonuc.proposals[0]).not.toHaveProperty('loginRedirectCheck');
+    expect(sonuc.proposals[0]).not.toHaveProperty('requiresRealCredentials');
+    expect(sonuc).not.toHaveProperty('nextStep');
+  });
+
+  it('kapıyı yalnız boolean true açar: "true" dizesi, 1, "TRUE" ve Türkçe eş adlar beyansız sayılıp düşer', async () => {
+    const sonuc = await planUret(await sahteBeyin({ proposals: [
+      taslak(9, 'http://uygulama.test/teklif'),
+      panelTaslagi(1, { loginRedirectCheck: 'true' }),
+      panelTaslagi(2, { girisYonlendirmeKontrolu: true }),
+      panelTaslagi(3, { girisYonlendirmesiKontrolu: true }),
+      panelTaslagi(4, { loginRedirectCheck: 1 }),
+      panelTaslagi(5, { loginRedirectCheck: 'TRUE' }),
+    ] }), derinHarita, undefined);
+    expect(sonuc.proposals.map((o) => o.title)).toEqual(['Ürün akışı 9']);
+    expect(sonuc.dropped.map((o) => o.reason)).toEqual(
+      Array.from({ length: 5 }, () => 'login required, no saved login: http://uygulama.test/panel'),
+    );
+  });
+
+  it('giriş gerekli sayfanın kalıbına uyan kayıt URL\'si de giriş gerekli sayılır (fail-closed)', async () => {
+    const kalipHaritasi: Harita = {
+      ...derinHarita,
+      pages: [
+        derinHarita.pages[0]!,
+        { url: 'http://uygulama.test/siparis/36', title: '', headings: [], links: [], forms: [], buttons: [], menu: [],
+          requiresLogin: true, redirectedTo: 'http://uygulama.test/giris' },
+      ],
+    };
+    const icerik = { ...taslak(1, 'http://uygulama.test/siparis/999'), loginRedirectCheck: false };
+    const yonlendirme = { ...taslak(2, '/siparis/999'), steps: yonlendirmeAdimlari, loginRedirectCheck: true };
+    const sonuc = await planUret(await sahteBeyin({ proposals: [icerik, yonlendirme] }), kalipHaritasi, undefined);
+    expect(sonuc.proposals.map((o) => o.title)).toEqual(['Ürün akışı 2']);
+    expect(sonuc.dropped).toEqual([{
+      title: 'Ürün akışı 1', reason: 'login required, no saved login: http://uygulama.test/siparis/999',
+    }]);
+    expect(sonuc.nextStep).toBe(GIRIS_GEREKLI_SONRAKI_ADIM);
+  });
+
+  it('proje kökeni dışındaki URL, yol haritada olsa ve loginRedirectCheck: true olsa da düşer', async () => {
+    const sonuc = await planUret(await sahteBeyin({ proposals: [
+      panelTaslagi(1, { loginRedirectCheck: true }),
+      { ...panelTaslagi(2, { loginRedirectCheck: true }), url: 'https://evil.test/panel' },
+      taslak(3, 'https://evil.test/teklif'),
+      taslak(4, 'http://uygulama.test:8080/teklif'),
+      taslak(5, '/teklif'),
+    ] }), derinHarita, undefined);
+    expect(sonuc.proposals.map((o) => o.title)).toEqual(['Ürün akışı 1', 'Ürün akışı 5']);
+    expect(sonuc.dropped).toEqual([
+      { title: 'Ürün akışı 2', reason: 'URL is outside the project origin: https://evil.test/panel' },
+      { title: 'Ürün akışı 3', reason: 'URL is outside the project origin: https://evil.test/teklif' },
+      { title: 'Ürün akışı 4', reason: 'URL is outside the project origin: http://uygulama.test:8080/teklif' },
+    ]);
+  });
+
+  it('loginRedirectCheck: null beyansız sayılır ve kayıtlı giriş yokken düşer', async () => {
+    const sonuc = await planUret(await sahteBeyin({ proposals: [
+      taslak(1, 'http://uygulama.test/teklif'),
+      panelTaslagi(2, { loginRedirectCheck: null }),
+    ] }), derinHarita, undefined);
+    expect(sonuc.proposals.map((o) => o.title)).toEqual(['Ürün akışı 1']);
+    expect(sonuc.dropped).toEqual([{
+      title: 'Ürün akışı 2',
+      reason: `login required, no saved login: http://uygulama.test/panel`,
+    }]);
+  });
+
+  it('hepsi düştüğünde hata mesajı düşme sebeplerini taşır, giriş ipucunu sonda bir kez yazar', async () => {
+    const beyin = await sahteBeyin({ proposals: [
+      panelTaslagi(1, { loginRedirectCheck: false }),
+      panelTaslagi(2, {}),
+      taslak(3, 'http://uygulama.test/yok'),
+    ] });
+    const hata = await planUret(beyin, derinHarita, undefined).then(() => null, (e: unknown) => e as Error);
+    expect(hata?.message).toBe(
+      'No usable proposal was produced; 3 dropped: '
+      + 'Ürün akışı 1 (login required, no saved login: http://uygulama.test/panel), '
+      + 'Ürün akışı 2 (login required, no saved login: http://uygulama.test/panel), '
+      + `Ürün akışı 3 (URL is not in the map and no path pattern matched: http://uygulama.test/yok (pattern: /yok)). `
+      + GIRIS_GEREKLI_SONRAKI_ADIM,
+    );
+    expect(hata?.message.split('kobay project create --login')).toHaveLength(2);
+  });
+
+  it('hepsi giriş dışı sebeple düştüğünde hata mesajında giriş ipucu yok', async () => {
+    const beyin = await sahteBeyin({ proposals: [taslak(1, 'http://uygulama.test/yok')] });
+    const hata = await planUret(beyin, derinHarita, undefined).then(() => null, (e: unknown) => e as Error);
+    expect(hata?.message).toContain('1 dropped: Ürün akışı 1 (URL is not in the map');
+    expect(hata?.message).not.toContain('kobay project create --login');
+  });
+
+  it('CLI plan generate başarılı yol: giriş ipucu metinde, uyarıda ve JSON nextStep alanında tam bir kez', async () => {
+    const cwd = await geciciDizinAc('kobay-plan-cli-');
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', brain: { adaptor: 'sahte' } });
+    await dizin.haritaYaz(derinHarita);
+    const yanitlar = await geciciDizinAc('kobay-plan-cli-yanit-');
+    const onceki = process.env.KOBAY_SAHTE_YANIT_DIZINI;
+    process.env.KOBAY_SAHTE_YANIT_DIZINI = yanitlar;
+    const ipucu = 'kobay project create --login';
+    try {
+      await yazAtomik(join(yanitlar, 'plan.json'), JSON.stringify({ proposals: [
+        taslak(1, 'http://uygulama.test/teklif'),
+        panelTaslagi(2, { loginRedirectCheck: false }),
+        panelTaslagi(3, {}),
+      ] }));
+      const sonuc = await planGenerate({ cwd });
+      expect(sonuc.exitCode).toBe(0);
+      expect(sonuc.metin?.split(ipucu)).toHaveLength(2);
+      expect(sonuc.metin?.trimEnd().split('\n').at(-1)).toBe(`next step\t${GIRIS_GEREKLI_SONRAKI_ADIM}`);
+      expect(sonuc.mesaj?.split(ipucu)).toHaveLength(2);
+      const govde = sonuc.json as { dropped: Array<{ reason: string }>; nextStep?: string };
+      expect(govde.nextStep).toBe(GIRIS_GEREKLI_SONRAKI_ADIM);
+      expect(govde.dropped.map((o) => o.reason)).toEqual([
+        'login required, no saved login: http://uygulama.test/panel',
+        'login required, no saved login: http://uygulama.test/panel',
+      ]);
+
+      await yazAtomik(join(yanitlar, 'plan.json'), JSON.stringify({ proposals: [
+        taslak(1, 'http://uygulama.test/teklif'), taslak(2, 'http://uygulama.test/yok'),
+      ] }));
+      const ipucusuz = await planGenerate({ cwd });
+      expect(ipucusuz.exitCode).toBe(0);
+      expect(ipucusuz.json).not.toHaveProperty('nextStep');
+      expect(ipucusuz.metin).not.toContain(ipucu);
+      expect(ipucusuz.metin).not.toContain('next step');
+    } finally {
+      if (onceki === undefined) delete process.env.KOBAY_SAHTE_YANIT_DIZINI;
+      else process.env.KOBAY_SAHTE_YANIT_DIZINI = onceki;
+    }
+  });
+
+  it('CLI plan generate: hepsi düştüğünde metin ve JSON hata çıktısında project create --login ipucu görünür', async () => {
+    const cwd = await geciciDizinAc('kobay-plan-cli-');
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', brain: { adaptor: 'sahte' } });
+    await dizin.haritaYaz(derinHarita);
+    const yanitlar = await geciciDizinAc('kobay-plan-cli-yanit-');
+    await yazAtomik(join(yanitlar, 'plan.json'), JSON.stringify({
+      proposals: [panelTaslagi(1, { loginRedirectCheck: false })],
+    }));
+    const onceki = process.env.KOBAY_SAHTE_YANIT_DIZINI;
+    process.env.KOBAY_SAHTE_YANIT_DIZINI = yanitlar;
+    try {
+      const sonuc = await planGenerate({ cwd });
+      expect(sonuc.exitCode).toBe(4);
+      expect(sonuc.mesaj?.split('kobay project create --login')).toHaveLength(2);
+      // Gerçek CLI, --output json: zarf { ok: false, exitCode: 4, error: { message } }, çıkış kodu 4.
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      let yazilan = '';
+      stdout.setEncoding('utf8');
+      stdout.on('data', (parca: string) => { yazilan += parca; });
+      const kod = await main(['node', 'kobay', '--cwd', cwd, '--output', 'json', 'test', 'plan', 'generate'], {
+        input: Readable.from([]), stdout, stderr,
+      });
+      expect(kod).toBe(4);
+      const zarf = JSON.parse(yazilan.trim()) as { ok: boolean; exitCode: number; error: { message: string } };
+      expect(zarf.ok).toBe(false);
+      expect(zarf.exitCode).toBe(4);
+      expect(zarf.error.message).toBe(
+        'No usable proposal was produced; 1 dropped: Ürün akışı 1 (login required, no saved login: '
+        + `http://uygulama.test/panel). ${GIRIS_GEREKLI_SONRAKI_ADIM}`,
+      );
+      expect(zarf.error.message.split('kobay project create --login')).toHaveLength(2);
+    } finally {
+      if (onceki === undefined) delete process.env.KOBAY_SAHTE_YANIT_DIZINI;
+      else process.env.KOBAY_SAHTE_YANIT_DIZINI = onceki;
+    }
+  });
+
+  it('kayıtlı giriş yokken içerik testi (loginRedirectCheck: false) ve beyansız eski yanıt düşer, sonraki adımı söyler', async () => {
+    const icerik = {
+      ...taslak(1, 'http://uygulama.test/panel'),
+      steps: [
+        { type: 'action', description: 'Panel sayfasını aç' },
+        { type: 'assertion', description: 'Hesap özetinin göründüğünü doğrula' },
+      ],
+      loginRedirectCheck: false,
+    };
+    const eski = panelTaslagi(2, {});
+    const sonuc = await planUret(
+      await sahteBeyin({ proposals: [taslak(3, 'http://uygulama.test/teklif'), icerik, eski] }), derinHarita, undefined,
+    );
+    expect(sonuc.proposals.map((o) => o.title)).toEqual(['Ürün akışı 3']);
+    const sebep = `login required, no saved login: http://uygulama.test/panel`;
+    expect(sonuc.dropped).toEqual([
+      { title: 'Ürün akışı 1', reason: sebep },
+      { title: 'Ürün akışı 2', reason: sebep },
+    ]);
+    expect(sonuc.nextStep).toBe(GIRIS_GEREKLI_SONRAKI_ADIM);
+    expect(sonuc.nextStep).toContain('kobay project create --login');
+    expect(sonuc.nextStep).toContain('kobay project update --login');
+  });
+
+  it('gerçek kimlik isteyen yönlendirme testi kayıtlı giriş yokken düşer', async () => {
+    const sonuc = await planUret(await sahteBeyin({ proposals: [
+      taslak(1, 'http://uygulama.test/teklif'),
+      panelTaslagi(2, { loginRedirectCheck: true, requiresRealCredentials: true }),
+    ] }), derinHarita, undefined);
+    expect(sonuc.proposals).toHaveLength(1);
+    expect(sonuc.dropped).toEqual([{
+      title: 'Ürün akışı 2',
+      reason: 'login required, no saved login: the redirect check declares requiresRealCredentials: true: '
+        + `http://uygulama.test/panel`,
+    }]);
+  });
+
+  it('kayıtlı girişte loginRedirectCheck kararı etkilemez', async () => {
+    const sonuc = await planUret(await sahteBeyin({ proposals: [
+      panelTaslagi(1, { loginRedirectCheck: false }),
+      panelTaslagi(2, { loginRedirectCheck: true }),
+    ] }), { ...derinHarita, loggedIn: true }, undefined);
+    expect(sonuc.proposals).toHaveLength(2);
+  });
+
+  it('sistem istemi yönlendirme testini loginRedirectCheck ile işaretlemeyi söyler', () => {
+    expect(PLAN_SISTEM_ISTEMI).toContain('the only tests allowed on such a page are redirect checks');
+    expect(PLAN_SISTEM_ISTEMI).toContain('Every proposal must carry loginRedirectCheck as a boolean');
+    expect(PLAN_SISTEM_ISTEMI).toContain('"loginRedirectCheck":false}]}');
+  });
+
+  it('yenileme sistem istemi seçenek metinlerini ve disclosure başlıklarını yeniden adlandırılabilir sayar', () => {
+    expect(PLAN_YENILEME_SISTEM_ISTEMI).toContain('select option texts or disclosure titles');
+  });
+
+  it('yenileme istemi aynı yardımcıları kullanır (select seçenekleri ve disclosures gelir)', () => {
+    const sayfa = derinHarita.pages[0]!;
+    const yenileme = planYenilemeKullaniciIstemiOlustur({
+      test: { name: 'Teklif al', planSteps: [{ type: 'action', description: 'Aç' }] },
+      yeniSayfa: sayfa,
+    });
+    expect(yenileme).toContain('page-level fields');
+    expect(yenileme).toContain('(81 options)');
+    expect(yenileme).toContain('disclosures: Fiyat dökümü');
   });
 });
 

@@ -309,7 +309,7 @@ describe('fix-all prompt groups (A5)', () => {
     expect(review).toContain('8. t_aaaaaaa5: inconclusive; get evidence locally with `kobay test rerun t_aaaaaaa5 --output json`. Do not change code.');
     expect(review).toContain('4. t_aaaaaaa6: failed, failure kind `flaky`; read the evidence (`kobay test failure get t_aaaaaaa6 --output json`) and find the cause. Do not change code.');
     expect(review).toContain('5. t_aaaaaaa7: failed, failure kind `unknown`; get evidence locally with `kobay test rerun t_aaaaaaa7 --output json`.');
-    expect(review).toContain('6. t_aaaaaaa8: failed, failure kind `unknown`; get evidence locally with `kobay test rerun t_aaaaaaa8 --output json`.');
+    expect(review).toContain('6. t_aaaaaaa8: failed, failure kind `not analysed`; get evidence locally with `kobay test rerun t_aaaaaaa8 --output json`.');
     expect(review).not.toMatch(/\bfix\b/i);
     // Tür yönlendirmesi adım 2'de yalnız kod değiştiren türleri sayar; env/blocked orada çiftlenmez.
     const adim2 = istem.split('\n').find((satir) => satir.startsWith('2. Act on the failure kind')) ?? '';

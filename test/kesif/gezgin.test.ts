@@ -16,6 +16,18 @@ describe('baglantiIzlenebilir', () => {
   it('normal bağlantıyı kabul eder', () => {
     expect(baglantiIzlenebilir('New Record')).toBe(true);
   });
+
+  it.each(['Nasil calisir', 'nasil-calisir', 'Silivri nakliyat', 'Silikon kalıp', 'Silah ruhsatı', 'Basil', 'Yardım'])(
+    'kelime içindeki "sil" bağlantıyı düşürmez: %s',
+    (metin) => {
+      expect(baglantiIzlenebilir(metin)).toBe(true);
+    },
+  );
+
+  it.each(['Sil', 'Kaydı sil', 'SİL', 'hesap-sil', 'sil.', 'ÇIKIŞ', 'Çıkış yap', 'Çıkışlar', 'Sign out', 'SIGN OUT',
+    'Delete account', 'Kaldır', 'Oturumu kapat', 'Remove'])('yıkıcı kelime sınırda yakalanır: %s', (metin) => {
+    expect(baglantiIzlenebilir(metin)).toBe(false);
+  });
 });
 
 describe('URL kalıbı kotası', () => {
@@ -35,6 +47,7 @@ describe('URL kalıbı kotası', () => {
     let etkinUrl = '';
     const gezilen: string[] = [];
     const sayfa = {
+      url: () => etkinUrl,
       goto: vi.fn(async (url: string) => {
         etkinUrl = url;
         gezilen.push(url);
@@ -127,6 +140,7 @@ describe('slug kalıbı', () => {
     let etkinUrl = '';
     const gezilen: string[] = [];
     const sayfa = {
+      url: () => etkinUrl,
       goto: vi.fn(async (url: string) => { etkinUrl = url; gezilen.push(url); }),
       locator: vi.fn(() => ({
         evaluateAll: async (isleyici: (elemanlar: unknown[]) => unknown) =>
@@ -151,7 +165,8 @@ async function gezSahte(site: Record<string, string[]>, maxSayfa: number, derinl
   let etkinUrl = '';
   const gezilen: string[] = [];
   const sayfa = {
-    goto: vi.fn(async (url: string) => { etkinUrl = url; gezilen.push(url); }),
+    url: () => etkinUrl,
+      goto: vi.fn(async (url: string) => { etkinUrl = url; gezilen.push(url); }),
     locator: vi.fn(() => ({
       evaluateAll: async (isleyici: (elemanlar: unknown[]) => unknown) =>
         isleyici((site[new URL(etkinUrl).pathname] ?? []).map((yol) => ({ href: `${T}${yol}`, metin: 'Bağlantı' }))),
@@ -246,6 +261,7 @@ describe('ilk sayfalar ve sondaki eğik çizgi', () => {
     let etkinUrl = '';
     const gezilen: string[] = [];
     const sayfa = {
+      url: () => etkinUrl,
       goto: vi.fn(async (url: string) => { etkinUrl = url; gezilen.push(url); }),
       locator: vi.fn(() => ({
         evaluateAll: async (isleyici: (elemanlar: unknown[]) => unknown) =>
@@ -275,7 +291,8 @@ async function gezSahteTam(site: Record<string, string[]>, maxSayfa: number): Pr
   let etkinUrl = '';
   const gezilen: string[] = [];
   const sayfa = {
-    goto: vi.fn(async (url: string) => { etkinUrl = url; gezilen.push(url); }),
+    url: () => etkinUrl,
+      goto: vi.fn(async (url: string) => { etkinUrl = url; gezilen.push(url); }),
     locator: vi.fn(() => ({
       evaluateAll: async (isleyici: (elemanlar: unknown[]) => unknown) =>
         isleyici((site[new URL(etkinUrl).pathname] ?? []).map((yol) => ({ href: `${T}${yol}`, metin: 'x' }))),
@@ -287,3 +304,29 @@ async function gezSahteTam(site: Record<string, string[]>, maxSayfa: number): Pr
   await gez(sayfa, { baseUrl: `${T}/`, maxSayfa, derinlik: 1, sayfaZamanAsimiMs: 1 });
   return gezilen;
 }
+
+describe('tohum ve sitemap adresleri', () => {
+  it('tohumlar derinlik 0, sitemap adresleri derinlik 1 ile kuyruğa girer; başka köken atlanır', async () => {
+    let etkinUrl = '';
+    const gezilen: string[] = [];
+    const site: Record<string, string[]> = { '/tohum': ['/tohumdan'], '/harita': ['/haritadan'] };
+    const sayfa = {
+      url: () => etkinUrl,
+      goto: vi.fn(async (url: string) => { etkinUrl = url; gezilen.push(new URL(url).pathname); }),
+      locator: vi.fn(() => ({
+        evaluateAll: async (isleyici: (elemanlar: unknown[]) => unknown) =>
+          isleyici((site[new URL(etkinUrl).pathname] ?? []).map((yol) => ({ href: `${T}${yol}`, metin: 'Bağlantı' }))),
+      })),
+    } as unknown as Page;
+    sayfaOzetiSahte.mockImplementation(async () => ({
+      url: etkinUrl, title: '', headings: [], links: [], forms: [], buttons: [], menu: [],
+    }));
+    await gez(sayfa, {
+      baseUrl: `${T}/`, maxSayfa: 20, derinlik: 1, sayfaZamanAsimiMs: 1,
+      tohumlar: [`${T}/tohum`, 'https://baska.test/x'],
+      siteHaritasiAdresleri: [`${T}/harita`, `${T}/tohum`],
+    });
+    // Derinlik 1: tohumun bağlantısı izlenir, sitemap sayfasınınki (derinlik 1) izlenmez.
+    expect(gezilen).toEqual(['/', '/tohum', '/harita', '/tohumdan']);
+  });
+});

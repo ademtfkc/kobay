@@ -138,14 +138,161 @@ describe('eksik kapanış onarımı', () => {
 });
 
 describe('CLI adaptörleri', () => {
-  it('Claude çağrı tavanını kalan toplam bütçeyle sınırlar', () => {
+  it('Claude çağrısı tam çağrı bütçesi kalan toplama sığmıyorsa başlamaz; bütçeyi kalana küçültmez', () => {
     const butce = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 0.4, maxTotalCostUsd: 0.5 }, {});
     const ilk = butce.claudeCagrisiBaslat();
     expect(ilk.azamiMaliyetUsd).toBe(0.4);
     butce.cagriTamamla(ilk, 0.3);
-    const ikinci = butce.claudeCagrisiBaslat();
-    expect(ikinci.azamiMaliyetUsd).toBeCloseTo(0.2);
-    butce.cagriIptal(ikinci);
+    expect(() => butce.claudeCagrisiBaslat()).toThrow(/Spent 0\.3000 USD\. Limit 0\.5000 USD/);
+    // Toplam tavan çağrı bütçesinden küçükse çağrı bütçesi toplam tavana iner.
+    const dar = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 1, maxTotalCostUsd: 0.3 }, {});
+    expect(dar.claudeCagrisiBaslat().azamiMaliyetUsd).toBe(0.3);
+  });
+
+  it('P3-1: toplam tavan 1.2 iken 0.753 USD harcanınca ikinci Claude çağrısı başlamaz, mesaj gerçek harcamayı ve tavanı gösterir', async () => {
+    const cli = await sahteCliDizini('claude');
+    const beyin = beyinOlustur({ adaptor: 'claude', maxBudgetUsd: 1, maxTotalCostUsd: 1.2 }, {
+      PATH: cli.path,
+      T_CIKTI: JSON.stringify({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.753, result: '{"tamam":true}' }),
+    });
+    await expect(beyin.sor({ gorev: 'ilk', sistem: 'S', kullanici: 'K', sema })).resolves.toMatchObject({ maliyetUsd: 0.753 });
+    const hata = await beyin.sor({ gorev: 'ikinci', sistem: 'S', kullanici: 'K', sema }).catch((neden: unknown) => neden);
+    expect(hata).toMatchObject({ sebep: 'cost_cap' });
+    expect((hata as Error).message).toContain('Spent 0.7530 USD. Limit 1.2000 USD.');
+    expect((hata as Error).message).toContain('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd');
+    expect(await cagriSayisi(cli.sayac)).toBe(1);
+  });
+
+  it('P3-1: Claude çağrı sınırı toplam tavandan geldiyse mesaj toplam tavan ayarını ve gerçek maliyeti söyler', async () => {
+    const cli = await sahteCliDizini('claude');
+    const beyin = beyinOlustur({ adaptor: 'claude', maxBudgetUsd: 1, maxTotalCostUsd: 0.5 }, {
+      PATH: cli.path,
+      T_CIKTI: JSON.stringify({
+        type: 'result', subtype: 'error_max_budget_usd', is_error: true, total_cost_usd: 0.52, num_turns: 1,
+      }),
+    });
+    const hata = await beyin.sor({ gorev: 'butce', sistem: 'S', kullanici: 'K', sema }).catch((neden: unknown) => neden);
+    expect(hata).toMatchObject({ sebep: 'cost_cap' });
+    const mesaj = (hata as Error).message;
+    expect(mesaj).toContain('the call cost 0.5200 USD');
+    expect(mesaj).toContain('Spent 0.5200 USD, total limit 0.5000 USD');
+    expect(mesaj).toContain('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd');
+    expect(mesaj).not.toContain('KOBAY_MAX_BUDGET_USD');
+  });
+
+  it('P2-1: başarısız (exit 1) çağrının harcaması toplam tavanı aşarsa cli_error değil cost_cap bildirilir', async () => {
+    const cli = await sahteCliDizini('claude');
+    const beyin = beyinOlustur({ adaptor: 'claude', maxBudgetUsd: 0.4, maxTotalCostUsd: 0.5 }, {
+      PATH: cli.path,
+      T_KOD: '1',
+      T_CIKTI: JSON.stringify({
+        type: 'result', subtype: 'error_during_execution', is_error: true, total_cost_usd: 0.9, num_turns: 1,
+      }),
+    });
+    const hata = await beyin.sor({ gorev: 'basarisiz', sistem: 'S', kullanici: 'K', sema }).catch((neden: unknown) => neden);
+    expect(hata).toMatchObject({ sebep: 'cost_cap' });
+    expect((hata as Error).message).toContain('spent 0.9000 USD, limit 0.5000 USD');
+    // Harcama sayıldığı için sonraki çağrı da başlamaz.
+    await expect(beyin.sor({ gorev: 'sonra', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cost_cap' });
+    expect(await cagriSayisi(cli.sayac)).toBe(1);
+  });
+
+  it('P2-1: başarısız çağrı tavanın içinde kalırsa eski hata türü korunur', async () => {
+    const cli = await sahteCliDizini('claude');
+    const beyin = beyinOlustur({ adaptor: 'claude', maxBudgetUsd: 0.4, maxTotalCostUsd: 2 }, {
+      PATH: cli.path,
+      T_KOD: '1',
+      T_CIKTI: JSON.stringify({
+        type: 'result', subtype: 'error_during_execution', is_error: true, total_cost_usd: 0.1, num_turns: 1,
+      }),
+    });
+    await expect(beyin.sor({ gorev: 'basarisiz', sistem: 'S', kullanici: 'K', sema })).rejects.toMatchObject({ sebep: 'cli_error' });
+  });
+
+  it('P2-2: kayan nokta toplamı tavanın tam üstüne çıksa da son geçerli çağrı reddedilmez', () => {
+    // 0.4 + 0.4 + 0.4 kayan noktada 1.2000000000000002 olur.
+    const butce = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 0.4, maxTotalCostUsd: 1.2 }, {});
+    for (let i = 0; i < 3; i += 1) butce.cagriTamamla(butce.claudeCagrisiBaslat(), 0.4);
+    expect(() => butce.claudeCagrisiBaslat()).toThrow(/cost limit/i);
+  });
+
+  it('P3-2: iki limit eşitken mesaj ikisini de söyler', async () => {
+    const cli = await sahteCliDizini('claude');
+    const beyin = beyinOlustur({ adaptor: 'claude', maxBudgetUsd: 0.5, maxTotalCostUsd: 0.5 }, {
+      PATH: cli.path,
+      T_CIKTI: JSON.stringify({
+        type: 'result', subtype: 'error_max_budget_usd', is_error: true, total_cost_usd: 0.52, num_turns: 1,
+      }),
+    });
+    const hata = await beyin.sor({ gorev: 'esit', sistem: 'S', kullanici: 'K', sema }).catch((neden: unknown) => neden);
+    const mesaj = (hata as Error).message;
+    expect(mesaj).toContain('KOBAY_MAX_BUDGET_USD');
+    expect(mesaj).toContain('KOBAY_MAX_TOTAL_COST_USD');
+  });
+
+  it('P3-2: hangi limit tetiklediyse mesaj yalnız onu adlandırır (varsayılan 1/5 ve 0.4/1.2 çağrı başı, 1/0.5 toplam, 0.5/0.5 ikisi)', () => {
+    const mesaj = (cagri: number, toplam: number): string => {
+      const butce = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: cagri, maxTotalCostUsd: toplam }, {});
+      return butce.claudeCagriSiniriMesaji(butce.claudeCagrisiBaslat(), cagri + 0.02);
+    };
+    for (const [cagri, toplam] of [[1, 5], [0.4, 1.2]] as const) {
+      const m = mesaj(cagri, toplam);
+      expect(m).toContain('KOBAY_MAX_BUDGET_USD');
+      expect(m).not.toContain('KOBAY_MAX_TOTAL_COST_USD or');
+      expect(m).not.toContain('equal');
+    }
+    const toplamdan = mesaj(1, 0.5);
+    expect(toplamdan).toContain('KOBAY_MAX_TOTAL_COST_USD');
+    expect(toplamdan).not.toContain('KOBAY_MAX_BUDGET_USD');
+    const esit = mesaj(0.5, 0.5);
+    expect(esit).toContain('KOBAY_MAX_BUDGET_USD');
+    expect(esit).toContain('KOBAY_MAX_TOTAL_COST_USD');
+  });
+
+  it('P2-2: başarısız çağrı toplamı kayan nokta farkıyla tam tavana getirirse hata yok, tavanı gerçekten aşarsa cost_cap', () => {
+    const butce = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 0.4, maxTotalCostUsd: 1.2 }, {});
+    butce.cagriTamamla(butce.claudeCagrisiBaslat(), 0.4);
+    butce.cagriTamamla(butce.claudeCagrisiBaslat(), 0.4);
+    expect(butce.cagriHarcandi(butce.claudeCagrisiBaslat(), 0.4)).toBeUndefined();
+    const asan = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 0.4, maxTotalCostUsd: 1.2 }, {});
+    asan.cagriTamamla(asan.claudeCagrisiBaslat(), 0.4);
+    asan.cagriTamamla(asan.claudeCagrisiBaslat(), 0.4);
+    expect(asan.cagriHarcandi(asan.claudeCagrisiBaslat(), 0.41)).toMatchObject({ sebep: 'cost_cap' });
+  });
+
+  it('P2-a: çok büyük tavanda mikro-dolar çarpımı taşsa da ham karşılaştırmaya düşer', () => {
+    const butce = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 1e303, maxTotalCostUsd: 1e303 }, {});
+    expect(() => butce.cagriBaslat(2e303)).toThrow(/cost limit/i);
+    expect(() => butce.cagriBaslat(0.5e303)).not.toThrow();
+  });
+
+  it('P2-b: çağrı başı rezervasyon aşılınca mesaj çağrı başı ayarı adlandırır', () => {
+    const butce = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 0.4, maxTotalCostUsd: 5 }, {});
+    const hata = butce.cagriHarcandi(butce.claudeCagrisiBaslat(), 0.9);
+    expect(hata?.message).toContain('KOBAY_MAX_BUDGET_USD');
+    expect(hata?.message).not.toContain('KOBAY_MAX_TOTAL_COST_USD');
+    expect(hata?.message).toContain('exceeded the 0.4000 USD call reservation');
+  });
+
+  it('P3-a: yalnız toplam aşıldığında mesaj rezervasyon aşımı demez', () => {
+    const butce = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 1, maxTotalCostUsd: 5 }, {});
+    const ilk = butce.cagriBaslat(1);
+    const ikinci = butce.cagriBaslat(1);
+    expect(() => butce.cagriTamamla(ilk, 4.5)).toThrow(/exceeded the 1\.0000 USD call reservation/);
+    let mesaj = '';
+    try { butce.cagriTamamla(ikinci, 0.8); } catch (hata) { mesaj = (hata as Error).message; }
+    expect(mesaj).toContain('total spend went over the total cost limit');
+    expect(mesaj).not.toContain('reservation');
+    expect(mesaj).toContain('KOBAY_MAX_TOTAL_COST_USD');
+    expect(mesaj).not.toContain('KOBAY_MAX_BUDGET_USD');
+  });
+
+  it('P3-b: mikro-dolara yuvarlanınca aynı çıkan ama farklı iki limit eşit sayılmaz', () => {
+    const butce = new BeyinButcesi({ adaptor: 'claude', maxBudgetUsd: 0.5000001, maxTotalCostUsd: 0.5000004 }, {});
+    const m = butce.claudeCagriSiniriMesaji(butce.claudeCagrisiBaslat(), 0.6);
+    expect(m).not.toContain('equal');
+    expect(m).toContain('KOBAY_MAX_BUDGET_USD');
+    expect(m).not.toContain('KOBAY_MAX_TOTAL_COST_USD');
   });
 
   it('varsayılan Claude çağrı tavanı büyük planlar için 1 USD olur', () => {
@@ -573,7 +720,9 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
 
   it('#5 Claude sıfır dışı çıkışta stdout JSON maliyetiyle uzlaşır, iade etmez (butce.mts)', async () => {
     const cli = await sahteCliDizini('claude');
-    const beyin = beyinOlustur({ adaptor: 'claude', maxBudgetUsd: 1, maxTotalCostUsd: 1.8 }, {
+    // 1.95: gerçek maliyetle (0.9) uzlaşılırsa ikinci çağrının tam bütçesi (1) sığar; rezervasyonun
+    // tamamı (1) harcanmış sayılsaydı sığmazdı. Üçüncü çağrı her durumda başlamaz.
+    const beyin = beyinOlustur({ adaptor: 'claude', maxBudgetUsd: 1, maxTotalCostUsd: 1.95 }, {
       PATH: cli.path,
       T_KOD: '1',
       T_CIKTI: JSON.stringify({
@@ -816,10 +965,10 @@ describe('denetim 3 regresyonları (para korumaları)', () => {
         }
       }
     }
-    // İlk çağrı 0.9 harcar; ikinci çağrı kalan ~0.1 ile (--max-budget-usd 0.1) başlar, sahte CLI bunu aşınca
-    // maliyet_tavani; sonraki gevşek politikalar sayaç sıfırlamaz, yeni çağrı başlamaz.
+    // İlk çağrı 0.9 harcar; kalan ~0.1 tam çağrı bütçesine (1) yetmediği için ikinci çağrı başlamaz;
+    // sonraki gevşek politikalar sayaç sıfırlamaz, yeni çağrı başlamaz.
     expect(basarili).toBe(1);
-    expect(await cagriSayisi(cli.sayac)).toBe(2);
+    expect(await cagriSayisi(cli.sayac)).toBe(1);
     expect(hatalar.at(-1)).toContain('Ask the user for approval');
     expect(hatalar.join('\n')).not.toMatch(/değerini artırın/);
   });

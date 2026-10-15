@@ -214,7 +214,7 @@ function durumCumlesi(test: RaporTesti): string {
     default: {
       if (analizsizMi(test)) {
         return `kobay test ${test.id} failed${kosu}. It ran without analysis (\`--no-analysis\`, for example in CI),`
-          + ' so the cause was not analysed and the failure kind is `unknown`.';
+          + ` so the failure kind is \`${ANALIZSIZ_ETIKETI}\`.`;
       }
       const tur = test.failureKind === undefined
         ? ''
@@ -295,6 +295,15 @@ const DOKUM_SIRASI: readonly FailureKind[] = ['product_bug', 'product_changed', 
 export const ANALIZSIZ_ETIKETI = 'not analysed';
 
 /**
+ * İnsan yüzlü hata türü etiketi, tek kaynak: analizi atlanmış (`--no-analysis`) düşen koşu
+ * `not analysed` görünür, gerisi türün kendisi. Yalnız metin içindir; `result.json`,
+ * `--output json` ve MCP yanıtı `failureKind: 'unknown'` olarak kalır.
+ */
+export function failureKindEtiketi(failureKind: string | undefined, rootCauseHypothesis: string | undefined): string | undefined {
+  return rootCauseHypothesis === ANALIZ_ATLANDI ? ANALIZSIZ_ETIKETI : failureKind;
+}
+
+/**
  * Düşen testlerin türe göre sayısı, ciddiyet sırasıyla; sıfır olanlar yok. Analizi atlanmış
  * (`--no-analysis`) ya da türü olmayan düşen koşu `not analysed` sayılır, `unknown`'a karışmaz.
  * HTML raporu ve Markdown özeti aynı sayıyı buradan alır.
@@ -303,7 +312,7 @@ export function hataDokumu(testler: readonly RaporTesti[]): Array<{ etiket: stri
   const sayilar = new Map<string, number>();
   for (const test of testler) {
     if (test.verdict !== 'failed') continue;
-    const etiket = analizsizMi(test) || test.failureKind === undefined ? ANALIZSIZ_ETIKETI : test.failureKind;
+    const etiket = failureKindEtiketi(test.failureKind, test.failure?.rootCauseHypothesis) ?? ANALIZSIZ_ETIKETI;
     sayilar.set(etiket, (sayilar.get(etiket) ?? 0) + 1);
   }
   return [...DOKUM_SIRASI, ANALIZSIZ_ETIKETI].flatMap((etiket) => {
@@ -341,12 +350,14 @@ export function hepsiniDuzeltIstemi(testler: readonly RaporTesti[], baglam: Iste
   const sirali = [...duzelt, ...incele];
   if (sirali.length < 2) return null;
   const duzeltSatiri = (test: RaporTesti, no: number): string => {
-    const tur = test.failureKind === undefined ? '' : `, failure kind \`${test.failureKind}\``;
+    const etiket = failureKindEtiketi(test.failureKind, test.failure?.rootCauseHypothesis);
+    const tur = etiket === undefined ? '' : `, failure kind \`${etiket}\``;
     const kaynak = paketVar(test) ? 'evidence' : 'details';
     return `${no}. ${test.id}: ${test.verdict}${tur}; ${kaynak}: \`${ayrintiKomutu(test)}\``;
   };
   const inceleSatiri = (test: RaporTesti, no: number): string => {
-    const tur = test.verdict === 'failed' && test.failureKind !== undefined ? `, failure kind \`${test.failureKind}\`` : '';
+    const etiket = failureKindEtiketi(test.failureKind, test.failure?.rootCauseHypothesis);
+    const tur = test.verdict === 'failed' && etiket !== undefined ? `, failure kind \`${etiket}\`` : '';
     return `${no}. ${test.id}: ${test.verdict}${tur}; ${incelemeCumlesi(test)}`;
   };
   const duzeltListe = duzelt.map((test, no) => duzeltSatiri(test, no + 1));

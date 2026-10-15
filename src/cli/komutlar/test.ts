@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { KODSUZ_ENGEL_ONEKI, hataAnalizEt } from '../../analiz/index.js';
+import { failureKindEtiketi } from '../../rapor/istem.js';
 import { beyinOlustur } from '../../beyin/index.js';
 import {
   FileNotFound,
@@ -173,11 +174,11 @@ function ilkSatir(metin: string): string | undefined {
  * düşen testte sınıf (`failureKind`) ve sonraki komut, sonuçsuz koşuda motor
  * hatasının ilk satırı buraya eklenir.
  */
-function kosuSatiriMetni(satir: Record<string, unknown>, errorMessage?: string): string {
+export function kosuSatiriMetni(satir: Record<string, unknown>, errorMessage?: string, rootCauseHypothesis?: string): string {
   const id = String(satir.id);
   const verdict = String(satir.verdict);
   let metin = `${verdict} ${id}`;
-  if (typeof satir.failureKind === 'string') metin += ` — ${satir.failureKind}`;
+  if (typeof satir.failureKind === 'string') metin += ` — ${failureKindEtiketi(satir.failureKind, rootCauseHypothesis)}`;
 
   let aciklama: string | undefined;
   if (typeof satir.error === 'string') aciklama = satir.error;
@@ -219,7 +220,7 @@ async function tekTestKostur(
   dizin: KobayDizini,
   test: TestKaydi,
   secenek: { rerun: boolean; analizYok: boolean },
-): Promise<{ exitCode: CikisKodu; satir: Record<string, unknown>; errorMessage?: string }> {
+): Promise<{ exitCode: CikisKodu; satir: Record<string, unknown>; errorMessage?: string; rootCauseHypothesis?: string }> {
   const { rerun, analizYok } = secenek;
   try {
     const config = await dizin.configOku();
@@ -310,6 +311,7 @@ async function tekTestKostur(
       };
     }
     let sonKosuSonucu = kosu.sonuc;
+    let analizHipotezi: string | undefined;
     if (kosu.sonuc.verdict === 'failed') {
       // `--no-analysis`: beyin hiç kurulmaz; paket yine yazılır, sınıf yerelden ya da `unknown`.
       const beyin = analizYok ? null : beyinOlustur(config.brain, process.env);
@@ -317,6 +319,7 @@ async function tekTestKostur(
         logDizini: dizin.yol('logs'),
       });
       // Analiz sınıfı result.json'a da işlenir; `test result` failureKind'ı analizden değil koşudan okur.
+      analizHipotezi = paket.failure.rootCauseHypothesis;
       sonKosuSonucu = { ...kosu.sonuc, failureKind: paket.failure.failureKind };
       await dizin.kosuSonucuYaz(sonKosuSonucu);
     }
@@ -334,6 +337,7 @@ async function tekTestKostur(
       },
       // Yalnız insan satırı için; JSON çıktısına girmez.
       ...(sonKosuSonucu.errorMessage === undefined ? {} : { errorMessage: sonKosuSonucu.errorMessage }),
+      ...(analizHipotezi === undefined ? {} : { rootCauseHypothesis: analizHipotezi }),
     };
   } catch (hata: unknown) {
     const bilgi = hataBilgisi(hata);
@@ -376,7 +380,7 @@ export async function testRun(a: {
     for (const test of testler) {
       const sonuc = await tekTestKostur(dizin, test, { rerun: a.rerun === true, analizYok: a.noAnalysis === true });
       sonuclar.push(sonuc.satir);
-      satirMetinleri.push(kosuSatiriMetni(sonuc.satir, sonuc.errorMessage));
+      satirMetinleri.push(kosuSatiriMetni(sonuc.satir, sonuc.errorMessage, sonuc.rootCauseHypothesis));
       exitCode = Math.max(exitCode, sonuc.exitCode) as CikisKodu;
     }
     return {

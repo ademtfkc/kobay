@@ -12,6 +12,7 @@ import { CIKIS } from './cikis.js';
 import { ciktiYaz, type BeyinOzeti } from './cikti.js';
 import { InputClosedError, gizliSor, yanitBekle } from './gizli-sor.js';
 import { UsageError, basarisiz, type KomutSonucu } from './komut.js';
+import { LOGIN_VE_OTURUM_DOSYASI } from './komutlar/project.js';
 import {
   agentInstall,
   codeGet,
@@ -97,10 +98,20 @@ function biriktir(deger: string, onceki: string[] | undefined): string[] {
 const AUTH_ORIGIN_ACIKLAMASI = 'exact origin of a separate login site (SSO), e.g. https://auth.example.com;'
   + ' matched exactly (no subdomains or other ports); repeatable, requires --login';
 
+const OTURUM_DOSYASI_ACIKLAMASI = 'import a logged-in Playwright storageState JSON (cookies, origins; at most 1 MB)'
+  + ' into .kobay/storageState.json, e.g. for apps with a CAPTCHA; data for other sites is refused';
+
 function pozitifOndalik(deger: string): number {
   const sayi = Number(deger);
   if (!Number.isFinite(sayi) || sayi <= 0) throw new InvalidArgumentError('Must be a positive number.');
   return sayi;
+}
+
+function pozitifTamsayi(deger: string): number {
+  if (!/^\d{1,4}$/.test(deger.trim()) || Number.parseInt(deger, 10) === 0) {
+    throw new InvalidArgumentError('Must be a whole number from 1 to 9999.');
+  }
+  return Number.parseInt(deger, 10);
 }
 
 function negatifOlmayanTamsayi(deger: string): number {
@@ -208,7 +219,8 @@ export function programOlustur(
     .option('--docs <path>', 'product document file (used to generate plans)')
     .option('--login', 'prompt for credentials and save them in .kobay')
     .option('--login-url <url>', 'login page URL')
-    .option('--auth-origin <origin>', AUTH_ORIGIN_ACIKLAMASI, biriktir)
+    .option('--auth-origin <origin>', `${AUTH_ORIGIN_ACIKLAMASI} or --session-file`, biriktir)
+    .option('--session-file <path>', `${OTURUM_DOSYASI_ACIKLAMASI}; replaces saved credentials (not with --login)`)
     .option('--force', 'overwrite only the config of an existing project'),
   'brain for this project', ['claude', 'codex', 'openrouter'], ['sahte'])
     .option('--model <model>', 'model name to pass to the brain')
@@ -220,11 +232,17 @@ export function programOlustur(
       loginUrl?: string;
       authOrigin?: string[];
       force?: boolean;
+      sessionFile?: string;
       brain?: string;
       model?: string;
       effort?: string;
     }) => {
       // --auth-origin --login'siz verilirse projectCreate kullanım hatası döner.
+      // --login ile --session-file birlikteyse parola hiç sorulmaz (projectCreate'teki kuralla aynı metin).
+      if (secenekler.login === true && secenekler.sessionFile !== undefined) {
+        await calistir(Promise.resolve(basarisiz(new UsageError(LOGIN_VE_OTURUM_DOSYASI))));
+        return;
+      }
       const login = secenekler.login === true ? await girisBilgisi(akislar) : undefined;
       const beyin = beyinAyari(secenekler);
       await calistir(projectCreate({
@@ -236,6 +254,7 @@ export function programOlustur(
         ...(secenekler.authOrigin === undefined ? {} : { authOrigins: secenekler.authOrigin }),
         ...(beyin === undefined ? {} : { beyin }),
         ...(secenekler.force === undefined ? {} : { force: secenekler.force }),
+        ...(secenekler.sessionFile === undefined ? {} : { oturumDosyasi: secenekler.sessionFile }),
       }));
     });
   beyinSecenekleri(project.command('update')
@@ -292,7 +311,25 @@ export function programOlustur(
 
   program.command('explore')
     .description('browses the target app and refreshes the exploration map (.kobay/map.json)')
-    .action(async () => calistir(explore({ cwd: cwd() })));
+    .option('--seed <url>', 'extra start URL on the project origin; repeatable', biriktir)
+    .option('--no-sitemap', 'do not read /sitemap.xml (read by default when present on the project origin)')
+    .option('--max-pages <n>', 'maximum pages in the map, login-required entries included (default: 40)', pozitifTamsayi)
+    .option('--depth <n>', 'maximum link depth from the start URLs (default: 3)', negatifOlmayanTamsayi)
+    .option('--session-file <path>', `${OTURUM_DOSYASI_ACIKLAMASI}; then explores with it`)
+    .action(async (secenekler: {
+      seed?: string[];
+      sitemap: boolean;
+      maxPages?: number;
+      depth?: number;
+      sessionFile?: string;
+    }) => calistir(explore({
+      cwd: cwd(),
+      ...(secenekler.sessionFile === undefined ? {} : { oturumDosyasi: secenekler.sessionFile }),
+      siteHaritasi: secenekler.sitemap,
+      ...(secenekler.seed === undefined ? {} : { tohumlar: secenekler.seed }),
+      ...(secenekler.maxPages === undefined ? {} : { maxSayfa: secenekler.maxPages }),
+      ...(secenekler.depth === undefined ? {} : { derinlik: secenekler.depth }),
+    })));
 
   program.command('prune')
     .description('removes old runs, brain logs, and legacy artifacts without deleting protected evidence')
@@ -349,7 +386,7 @@ export function programOlustur(
     .option(
       '--no-analysis',
       'never call the brain (for CI): run existing code only; a test without code is blocked,'
-      + ' and a failure gets an evidence bundle with failure kind "unknown"',
+      + ' and a failure gets an evidence bundle with failure kind "unknown" (shown as "not analysed" in text output)',
     )
     .action(async (ids: string[], secenekler: { all?: boolean; rerun?: boolean; analysis?: boolean }) => calistir(testRun({
       cwd: cwd(),

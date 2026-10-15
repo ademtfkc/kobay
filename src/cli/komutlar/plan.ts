@@ -32,8 +32,26 @@ export async function planGenerate(a: { cwd: string; hint?: string }): Promise<K
     const uretilen = `${sonuc.proposals.length} proposal${sonuc.proposals.length === 1 ? '' : 's'} generated`;
     const uyari = sonuc.dropped.length === 0
       ? uretilen
-      : `${uretilen}; ${sonuc.dropped.length} dropped: ${sonuc.dropped.map((o) => `${o.title} (${o.reason})`).join(', ')}`;
-    return basarili({ proposals: tablo, dropped: sonuc.dropped }, uyari);
+      : `${uretilen}; ${sonuc.dropped.length} dropped: ${sonuc.dropped.map((o) => `${o.title} (${o.reason})`).join(', ')}`
+        + (sonuc.nextStep === undefined ? '' : `. ${sonuc.nextStep}`);
+    // İnsan modunda özet satırı + öneri başına tek sekmeli satır + düşenler; json zarfı aynen kalır.
+    // Beyin metni serbesttir; satır/sekme kaydı bozmasın diye tek boşluğa inilir (json alanına dokunulmaz).
+    const tekSatir = (metin: string): string => metin.replace(/[\r\n\t]+/g, ' ');
+    const satirlar = [
+      uretilen,
+      ...tablo.map((o) => `${o.id}\t${o.priority}\t${tekSatir(o.title)}\t${o.stepCount} step${o.stepCount === 1 ? '' : 's'}`),
+      ...sonuc.dropped.map((o) => `dropped\t${tekSatir(o.title)}\t${tekSatir(o.reason)}`),
+      // Giriş-gerekli düşmede sonraki adım tek satır, bir kez.
+      ...(sonuc.nextStep === undefined ? [] : [`next step\t${sonuc.nextStep}`]),
+    ];
+    return {
+      ...basarili({
+        proposals: tablo,
+        dropped: sonuc.dropped,
+        ...(sonuc.nextStep === undefined ? {} : { nextStep: sonuc.nextStep }),
+      }, uyari),
+      metin: satirlar.join('\n'),
+    };
   });
 }
 

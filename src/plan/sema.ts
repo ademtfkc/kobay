@@ -16,6 +16,12 @@ export interface OneriTaslagi {
    * (giriş yapılandırılmış projede) düşer; `false` ya da yoksa sözcük filtresi karar verir.
    */
   requiresRealCredentials?: boolean | undefined;
+  /**
+   * Beynin beyanı: öneri yalnız girişsiz ziyaretin giriş sayfasına yönlendiğini doğruluyor mu (sayfanın
+   * kendi içeriğine bakmıyor). Kayıtlı giriş yokken `requiresLogin` sayfaya yazılan öneri yalnız bu
+   * `true` ise tutulur; `false` ya da yok ise düşer. Yerel öneriye taşınmaz.
+   */
+  loginRedirectCheck?: boolean | undefined;
 }
 
 export interface PlanYaniti {
@@ -68,11 +74,21 @@ const PlanAdimiTaslagiSemasi: v.GenericSchema<unknown, PlanAdimi> = v.object({
 /**
  * `requiresRealCredentials` yapısal beyandır ama biçim hatası bütün planı düşürmesin: model "true"/"false"
  * dizesi ya da null gönderebilir. Boolean ve bu dizeler kabul edilir; null/yok beyansız sayılır (sözcük
- * filtresi karar verir). Başka bir değer şema hatasıdır.
+ * filtresi karar verir). Başka bir değer şema hatasıdır. Gevşeklik yalnız daha sıkı düşürmeye yarar.
  */
-const RealCredentialsSemasi = v.pipe(
+const BeyanSemasi = v.pipe(
   v.nullish(v.union([v.boolean(), v.picklist(['true', 'false'])])),
   v.transform((deger): boolean | undefined => (deger === null || deger === undefined ? undefined : deger === true || deger === 'true')),
+);
+
+/**
+ * `loginRedirectCheck` bir kapıdır: giriş gerekli sayfaya yazılan öneriyi tutar. Bu yüzden yalnız gerçek
+ * boolean `true` kapıyı açar; dize ("true"), sayı, null ya da yok beyansız sayılır (öneri düşer) ve
+ * bütün planı şema hatasına düşürmez. Türkçe eş adı da yoktur (eşlenmeyen anahtar yok sayılır).
+ */
+const GirisYonlendirmeSemasi = v.pipe(
+  v.optional(v.unknown()),
+  v.transform((deger): boolean | undefined => (deger === true ? true : deger === false ? false : undefined)),
 );
 
 /**
@@ -88,7 +104,8 @@ const OneriTaslagiSemasi: v.GenericSchema<unknown, OneriTaslagi> = v.object({
   type: v.literal('frontend'),
   url: v.pipe(v.string(), v.minLength(1)),
   steps: v.array(PlanAdimiTaslagiSemasi),
-  requiresRealCredentials: RealCredentialsSemasi,
+  requiresRealCredentials: BeyanSemasi,
+  loginRedirectCheck: GirisYonlendirmeSemasi,
 });
 
 export const PlanYanitiSemasi: v.GenericSchema<unknown, PlanYaniti> = v.pipe(

@@ -16,6 +16,9 @@ import type {
   KosuSonucu,
   Oneri,
   Oncelik,
+  OturumCerezi,
+  OturumDurumu,
+  OturumOrigini,
   PlanAdimi,
   PlanDosyasi,
   Sayfa,
@@ -45,10 +48,13 @@ export const FormAlaniSemasi: v.GenericSchema<unknown, FormAlani> = v.object({
   type: v.string(),
   label: v.exactOptional(v.string()),
   placeholder: v.exactOptional(v.string()),
+  options: v.exactOptional(v.array(v.string())),
+  optionCount: v.exactOptional(v.number()),
 });
 
 export const FormSemasi: v.GenericSchema<unknown, Form> = v.object({
   action: v.exactOptional(v.string()),
+  detached: v.exactOptional(v.literal(true)),
   fields: v.array(FormAlaniSemasi),
 });
 
@@ -60,6 +66,9 @@ export const SayfaSemasi: v.GenericSchema<unknown, Sayfa> = v.object({
   forms: v.array(FormSemasi),
   buttons: v.array(v.string()),
   menu: v.array(v.string()),
+  disclosures: v.exactOptional(v.array(v.string())),
+  requiresLogin: v.exactOptional(v.literal(true)),
+  redirectedTo: v.exactOptional(v.string()),
 });
 
 /** Diskteki harita; 0.1'in Türkçe alan adları okunurken yenisine eşlenir. */
@@ -71,8 +80,45 @@ export const HaritaSemasi: v.GenericSchema<unknown, Harita> = v.pipe(
     loggedIn: v.boolean(),
     pages: v.array(SayfaSemasi),
     exploredAt: v.string(),
+    seeds: v.exactOptional(v.array(v.string())),
+    sitemap: v.exactOptional(v.object({ url: v.string(), urlCount: v.number() })),
+    sessionSource: v.exactOptional(v.picklist(['login', 'imported'])),
   }),
 );
+
+/**
+ * Çerez alanı (`domain`): ana makine adı ya da `.` önekli alan adı, ya da köşeli parantezli IPv6.
+ * Denetim yalnız biçimdir; köken kararı `src/kesif/oturum-dosyasi.ts`'te. Değer hata mesajına
+ * yazılmasın diye biçim burada daraltılır (denetim kontrol karakteri taşıyan adı da reddeder).
+ */
+const CEREZ_ALANI_DESENI = /^(?:\.?[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.?|\[[0-9a-f:.]+\])$/i;
+
+/** Çerez `expires` üst sınırı: 9999-12-31T23:59:59Z (Unix saniye). */
+const CEREZ_EN_GEC_EXPIRES = 253_402_300_799;
+
+export const OturumCereziSemasi: v.GenericSchema<unknown, OturumCerezi> = v.object({
+  name: v.string(),
+  value: v.string(),
+  domain: v.pipe(v.string(), v.regex(CEREZ_ALANI_DESENI)),
+  path: v.string(),
+  // Oturum çerezi -1; kalıcı çerez sonlu pozitif Unix saniyesi (9999 yılına kadar). `-5`, `1e300`,
+  // NaN gibi değerleri Chromium bağlam açarken reddeder; doğrulamada yakalansın.
+  expires: v.union([v.literal(-1), v.pipe(v.number(), v.finite(), v.gtValue(0), v.maxValue(CEREZ_EN_GEC_EXPIRES))]),
+  httpOnly: v.boolean(),
+  secure: v.boolean(),
+  sameSite: v.picklist(['Strict', 'Lax', 'None']),
+});
+
+export const OturumOriginiSemasi: v.GenericSchema<unknown, OturumOrigini> = v.object({
+  origin: v.string(),
+  localStorage: v.array(v.object({ name: v.string(), value: v.string() })),
+});
+
+/** Playwright `storageState` JSON'u (`--session-file`); bilinmeyen alanlar atılır. */
+export const OturumDurumuSemasi: v.GenericSchema<unknown, OturumDurumu> = v.object({
+  cookies: v.array(OturumCereziSemasi),
+  origins: v.array(OturumOriginiSemasi),
+});
 
 export const HaritaFarkiSemasi: v.GenericSchema<unknown, HaritaFarki> = v.object({
   url: v.string(),

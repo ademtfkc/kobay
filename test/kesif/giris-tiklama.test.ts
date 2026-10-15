@@ -251,6 +251,8 @@ describe('giriş gönder tıklaması zaman aşımı (A3)', () => {
     expect(mesaj).toContain('Button title: "Complete the security check first".');
     expect(mesaj).toContain('(last step: element is not enabled)');
     expect(mesaj.indexOf('The button is locked')).toBeLessThan(mesaj.indexOf('Playwright:'));
+    // CAPTCHA'lı girişin çıkış yolu: hazır oturum dosyası.
+    expect(mesaj).toContain('--session-file <file>');
   });
 
   it('aria-disabled düğme kilitli sayılır', async (context) => {

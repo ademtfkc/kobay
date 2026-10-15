@@ -1,7 +1,6 @@
-import { chmod, mkdir, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { lstat, rm } from 'node:fs/promises';
 import type { BrowserContext, Locator, Page } from '@playwright/test';
-import { authOriginNormallestir, type Kimlik } from '../depo/index.js';
+import { authOriginNormallestir, yazAtomik, type Kimlik } from '../depo/index.js';
 import type { GirisFormu } from './giris.js';
 import {
   authOriginIpucu,
@@ -332,6 +331,7 @@ async function girisiGonderIc(
   // için kesin sıra garantisi yoktur; bu bekleme yarışı daraltır, kanıtlanmış bir kapı değildir.
   await sayfa.context().cookies().catch(() => undefined);
   // Sızıntı varsa önce o bildirilir: dönüş hatası daha ağır bir nedeni örtmesin.
+  await koruma.bekle();
   const kesilemeyenBelgeYondirmeleri = koruma.denetle(girisBasarili);
   if (donulmeyenOrigin !== null) {
     const belgeNotu = kesilemeyenBelgeYondirmeleri.length === 0
@@ -642,12 +642,15 @@ async function tiklamaZamanAsimiHatasi(
     mesaj += kilitler.length > 0
       ? ` The button is locked: ${kilitler.join(', ')}.${baslik}`
         + ' Pages often keep login locked until a captcha or another human check passes; kobay cannot complete those.'
+        + ' Log in in your own browser, save its Playwright storageState, and import it with'
+        + ' `kobay project create --url <URL> --session-file <file> --force`.'
       : ` The button is not locked (enabled, visible, not covered), so something else kept the click from completing.${baslik}`;
   }
   const ozet = playwrightOzeti(hata);
   const playwright = ` Playwright: ${ozet.ilk}${ozet.son === undefined ? '' : ` (last step: ${alanMetni(koruma, ozet.son, 160)})`}`;
 
   let yonlendirmeler: readonly string[];
+  await koruma.bekle();
   try {
     yonlendirmeler = koruma.denetle(false);
   } catch (denetimHatasi: unknown) {
@@ -668,9 +671,21 @@ export async function oturumDurumunuSil(storageStateYolu: string): Promise<void>
   await rm(storageStateYolu, { force: true });
 }
 
-/** Oturum durumunu 0600 izinle yazar; dizini gerekirse açar. */
+/** Oturum dosyası sembolik bağ: kobay hedefinin üstüne yazmaz. */
+export class StorageStateSymlinkError extends Error {
+  constructor(yol: string) {
+    super(`${yol} is a symbolic link; kobay does not write the session through it. Remove the link and run the command again.`);
+    this.name = 'StorageStateSymlinkError';
+  }
+}
+
+/**
+ * Oturum durumunu 0600 izinle yazar; dizini gerekirse açar. Yol sembolik bağsa reddeder (depodan
+ * gelen bir bağ kullanıcı dosyasını ezdirmesin); yazım geçici dosya + rename ile atomiktir.
+ */
 export async function oturumDurumunuYaz(context: BrowserContext, storageStateYolu: string): Promise<void> {
-  await mkdir(dirname(storageStateYolu), { recursive: true });
-  await context.storageState({ path: storageStateYolu });
-  await chmod(storageStateYolu, 0o600);
+  const bilgi = await lstat(storageStateYolu).catch(() => null);
+  if (bilgi?.isSymbolicLink() === true) throw new StorageStateSymlinkError(storageStateYolu);
+  const durum = await context.storageState();
+  await yazAtomik(storageStateYolu, JSON.stringify(durum, null, 2), 0o600);
 }

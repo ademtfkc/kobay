@@ -62,6 +62,49 @@ describe('brain usage line', () => {
     expect(sonuc.stdout).not.toContain('Brain:');
   });
 
+  it('prints readable lines, not JSON, for plan generate in human mode', async () => {
+    const cwd = await proje();
+    const sonuc = await kobay(['--cwd', cwd, 'test', 'plan', 'generate']);
+    expect(sonuc.kod, sonuc.stderr + sonuc.stdout).toBe(0);
+    expect(sonuc.stdout.startsWith('{')).toBe(false);
+    const satirlar = sonuc.stdout.trimEnd().split('\n');
+    expect(satirlar[0]).toBe('1 proposal generated');
+    expect(satirlar).toHaveLength(2);
+    expect(satirlar[1]).toMatch(/^p_\w+\tp0\tHome page\t2 steps$/);
+  });
+
+  it('lists dropped proposals as their own lines in human mode', async () => {
+    const cwd = await proje();
+    const yol = join(process.env.KOBAY_SAHTE_YANIT_DIZINI ?? '', 'plan.json');
+    const bir = (title: string, url: string) => ({
+      title, description: title, priority: 'p1', category: 'smoke', feature: 'f', type: 'frontend', url,
+      steps: [{ type: 'action', description: 'Open it' }, { type: 'assertion', description: 'See it' }],
+    });
+    await yazAtomik(yol, JSON.stringify({ proposals: [bir('Home page', '/'), bir('Ghost page', '/ghost/1')] }));
+    const sonuc = await kobay(['--cwd', cwd, 'test', 'plan', 'generate']);
+    expect(sonuc.kod, sonuc.stderr + sonuc.stdout).toBe(0);
+    const satirlar = sonuc.stdout.trimEnd().split('\n');
+    expect(satirlar[0]).toBe('1 proposal generated');
+    expect(satirlar.some((s) => s.startsWith('dropped\tGhost page\t'))).toBe(true);
+  });
+
+  it('keeps one line per record when brain text has newlines or tabs', async () => {
+    const cwd = await proje();
+    const yol = join(process.env.KOBAY_SAHTE_YANIT_DIZINI ?? '', 'plan.json');
+    const bir = (title: string, url: string) => ({
+      title, description: 'd', priority: 'p1', category: 'smoke', feature: 'f', type: 'frontend', url,
+      steps: [{ type: 'action', description: 'Open it' }, { type: 'assertion', description: 'See it' }],
+    });
+    await yazAtomik(yol, JSON.stringify({ proposals: [bir('Good\nforged row', '/'), bir('Ghost\tpage', '/ghost/1\tx')] }));
+    const sonuc = await kobay(['--cwd', cwd, 'test', 'plan', 'generate']);
+    expect(sonuc.kod, sonuc.stderr + sonuc.stdout).toBe(0);
+    const satirlar = sonuc.stdout.trimEnd().split('\n');
+    expect(satirlar).toHaveLength(3); // özet + 1 öneri + 1 düşen
+    expect(satirlar[1]).toMatch(/^p_\w+\tp1\tGood forged row\t2 steps$/);
+    expect(satirlar[2]?.split('\t')).toHaveLength(3);
+    expect(satirlar[2]).toMatch(/^dropped\tGhost page\t/);
+  });
+
   it('adds a brain field to the JSON envelope only when the command called the brain', async () => {
     const cwd = await proje();
     const uretim = await kobay(['--cwd', cwd, '--output', 'json', 'test', 'plan', 'generate']);

@@ -106,22 +106,22 @@ kobay explore
 
 ```sh
 kobay test plan generate
-#> 15 proposals generated; 1 dropped: Unknown page returns a not-found error (URL is not in the map and no path pattern matched: /records/999999 (pattern: /records/:id))
-#> Brain: 1 call, $0.28
-#> { "proposals": [
-#>     … 2 more …
-#>     { "id": "p_ig7gen", "priority": "p1", "title": "Login with invalid credentials shows an error", "stepCount": 5 },
-#>     … 3 more …
-#>     { "id": "p_io2io8", "priority": "p1", "title": "Record list shows existing records with Delete buttons", "stepCount": 4 },
-#>     … 1 more …
-#>     { "id": "p_mwg331", "priority": "p0", "title": "Create a new record and see it in the list", "stepCount": 7 },
-#>     … 6 more …
+#> 16 proposals generated
+#> Brain: 1 call, $0.29
+#> … 1 more …
+#> p_frk8vv	p0	Create a new record with valid data	10 steps
+#> p_4bc4nl	p1	Record list page renders existing records	4 steps
+#> … 10 more …
+#> p_xw9pro	p1	Login with invalid credentials shows an error	5 steps
+#> … 2 more …
+#> dropped	Login page renders its form	A step needs the real credentials, but the session is already authenticated via kobay's login step and generated tests cannot type credentials (step 2: "Verify that a text field labeled 'Username' and a password field labeled 'Password' are visible")
+#> dropped	Unknown URL returns a not-found response	URL is not in the map and no path pattern matched: /records/999999 (pattern: /records/:id)
 
-kobay test plan accept --ids p_io2io8,p_mwg331,p_ig7gen
+kobay test plan accept --ids p_4bc4nl,p_frk8vv,p_xw9pro
 #> 3 proposals accepted
-#> t_nwzz1a22  Login with invalid credentials shows an error                  …
-#> t_vv7ct7z4  Record list shows existing records with Delete buttons         …
-#> t_xankd0tf  Create a new record and see it in the list                      …
+#> t_2d6878ht	Create a new record with valid data	frontend	plan	draft	10 steps	p0	/new	0	2026-10-13T16:20:35.439Z	2026-10-13T16:20:35.439Z
+#> t_7ommeato	Record list page renders existing records	frontend	plan	draft	4 steps	p1	/records	0	2026-10-13T16:20:35.440Z	2026-10-13T16:20:35.440Z
+#> t_iyx35vx5	Login with invalid credentials shows an error	frontend	plan	draft	5 steps	p1	/login	0	2026-10-13T16:20:35.440Z	2026-10-13T16:20:35.440Z
 ```
 
 **4. Kendi testini ekle** (isteğe bağlı). Elle yazılmış bir plan, beynin
@@ -130,10 +130,10 @@ satırı:
 
 ```sh
 kobay test create --plan monthly-total.plan.json
-#> Test created: t_m66f61mn
+#> Test created: t_qm8t4cyo
 #> Name: Record list shows a monthly total
 #> Steps: 2, priority: p0, status: draft
-#> Next: kobay test run t_m66f61mn
+#> Next: kobay test run t_qm8t4cyo
 ```
 
 **5. Koştur.** Kodu olmayan testler için önce Playwright kodu üretilir (LLM
@@ -141,26 +141,25 @@ kobay test create --plan monthly-total.plan.json
 
 ```sh
 kobay test run --all
-#> failed t_m66f61mn — product_bug
-#>   failure bundle: kobay test failure get t_m66f61mn
-#> passed t_nwzz1a22
-#> passed t_vv7ct7z4
-#> failed t_xankd0tf — test_bug
-#>   failure bundle: kobay test failure get t_xankd0tf
-#> Brain: 6 calls, $0.74
+#> passed t_2d6878ht
+#> passed t_7ommeato
+#> passed t_iyx35vx5
+#> failed t_qm8t4cyo — product_bug
+#>   failure bundle: kobay test failure get t_qm8t4cyo
+#> Brain: 5 calls, $0.60
 ```
 
-Çıkış kodu `1`: bir test düştü. İki hata iki ayrı hikâyedir ve `failureKind`
-ikisini birbirinden ayırır:
+Çıkış kodu `1`: bir test düştü. Bu koşuda bir test düştü (`product_bug`); aşağıdaki
+`test_bug` hikâyesi önceki bir koşudan. `failureKind` ikisini birbirinden ayırır:
 
-- **`t_m66f61mn` — `product_bug`.** Aylık toplam demo uygulamanın hiçbir zaman
+- **`t_qm8t4cyo` — `product_bug`.** Aylık toplam demo uygulamanın hiçbir zaman
   parçası olmadı; plan, sayfada olmayan bir özelliği anlatıyor. Analiz planı
   sözüne aldı, kayıt listesinde böyle bir satır bulamadı ve ürünün onu
   göstermediğini söyledi:
 
   ```json
   "failureKind": "product_bug",
-  "rootCauseHypothesis": "… No row, cell or text containing 'Monthly total' or any 'total' exists in the DOM … The most likely cause is that the product does not render the expected monthly total row",
+  "rootCauseHypothesis": "… the table contains no row with the text 'Monthly total' or any other summary/total row. The test asserts a feature that the page does not provide … the product is missing the monthly total row that the plan step requires",
   "recommendedFixTarget": { "kind": "code", … }
   ```
 
@@ -168,7 +167,7 @@ ikisini birbirinden ayırır:
   kaldır ya da yeniden yaz. Model bunu `unknown` da diyebilir: aynı plan önceki
   koşularda öyle sınıflandı.
 
-- **`t_xankd0tf` — `test_bug`.** Uygulama işini yaptı, üretilen test yapmadı.
+- **`t_xankd0tf` — `test_bug`, önceki bir koşudan.** Uygulama işini yaptı, üretilen test yapmadı.
   Yeni kaydı `\b` ile biten bir regex'le aradı (`/QA Test Record 1\b/`), ama
   sayfa metni ismi, tutarı ve Delete düğmesini bitişik veriyor
   (`QA Test Record 142Delete`); yani `1`'den sonra sözcük sınırı yok. Analiz
@@ -182,17 +181,18 @@ ikisini birbirinden ayırır:
 **6. Kanıtı oku ve raporu gör.**
 
 ```sh
-kobay test failure get t_m66f61mn
+kobay test failure get t_qm8t4cyo
+#> Failure bundle copied: ~/kobay-demo/.kobay/failure-out/t_qm8t4cyo
 
 kobay test report --all
-#> Report written: 4 tests (2 passed, 2 failed, 0 blocked, 0 inconclusive, 0 not run), 18 screenshots, 2 videos.
+#> Report written: 4 tests (3 passed, 1 failed, 0 blocked, 0 inconclusive, 0 not run), 21 screenshots, 1 video.
 #> Open: ~/kobay-demo/.kobay/report/index.html
 #> Screenshots and videos are not redacted; review them before sharing the report.
 ```
 
 Düzeltmeden sonra `kobay test rerun <id>` aynı kodu yeniden koşturur. Bu turun
-tamamı — bir plan, dört kod üretimi, iki analiz — 7 beyin çağrısıydı ve
-`claude` CLI ile yaklaşık 1,02 $ tuttu. İşin bitince demoyu Ctrl+C ile durdur.
+tamamı — bir plan, dört kod üretimi, bir analiz — 6 beyin çağrısıydı ve
+`claude` CLI ile yaklaşık 0,89 $ tuttu. İşin bitince demoyu Ctrl+C ile durdur.
 
 Her adımın bayraklarıyla birlikte daha uzun anlatımı
 [Ayrıntılı hızlı başlangıç](#ayrıntılı-hızlı-başlangıç) bölümünde.
@@ -204,8 +204,11 @@ Her adımın bayraklarıyla birlikte daha uzun anlatımı
 </p>
 
 **explore** (keşif) LLM kullanmaz; her sayfanın başlığını, alt başlıklarını,
-bağlantılarını, formlarını, düğmelerini ve menülerini kaydeder. **plan
-generate** ve **test run** beyni çağırır; üretilen kod kaydedilmeden önce
+bağlantılarını, formlarını, düğmelerini ve menülerini kaydeder. Hiçbir
+`<form>` içinde olmayan alanlar da tutulur; kayıtlı giriş yokken seni giriş
+sayfasına yollayan sayfa, istediğin URL altında `requiresLogin` diye kaydedilir.
+Bağlantıları izlemenin yanında, proje origin'inde `/sitemap.xml` varsa onu
+okur ve verdiğin `--seed` URL'lerinden de başlar. **plan generate** ve **test run** beyni çağırır; üretilen kod kaydedilmeden önce
 denetlenir — `page.goto` yalnız haritadaki adreslere gidebilir ve her
 `test.step` başlığı plan adımıyla birebir aynı olmalıdır. **test refresh**
 yalnız o testin sayfasını yeniden keşfeder, haritayı yerinde günceller, plan
@@ -335,6 +338,10 @@ test_delete     test_run        test_rerun   test_refresh  test_result
 failure_get     test_report     doctor       prune
 ```
 
+`explore` aracı `seeds` (proje origin'inde en çok 50 ek başlangıç URL'si),
+`sitemap` (boolean; `false` `/sitemap.xml`'i atlar), `maxPages` ve `depth`
+girdilerini alır; CLI bayraklarının aynısıdır. Oturum dosyası girdisi yoktur.
+
 Her araç MCP ipucu etiketleri taşır: `test_delete`, `prune`, `project_create`
 ve `project_update` `destructiveHint` (yıkıcı) ile işaretlidir; hiçbir araç
 `readOnlyHint` (salt okunur) taşımaz, çünkü her araç `.kobay` dizininin bakımını
@@ -403,14 +410,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.5.0
+      - uses: ademtfkc/kobay@v0.6.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.5.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.6.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -561,15 +568,17 @@ test `not run` görünür.
 
 ## Durum ve sınırlar
 
-**0.5.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.5.0'da yeni olanlar:
-HTML rapor düşen testin videosunu gösterir; başarısız bir giriş artık giriş
-sayfasının gösterdiği mesajı taşır (maskeli ve güvenilmeyen sayfa metni diye
-etiketli); rapor özetine `Failure kinds` satırı eklendi; "hepsini düzelt"
-istemi Fix ve Review gruplarına ayrılır; parola yazılırken güvenilen küme
-dışındaki sitelere HTTP(S) istekleri ve WebSocket bağlantıları engellenir
-(`--auth-origin`, bkz. [güvenlik modeli](#güvenlik-modeli)); çok sayıda adlı
-çocuğu olan sayfalar tek bir `/city/:slug` deseni sayılır; tek bir eylem 15
-sn'de pes eder; Windows'ta `kobay doctor` Git Bash'i denetler. Tam liste
+**0.6.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.6.0'da yeni olanlar:
+`kobay explore` form dışı alanları, `select` seçeneklerini, `aria-label`
+düğmeleri ve `details`/`summary` metinlerini okur, gizli alanları atlar;
+ziyaretçiyi giriş sayfasına gönderen sayfa haritada `requiresLogin` olarak
+kalır ve kayıtlı giriş yokken plan orada yalnız yönlendirme denetimi önerir;
+`--seed`, `/sitemap.xml` (`--no-sitemap`), `--max-pages` ve `--depth` taramayı
+genişletir; `--session-file`, girişini kobay'ın tamamlayamadığı uygulamalar
+(CAPTCHA, 2FA; bkz. [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa)) için
+giriş yapılmış bir Playwright `storageState` dosyasını daha sıkı bir ağ
+korumasıyla içe alır; beyin maliyet tavanları artık
+`KOBAY_MAX_TOTAL_COST_USD` altına sığmayan çağrıyı başlatmaz. Tam liste
 [CHANGELOG.md](CHANGELOG.md) içinde.
 
 Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
@@ -577,7 +586,7 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
 | | |
 | --- | --- |
 | **Kime** | Claude Code (ya da Codex / Cursor) kullanan, yerel web uygulamasını ajana "çalışıyor" dedirtmek yerine gerçekten doğrulattırmak isteyen geliştiriciler. |
-| **Uçtan uca doğrulandı** | `claude` CLI beyni, MCP üzerinden bir Claude Code ajanıyla: ajan bir ürün hatası buldu, kök nedene indi, düzeltti ve testi yeşil olarak yeniden koştu. [Hızlı başlangıç](#hızlı-başlangıç)'taki döngü ayrıca paketlenmiş bir derlemeden, paketteki demo uygulamaya karşı gerçek beyinle koşuldu: 15 öneri (1'i düşürüldü), 4 test, 2'si geçti, 2'si düştü; biri `product_bug`, biri `test_bug` olarak sınıflandı (orada anlatıldığı gibi); 7 beyin çağrısı, yaklaşık 1,02 $. |
+| **Uçtan uca doğrulandı** | `claude` CLI beyni, MCP üzerinden bir Claude Code ajanıyla: ajan bir ürün hatası buldu, kök nedene indi, düzeltti ve testi yeşil olarak yeniden koştu. [Hızlı başlangıç](#hızlı-başlangıç)'taki döngü ayrıca paketlenmiş bir derlemeden, paketteki demo uygulamaya karşı gerçek beyinle koşuldu: 16 öneri (2'si düşürüldü), 4 test, 3'ü geçti, 1'i düştü (`product_bug`); 6 beyin çağrısı, yaklaşık 0,89 $. |
 | **Gerçek CLI ile bir kez denendi** | `codex` beyni. 28 Eylül 2026'da paketteki demo uygulamada gerçek bir `codex exec` ile (Codex CLI 0.154.0, ChatGPT aboneliği) bir tur koşuldu: plan üretti, test kodu üretti, bir hatayı analiz etti; her beyin çağrısı ilk denemede şemaya uydu. Tek tur, uzun kullanım değil. |
 | **Pratikte denenmedi** | `openrouter` beyni. Adaptör birim testli ama gerçek API ile hiç koşturulmadı. Doğrulanmamış say. |
 | **Platform** | macOS'ta geliştirildi. Herkese açık depoda CI, tam katı (strict) test paketini ubuntu-latest, macos-latest ve windows-latest üzerinde Node 22 ve 24 ile, üçünde de bir paketleme duman testini ve Ubuntu'da GitHub Action'ın bir duman testini koşuyor. Windows fiziksel bir makinede doğrulanmadı; bkz. [Kurulum ve gereksinimler](#kurulum-ve-gereksinimler). |
@@ -603,13 +612,29 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
 - **Yalnız basit giriş.** Kullanıcı adı/parola HTML formu. Ayrı bir kimlik
   sitesindeki form, yalnız origin'ini `--auth-origin` ile listelersen çalışır
   (bkz. [Ayrı giriş sitesi (SSO)](#ayrı-giriş-sitesi-sso)); OAuth onay ekranları,
-  CAPTCHA ve 2FA ele alınmaz; uygulamanın kendi sitesindeki alt alanlar kimlik
+  CAPTCHA ve 2FA `--login` ile ele alınmaz (kendi tarayıcında giriş yapıp
+  oturumu `--session-file` ile içe al; bkz.
+  [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa)); uygulamanın kendi sitesindeki alt alanlar kimlik
   bilgisini alabilir. JavaScript ile yapılan bir giriş yalnız ağ koruması
   kapsamındadır, form-origin denetimi kapsamında değil.
-- **Keşif tasarım gereği sığdır:** yalnız `<a href>` bağlantıları, form
-  göndermek ya da düğmeye basmak yok, 40 sayfada durur.
+- **Keşif tasarım gereği sığdır:** yalnız `<a href>` bağlantıları, sitemap ve
+  verdiğin `--seed` URL'leri; form göndermek ya da düğmeye basmak yok.
+  `--max-pages` vermezsen 40 sayfada, `--depth` vermezsen 3 derinlikte durur.
+- **Keşfin görmedikleri** (0.6.0): `pushState` ya da düğmelerle yapılan tek
+  sayfalık uygulama (SPA) gezinmesi; sayfanın sorgu dizisi varyantları
+  (`/login?mode=signup` ile `/login` tek sayfadır); `robots.txt`; `iframe`
+  içindeki alanlar; kapalı shadow kökleri (açık olanlar 10 katmana kadar
+  okunur). Sayfa başına tavanların (100 alan, 100 bağlantı, 50 düğme, 20
+  seçenek, 20 disclosure) ötesi sessizce kesilir.
+- **Giriş gerekli tespiti yanılabilir.** Ziyaret bir giriş sayfasında bitiyorsa
+  sayfa giriş gerekli sayılır; başka origin'e yönlendiren sayfa da işaretlenir
+  ve `redirectedTo` yalnız o origin olur, yani zararsız bir site dışı yönlendirme
+  yanlışlıkla işaretlenebilir. Kayıtlı girişle (`project create --login`) keşfedince
+  işaret düşer.
+- **Sitemap sınırları.** Tek origin, dosya başına 1 MB, 500 URL, 20 alt sitemap,
+  15 saniyelik süre; bkz. [Komutlar](#komutlar).
 - **Bazı komutlar metin kipinde hâlâ ham JSON basıyor:** `project get`,
-  `test get`, `test result` ve `test plan generate`'in gövdesi.
+  `test get` ve `test result`.
 - **Koşudan sonraki otomatik budama yalnız az önce koşan testi etkiler.**
   Hiç yeniden koşturmadığın testlerin koşuları, tüm `.kobay` depolamasını (bütün
   testlerin koşuları, beyin günlükleri ve eski sürümlerden kalanlar) süpüren
@@ -672,7 +697,8 @@ Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
   kayıt oluşturur ya da siler. kobay'ı asla canlıya ya da gerçek veriye yöneltme.
 - **Kimlik bilgileri origin'e kilitlidir.** `.kobay/credentials.json` giriş
   kullanıcısını ve parolayı tek bir origin için düz metin olarak (0600 izin)
-  saklar; `.kobay/storageState.json` oturum çerezlerini tutar (0600). İkisi de
+  saklar; `.kobay/storageState.json` oturum çerezlerini tutar (0600): ya
+  `--login` ile kaydedilmiş ya da `--session-file` ile içe alınmış. İkisi de
   git dışıdır. Projeyi `project update --base-url` ya da `project create --force`
   ile başka bir origin'e taşımak ikisini de siler ve `invalidated` altında
   listeler. Kayıtlı origin uyuşmazsa `explore` ve `test refresh` tarayıcı
@@ -710,8 +736,10 @@ Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
   bunlar olmadan çizilir; bir origin'i `--auth-origin` ile yalnız parolayı ona
   emanet edecek kadar güveniyorsan ekle. Giriş tamamlanmazsa engellenen GET
   istekleri hataya ipucu olarak eklenir, tek başlarına girişi reddettirmez.
-  Test koşuları ve kayıtlı oturumu parola yazmadan kullanan `test refresh`
-  sınırlanmaz: uygulamanın kendi trafiği, oturum çerezi dahil, uygulamanın
+  İçe alınan oturumla (`--session-file`) çalışan `explore` ve `test refresh` ilk
+  isteğinden itibaren aynı kurallarla çalışır; bkz.
+  [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa). Test koşuları ve `--login`
+  oturumunu parola yazmadan kullanan `test refresh` sınırlanmaz: uygulamanın kendi trafiği, oturum çerezi dahil, uygulamanın
   gönderdiği yere gider; bu yüzden test hesabı kullan. Aynı sitedeki alt alanlara izin verilir
   (`app.example.com` ve `api.example.com`, aynı şema); ayrı bir kimlik doğrulama
   sitesine (SSO) ise yalnız listelersen ve o zaman yalnız o tam origin'e izin
@@ -807,6 +835,111 @@ kobay project update --login --clear-auth-origins
   `explore` "Login did not return to the app origin" ile `5` çıkar. Bu, auth
   origin'li ya da onsuz her girişte geçerlidir.
 - `.kobay/storageState.json` (0600) bu durumda auth sitesinin çerezlerini de tutar.
+
+### İçe alınan oturum (CAPTCHA, 2FA)
+
+Giriş sayfasında CAPTCHA, ikinci adım ya da kobay'ın yazamayacağı başka bir
+şey varsa kendi tarayıcında giriş yap ve kobay'a parolayı değil oturumu ver.
+Girişten sonra bir Playwright `storageState` dosyası kaydet (örneğin
+`npx playwright codegen --save-storage state.json <URL>` ya da bir betikte
+`context.storageState({ path })`), sonra:
+
+```sh
+kobay project create --url http://127.0.0.1:3972 --session-file state.json
+#> Project created: ~/my-app/.kobay
+#> Target: http://127.0.0.1:3972
+#> Brain: claude
+#> Session: imported (1 cookie, 0 storage origins)
+#> Next: kobay explore
+kobay explore
+#> 3 pages explored (logged in, imported session)
+#> Map: ~/my-app/.kobay/map.json
+#> Pages: /, /records, /new
+#> Next: kobay test plan generate
+# sonra, oturum düşünce: tazesini içe al ve yeniden keşfet
+kobay explore --session-file state.json
+```
+
+Göreli `--session-file` yolu, `--plan` gibi `--cwd`'ye göre çözülür (`--cwd`
+vermezsen kabuğun bulunduğun dizin).
+
+- Dosya en çok 1 MB'lık bir Playwright `storageState` JSON'u olmalı
+  (`cookies[]`, `origins[]`). kobay onu bu biçime göre denetler, yalnız bilinen
+  alanları tutar ve `.kobay/storageState.json`'a yazar (0600 izin, git dışı);
+  senin dosyan değişmez. Test koşuları, `test refresh` ve sonraki `explore`
+  koşuları içe alınan oturumu `--login` ile kaydedilmiş oturum gibi kullanır.
+  Harita `loggedIn: true` ve `sessionSource: "imported"` yazar.
+- **Başka sitelerin verisi reddedilir** (exit `2`, hiçbir şey içe alınmaz).
+  Mesaj sorunlu her çerez alanını ya da depolama origin'ini adıyla verir, hiçbir
+  değeri yazmaz. İzinli küme `--login` korumasınınkinden dardır: base URL'in tam
+  ana makinesi (aynı şema, port serbest) ve `--auth-origin` ile verdiğin tam
+  origin'ler (`project create`'te `--auth-origin`, `--login` gibi
+  `--session-file` ile de çalışır). Aynı sitenin başka ana makineleri
+  (`app.example.com`'un yanındaki `api.example.com`) bu kümede değildir.
+  Depolama origin'i bu kümede tam bir `http(s)` origin'i olmalı. Çerezlerde şema
+  ve port yoktur, bu yüzden çerez alanı ana makine adıyla karşılaştırılır: base
+  URL'in ana makinesinin kendisi ya da noktalı bir üst alanı (`app.example.com`
+  için `.example.com`); kardeş ana makine ve kamu soneki (`.com`, `.co.uk`,
+  `.github.io`) hiçbir zaman. kobay'ın sonek listesi kısa, yerleşik bir
+  yaklaşıktır, Public Suffix List değildir: bilmediği bir sonek (örneğin
+  `.id.au`) üst alan olarak kabul edilir ve üst alan çerezi tarayıcıda bütün
+  kardeş ana makinelere gider. Auth origin çerezi kendi ana makinesi için aynı
+  kurala uyar (ana makinenin kendisi ya da `.tenant.okta.com` gibi noktalı üst
+  alanı; `okta.com`, `auth0.com` gibi kimlik sağlayıcı kiracı alanları yerleşik
+  sonek listesinde); noktalı çerez o ana makinenin alt alanlarına da gider. `localhost` çerezi, her tarayıcıda olduğu gibi,
+  `localhost`'un bütün portlarına gider. `secure` ve `sameSite` kararı
+  değiştirmez. `expires` `-1` (oturum çerezi) ya da pozitif bir Unix zamanı
+  olmalı.
+- İçe alınan oturumla `explore` ve `test refresh` giriş formunu hiç açmaz ve ağ
+  korumasını ilk istekten itibaren açık tutar (service worker'lar kapalı): izinli küme dışındaki ana makinelere HTTP(S)
+  istekleri, belgeler ve WebSocket'ler engellenir, tek bir uyarı yazılır
+  (`blocked N third-party requests with the imported session to protect the
+  session: ...`). Başka bir ana makineye giden ve oturumdaki bir çerez ya da
+  depolama değerini (adreste, `Cookie` dahil herhangi bir başlıkta ya da
+  gövdede; ham, URL-kodlu, base64 ya da base64url) taşıyan HTTP(S) isteği ya da
+  yakalanabilen WebSocket keşfi durdurur (exit `5`). Mesaj eşleşen çerezin ya da
+  depolama anahtarının ADINI verir (`cookie sid`), değeri asla. 8 karakterden kısa
+  değerler sır sayılmaz (`theme=dark`, `sidebar_state=true` sıradan isteklerde,
+  ör. `?lazy=true`, geçerdi); güvenilen bir yönlendirmeyle giden kısa jeton yalnız
+  "via redirect" uyarısında görünür. Kapsam dışı: Web Worker içinden açılan WebSocket, WebTransport,
+  WebRTC ve DNS ön çözümleme. Yukarıdaki yönlendirme sınırı burada da geçerli:
+  güvenilen bir uç başka ana makineye yönlendirirse istek oraya ulaşır; kobay
+  yalnız tespit eder (ayak oturum değeri taşıyorsa durur).
+- Sayfanın görünen metninde geçen oturum değeri (başlık, başlıklar, düğme, menü
+  ve bağlantı metni, alan etiketi, placeholder ve seçenekler) `map.json`'a ve
+  `--output json`'a `[redacted]` olarak yazılır. Yapı hiç değişmez: sayfa `url`'si,
+  `links`, form `action`, `redirectedTo` ve alan `name`'leri olduğu gibi kalır;
+  tek istisna, 16+ karakterlik (adres biçimli olmayan) bir oturum değerini taşıyan
+  bağlantı ya da form `action`'ı haritaya alınmaz. Sayfanın kendi adresi o durumda
+  da korunur (bilinen sınır). Yalnız 8+ karakterlik oturum değerleri maskelenir;
+  (ham, her harf biçimiyle URL-kodlu, base64 ve base64url); adres biçimli
+  değerler (`https://…`; böyle saklanmış bir adresin sorgusundaki jeton haritada
+  kalabilir: bilinen sınır) ve harf, `-`, `_`'den oluşan 16 karakterden kısa düz
+  sözcükler (`dashboard`, `sidebar-open`, `kullanıcılar`) maskelenmez. `name`'i
+  ya da `type`'ı 16+ karakterlik oturum değeri taşıyan form alanı haritaya alınmaz. `--login` parolası yalnız görünen metinde, büyük/küçük
+  harfe duyarsız, 8+ karakterse ve düz sözcük (harf, `-`, `_`; 16 karakterden
+  kısa) değilse maskelenir; daha kısa parola (`admin`) ya da sözcük parola
+  (`password`) maskelenmez, böylece "Admin", `/admin` bağlantısı ya da "Reset
+  password" bozulmaz (bilinen sınır). Sızıntı mesajı çerez/anahtar adındaki
+  e-posta benzeri parçaları ve 16+ karakterlik harf/rakam dizilerini gizler.
+- `.kobay/storageState.json` var ama okunamıyor, 1 MB'ı aşıyor ya da JSON değilse
+  `explore` `2` ile çıkar ve dosyaya dokunmaz; yalnız dosyanın olmaması "oturum
+  yok" demektir.
+- `--session-file` ile `--login` bir arada olmaz: `project create` ikisini
+  birden reddeder, `project create --session-file --force` kayıtlı kimliği
+  kaldırır, kimlik kayıtlıyken `explore --session-file` `2` ile çıkar (kobay
+  giriş yapıp oturumu ezerdi). Dosya her `explore`'da yeniden denetlenir; başka
+  bir site eklenecek biçimde elle değiştirildiyse `explore` `2` ile çıkar.
+  Sayfalar içe alınan oturumu giriş sayfasına gönderirse `explore` oturumun
+  düşmüş olabileceği uyarısını yazar.
+- MCP araçları oturum dosyası içe alamaz: ajan kobay'a keyfi bir dosya
+  gösteremez. MCP üzerinden `explore`, daha önce CLI'dan içe alınmış oturumu
+  kullanır.
+- Dosyaya parola gibi davran: odur. Bir test koşusunun `trace.zip`'i (`runs/`,
+  `failure/` ve `failure-out/` paketi) oturum çerezlerini ve depolamayı açık
+  kaydeder, `--login` oturumunda olduğu gibi; adım ekran görüntüleri, videolar ve
+  `step-*.html` sayfanın gösterdiği her şeyi taşır. **Düşen bir testin paketini
+  paylaşmadan önce içinden `trace.zip`'i çıkar.**
 
 ## Başvuru
 
@@ -945,13 +1078,19 @@ silme gibi görünen bağlantıları atlar ve form asla göndermez. Sonuç *hari
 `.kobay/map.json`.
 
 **Plan üretme** — **LLM çağrısı.** Beyin haritayı okur (`--docs` verdiysen bir
-ürün belgesiyle birlikte) ve 8–25 akış ister; harita dışı adreslere işaret eden
-öneriler düşürülür. Bir giriş yapılandırılmışsa, gerçek kimlik bilgilerini
+ürün belgesiyle birlikte) ve 8–25 akış ister; harita dışı adreslere ya da proje
+kökeninden başka bir kökene (yolu haritada olsa bile) işaret eden öneriler
+düşürülür. Bir giriş yapılandırılmışsa, gerçek kimlik bilgilerini
 (parola, gizli anahtar, PIN) yazan bir adımı olan öneriler de düşürülür; adımıyla
 birlikte `dropped` altında listelenir; geçersiz ya da boş değer yazan adımlar
 sorun değildir. Her öneri ayrıca `requiresRealCredentials` bildirir; `true`
 öneriyi düşürür ve alan `false` dese de adım süzgeci gerçek kimlik yazan adımları
-yine düşürür. Üretilen kod sessizce `test.skip` kullanamaz ve gerçek kimlik
+yine düşürür. Kayıtlı giriş yokken `requiresLogin` sayfaya yazılan öneri yalnız
+beyin onu `loginRedirectCheck: true` diye işaretlediyse (yalnız sayfanın giriş
+sayfasına yolladığını doğruluyorsa) tutulur; diğerleri
+düşürülür ve çıktı (JSON'da `nextStep`) `kobay project create --login` ile giriş
+kaydetmeyi söyler.
+Üretilen kod sessizce `test.skip` kullanamaz ve gerçek kimlik
 gerektirecek bir adım yeniden yazılmak yerine hata fırlatır. Metin çıktısı özet
 satırı artı `--output json`'ın döndürdüğü aynı JSON gövdesidir. Demo koşusunda iki
 giriş önerisi gerçek kimlik bilgisi gerektirdikleri için, biri de haritanın
@@ -1028,7 +1167,7 @@ pakete yalnız analiz onlara atıf yaparsa girer. Trace'i
 
 ### Komutlar
 
-Aşağıdaki bayraklar 0.5.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
+Aşağıdaki bayraklar 0.6.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
 örtüşür.
 
 | Komut | Ne yapar |
@@ -1037,10 +1176,10 @@ Aşağıdaki bayraklar 0.5.0'da `kobay --help` ve her alt komutun `--help` çık
 | `install-browser [--with-deps]` | Uyan Chromium'u kurar; `--with-deps` Linux sistem kütüphanelerini ekler. |
 | `demo [--port <port>]` | Paketteki demo uygulamayı başlatır. Varsayılan port 3000; `0` boş birini seçer. |
 | `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi (Windows'ta ayrıca Git Bash'i) denetler. Her zaman `0` ile çıkar. |
-| `project create --url <url> [--docs <path>] [--login] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Burada `.kobay/` oluşturur. `--url` bir `http://` ya da `https://` adresi olmalıdır. `--force` var olan bir projenin yalnız config'ini yeniden yazar; yenilerini vermedikçe beynini ve limitlerini korur. `--auth-origin` `--login` ister. |
+| `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Burada `.kobay/` oluşturur. `--url` bir `http://` ya da `https://` adresi olmalıdır. `--force` var olan bir projenin yalnız config'ini yeniden yazar; yenilerini vermedikçe beynini ve limitlerini korur. `--session-file` girişli bir Playwright `storageState` dosyasını içe alır (bkz. [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa)); `--auth-origin` `--login` ya da `--session-file` ister. |
 | `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Yalnız verdiğin alanları değiştirir; `--base-url` ve `--login-url` `http://` ya da `https://` olmalıdır. `--login` kimlik bilgilerini yeniden girer; `--auth-origin` auth origin listesinin tamamını değiştirir ve `--clear-auth-origins` gibi `--login` ister. |
 | `project get` | Ayarlar, test sayısı, bir harita olup olmadığı. |
-| `explore` | Uygulamayı keşfeder ve `.kobay/map.json`'ı yeniden yazar. |
+| `explore [--seed <url>]... [--no-sitemap] [--max-pages <n>] [--depth <n>] [--session-file <path>]` | Uygulamayı keşfeder ve `.kobay/map.json`'ı yeniden yazar. Bayraklar aşağıda. |
 | `test plan generate [--hint <text>]` | Haritadan ve belgelerden test önerir. `--hint` serbest metindir, ör. "invoice flow only". |
 | `test plan accept [--all] [--ids <id,id>]` | Önerileri taslak teste çevirir. |
 | `test create --plan <path>` | Elle yazılmış bir plan dosyasından test oluşturur (aşağıda). |
@@ -1057,6 +1196,21 @@ Aşağıdaki bayraklar 0.5.0'da `kobay --help` ve her alt komutun `--help` çık
 | `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Eski koşuları, beyin günlüklerini, bayat hata paketlerini ve eski sürümlerden kalan bilinen artıkları kaldırır. Bilinmeyen `failure-out/` dosyaları atlanır. Son düşen koşuyu ya da güncel bir hata paketini asla kaldırmaz. CLI varsayılan olarak siler; `--dry-run` yalnız önizler. `--max-mb` `runs/` için tavandır (varsayılan 500), `--older-than-days` yaş eşiğidir (varsayılan 7). |
 | `agent install --target <claude\|codex\|cursor>` | Ajan becerisini buraya kurar; `claude` için ayrıca MCP sunucusunu `.mcp.json`'a kaydeder. |
 | `mcp` | stdio MCP sunucusunu başlatır. |
+
+`explore` bayrakları (0.6.0'da yeni; `--help` metni İngilizcedir):
+
+- `--seed <url>`: proje origin'inde ek başlangıç URL'si; tekrarlanabilir. Başka
+  origin'deki URL exit `2` verir.
+- `--no-sitemap`: `/sitemap.xml`'i okuma (proje origin'inde varsa varsayılan
+  olarak okunur). Sitemap index izlenir. Sınırlar: dosya başına 1 MB, toplam 500
+  URL, 20 alt sitemap ve hepsi için tek 15 saniyelik süre; yalnız `200` yanıtı
+  sayılır, yönlendirme izlenmez, `.xml.gz` okunmaz ve `robots.txt` hiç okunmaz.
+- `--max-pages <n>`: haritadaki en çok sayfa; giriş gerekli kayıtlar dahil
+  (varsayılan: 40).
+- `--depth <n>`: başlangıç URL'lerinden en çok bağlantı derinliği (varsayılan: 3).
+- `--session-file <path>`: önce girişli bir Playwright `storageState` dosyasını
+  içe alır, sonra onunla keşfeder; kimlik kayıtlıyken reddedilir (exit `2`).
+  Bkz. [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa).
 
 
 `prune --dry-run` bir özet basar (demo projesinde gerçek bir koşudan örnek):
@@ -1177,6 +1331,17 @@ yalnız yeni bir süreçte etkili olur — kobay'ı ya da MCP sunucusunu yeniden
 Bir limite takılındığında kobay, ajana ayarı kendisi değiştirmek yerine senden
 onay istemesini söyler.
 
+Tavanlar azami çabadır (best effort), sert bir garanti değildir. `claude` çağrı
+başı bütçesini yalnız bir tur bittikten sonra denetler; bu yüzden tek bir çağrı
+kendi limitinin üstünde bitebilir ve yine de faturalanır. kobay bu gerçek
+maliyeti sayar ve sonraki çağrıyı reddeder. Bir
+`claude` çağrısı yalnız tam çağrı bütçesi kalan toplama sığıyorsa başlar; bu
+kural toplam tavanı aşma riskini azaltır ama çalışan bir çağrının toplamı
+geçmesini engelleyemez. Toplamın son dilimi kullanılmayabilir: varsayılanlarda ($5 toplam, çağrı
+başı $1) kobay yaklaşık $4 harcandığında durabilir, tek bir çağrı da yine $1'in
+üstünde bitebilir. Karşılaştırmalar tam mikro-dolarla yapılır; kayan nokta
+farkı sığan bir çağrıyı reddettirmez.
+
 Başlayıp sonra zaman aşımına uğrayan ya da hata veren bir çağrı iade **edilmez**,
 çünkü sağlayıcı onu çoktan faturalamış olabilir; varsa bildirilen gerçek maliyet
 sayılır, yoksa ayrılan miktarın tamamı. Tavan yalnız sağlayıcının bildirdiği
@@ -1197,6 +1362,7 @@ ve onun yönlendirdiği her yer):
 | Adım | LLM'e gönderilen |
 | --- | --- |
 | `test plan generate` | Harita: sayfa adresleri, başlıklar, alt başlıklar, bağlantı/düğme/menü etiketleri, form alanı adları ve etiketleri. `--docs` dosyan, ilk 20.000 karakter. `--hint`'in. |
+| `test plan generate`, `test refresh` (0.6.0 alanları) | `select` seçenek metinleri (alan başına ilk 8, artı seçenek sayısı) ve `details > summary` başlıkları. Maskelenmezler ve doğrudan uygulamanın kendi DOM'undan gelir: bir select müşteri adı ya da e-posta listeliyorsa bunlar LLM'e gider. |
 | `test run` (kod üretimi) | Testin plan adımları ve harita. |
 | `test run` (hata analizi) | Hata mesajı, düşen adımın temizlenmiş DOM'u, en fazla 20 konsol hatası, en fazla 20 başarısız ağ isteği, test kodu ve plan adımları. Ekran görüntüleri gönderilmez. |
 | `test refresh` | Testin sayfasının eski ve yeni özeti, harita farkı ve plan adımları. |
@@ -1223,7 +1389,7 @@ Projenin bütün durumu uygulamanın kökündeki `.kobay/` altında yaşar:
 | --- | --- |
 | `config.json` | Base URL, giriş URL'si, docs yolu, beyin ayarları ve limitler (`brain` altında). |
 | `credentials.json` | Giriş `username` ve `password`, 0600 izin, git dışı. |
-| `storageState.json` | Playwright oturum durumu, 0600 izin, git dışı. |
+| `storageState.json` | Playwright oturum durumu, 0600 izin, git dışı. İçe alınmışsa (`--session-file`) Playwright'ın yok saydığı `"kobay": { "sessionSource": "imported" }` alanını da taşır. |
 | `map.json` | Harita: `title`, `headings`, `links`, `forms`, `buttons`, `menu` içeren `pages`. |
 | `plan/proposals.json` | Beynin önerileri. |
 | `tests/` | Test kayıtları (`t_*.json`), üretilen kod (`t_*.spec.ts`), `_fixture.ts`. |
@@ -1234,6 +1400,22 @@ Projenin bütün durumu uygulamanın kökündeki `.kobay/` altında yaşar:
 | `logs/` | Beyin çağrı günlükleri. |
 | `playwright.config.ts` | Üretilen çalıştırıcı config'i. Elle düzenlersen kobay bir uyarıyla ona dokunmaz. |
 | `.credentials-txn` | Süren bir kimlik bilgisi değişikliğinin işareti; `.stale-*` kenara alınan kopyaları tutar. İkisi de git dışı. |
+
+**Harita alanları.** 0.6.0 işaretli her alan isteğe bağlıdır; eski bir kobay'ın
+yazdığı `map.json` değişmeden yüklenir.
+
+| Düzey | Alan | Anlamı |
+| --- | --- | --- |
+| Harita | `baseUrl`, `loggedIn`, `pages`, `exploredAt` | Eskisi gibi. |
+| Harita | `seeds`, `sitemap` (`url`, `urlCount`) | 0.6.0: verilen `--seed` URL'leri ve okunan sitemap; yalnızca iz. |
+| Harita | `sessionSource` | 0.6.0: `loggedIn`'in nereden geldiği: `login` (kobay kayıtlı kimliği yazdı) ya da `imported` (`--session-file`). Giriş yoksa yazılmaz. |
+| Sayfa | `url`, `title`, `headings`, `links`, `forms`, `buttons`, `menu` | Eskisi gibi. Düğmeler görünür metni, sonra `aria-label`, `title` ya da `value`'yu kullanır; `role="button"` sayılır. |
+| Sayfa | `disclosures` | 0.6.0: `details > summary` metinleri (en çok 20). |
+| Sayfa | `requiresLogin`, `redirectedTo` | 0.6.0: sayfa girişsiz ziyareti bir giriş sayfasına yolladı. `url` istenen adrestir; `redirectedTo` giriş sayfasıdır (sorgusuz). `forms` ve `buttons` boştur. |
+| Form | `fields`, `action` | Eskisi gibi. |
+| Form | `detached` | 0.6.0: sayfanın hiçbir `<form>` içinde olmayan alanları; sayfa başına tek sanal form. |
+| Alan | `name`, `type`, `label`, `placeholder` | Eskisi gibi. `type="hidden"` alanlar hiç kaydedilmez (Next.js `$ACTION_*` alanları ve CSRF jetonları dahil). |
+| Alan | `options`, `optionCount` | 0.6.0: `select` için ilk 20 kullanılabilir seçenek ve kaç kullanılabilir (boş olmayan, disabled olmayan) seçenek olduğu. |
 
 `.kobay/tests/_fixture.ts` her koşudan önce etkin kobay kurulumunu gösterecek
 şekilde yeniden yazılır; elle düzenleme.

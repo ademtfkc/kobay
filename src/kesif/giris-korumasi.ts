@@ -317,6 +317,12 @@ const BARINDIRMA_ALANLARI = new Map<string, 'sonek' | 'tam'>([
   ['replit.app', 'sonek'], ['replit.dev', 'sonek'], ['csb.app', 'sonek'], ['gitpod.io', 'sonek'],
   ['ondigitalocean.app', 'sonek'], ['koyeb.app', 'sonek'], ['elasticbeanstalk.com', 'sonek'],
   ['trycloudflare.com', 'sonek'], ['loca.lt', 'sonek'], ['serveo.net', 'sonek'],
+  // Kimlik sağlayıcı kiracı alanları (SSO auth origin'leri; içe alınan oturumun üst alan çerezi
+  // `.okta.com` bütün kiracılara gitmesin). Üç etiketliler bölgesel Auth0 alanları.
+  ['us.auth0.com', 'sonek'], ['eu.auth0.com', 'sonek'], ['au.auth0.com', 'sonek'], ['jp.auth0.com', 'sonek'],
+  ['okta.com', 'sonek'], ['oktapreview.com', 'sonek'], ['okta-emea.com', 'sonek'], ['auth0.com', 'sonek'],
+  ['onelogin.com', 'sonek'], ['b2clogin.com', 'sonek'], ['cloudflareaccess.com', 'sonek'],
+  ['amazoncognito.com', 'tam'],
   // Kiracıya ayrılmış bütün alan: tam origin.
   ['amazonaws.com', 'tam'], ['cloudfront.net', 'tam'], ['run.app', 'tam'],
 ]);
@@ -434,14 +440,190 @@ export function ayniSiteOriginMi(url: string, izinliOrigin: string): boolean {
   return ayniSiteMi(adres.hostname, izinli.hostname);
 }
 
-function parolaTasiyorMu(istek: Request, izler: string[]): boolean {
-  if (izler.length === 0) return false;
+/** Bir isteğin aranacak metni: adres, sayfanın yazabildiği başlıklar (bkz. `basligiAra`), gövde. */
+function istekMetni(istek: Pick<Request, 'url' | 'postDataBuffer'>, basliklar: Record<string, string>): string {
   const govde = istek.postDataBuffer()?.toString('utf8') ?? '';
-  const basliklar = Object.entries(istek.headers())
+  const aranan = Object.entries(basliklar)
     .filter(([ad]) => basligiAra(ad))
     .map(([, deger]) => deger)
     .join('\n');
-  return metinParolaTasiyorMu(`${istek.url()}\n${basliklar}\n${govde}`, izler);
+  return `${istek.url()}\n${aranan}\n${govde}`;
+}
+
+/**
+ * Bir metnin korunan değeri (parola izi ya da içe alınan oturum değeri) taşıyıp taşımadığını söyler.
+ * `Request.headers()` Playwright sözleşmesinde Cookie gibi güvenlik başlıklarını içermeyebilir; tam
+ * başlıklar `allHeaders()` ile ayrıca (asenkron) aranır, bkz. `korumayiKur` içindeki `basliklariDenetle`.
+ */
+type DegerEsleyici = (metin: string) => boolean;
+
+function parolaEsleyici(izler: readonly string[]): DegerEsleyici {
+  return (metin) => metinParolaTasiyorMu(metin, [...izler]);
+}
+
+/**
+ * İçe alınan oturumda bundan kısa değer SIR SAYILMAZ: ne ağ sızıntı kararında (exit 5) ne haritada
+ * kullanılır. `sidebar_state=true`, `theme=dark` gibi değerler sıradan isteklerde (`?lazy=true`)
+ * geçip keşfi boşuna durdururdu. Bu uzunluktaki gerçek bir jeton (`ABC123`) yabancıya güvenilen bir
+ * yönlendirmeyle giderse yalnız "via redirect" uyarısında görünür.
+ */
+export const OTURUM_IZI_EN_KISA = 8;
+
+/** Base64 ve base64url biçimleri (dolgusuz); `/collect/<base64>` gibi kodlanmış taşımalar için. */
+function base64Bicimleri(deger: string): string[] {
+  const b64 = Buffer.from(deger, 'utf8').toString('base64').replace(/=+$/, '');
+  return [b64, b64.replace(/\+/g, '-').replace(/\//g, '_')];
+}
+
+/** Oturumun adlı değeri: `cookie sid`, `localStorage jwt`. Ad mesaja girer, değer asla. */
+export interface OturumGirdisi {
+  ad: string;
+  deger: string;
+}
+
+/**
+ * İçe alınan oturum değerlerinin AĞ izi: çıktı maskesinin eşiklerinden (`EN_UZUN_GIZLI_DEGER`,
+ * adres istisnası) bağımsız, ayrı envanter. 8+ karakterlik her değer ham, URL-kodlu, base64 ve
+ * base64url biçimleriyle izlenir (1024 karakteri aşan ve adres biçimli değerler dahil); biçim
+ * metnin herhangi bir yerinde geçerse eşleşir.
+ */
+export function oturumDegerBicimleri(girdiler: readonly OturumGirdisi[]): Array<{ ad: string; bicim: string }> {
+  const sonuc: Array<{ ad: string; bicim: string }> = [];
+  for (const { ad, deger } of girdiler) {
+    if (deger.length < OTURUM_IZI_EN_KISA) continue;
+    for (const bicim of new Set([deger, encodeURIComponent(deger), ...base64Bicimleri(deger)])) sonuc.push({ ad, bicim });
+  }
+  return sonuc;
+}
+
+/** Metin (ham ya da URL-kodu çözülmüş) içe alınan oturumun hangi adlı değerlerini taşıyor? Boşsa hiçbiri. */
+export function oturumEslesenAdlar(girdiler: readonly OturumGirdisi[]): (metin: string) => string[] {
+  const bicimler = oturumDegerBicimleri(girdiler);
+  return (metin) => {
+    const adaylar = [metin];
+    try { adaylar.push(decodeURIComponent(metin.replace(/\+/g, ' '))); } catch { /* bozuk kodlama: ham metinle yetin */ }
+    return [...new Set(bicimler.filter(({ bicim }) => adaylar.some((aday) => aday.includes(bicim))).map(({ ad }) => ad))];
+  };
+}
+
+/** İçe alınan oturum değerlerinden birini taşıyor mu? */
+export function oturumEsleyici(girdiler: readonly OturumGirdisi[]): DegerEsleyici {
+  const eslesen = oturumEslesenAdlar(girdiler);
+  return (metin) => eslesen(metin).length > 0;
+}
+
+/**
+ * Metindeki eşleşmeleri `yerine` ile değiştirir; RegExp KURULMAZ (1 MB'lık tek değer RegExp
+ * sınırını aşıp `SyntaxError` verirdi). Uzun aranan önce. `harfDuyarsiz`: karşılaştırma küçük
+ * harfle yapılır, metnin geri kalanı korunur.
+ */
+function degistir(metin: string, arananlar: readonly string[], yerine: string, harfDuyarsiz = false): string {
+  let sonuc = metin;
+  for (const bicim of [...arananlar].sort((x, y) => y.length - x.length)) {
+    if (bicim === '') continue;
+    const aranan = harfDuyarsiz ? bicim.toLowerCase() : bicim;
+    let parca = '';
+    let kalan = sonuc;
+    for (;;) {
+      const i = (harfDuyarsiz ? kalan.toLowerCase() : kalan).indexOf(aranan);
+      if (i < 0) break;
+      parca += kalan.slice(0, i) + yerine;
+      kalan = kalan.slice(i + aranan.length);
+    }
+    sonuc = parca + kalan;
+  }
+  return sonuc;
+}
+
+/** Hata ve uyarı metinleri için oturum maskesi: ağ iziyle aynı envanter, RegExp'siz. */
+export function oturumMetinMaskesi(girdiler: readonly OturumGirdisi[]): (metin: string) => string {
+  const arananlar = [...new Set(oturumDegerBicimleri(girdiler).map(({ bicim }) => bicim))];
+  if (arananlar.length === 0) return (metin) => metin;
+  return (metin) => degistir(metin, arananlar, '[redacted]');
+}
+
+/** Harita metin maskesinde oturum değeri bundan kısaysa aranmaz. */
+export const HARITA_MASKESI_EN_KISA = 8;
+/** Yalnız harften oluşan değer bundan kısaysa sır sayılmaz (`dashboard`, `settings`). */
+const HARITA_DUZ_SOZCUK_TAVANI = 16;
+/** Parola harita metninde bundan kısaysa aranmaz (`admin` gibi kısa parola sıradan sözcükleri bozardı). */
+export const HARITA_PAROLA_EN_KISA = 8;
+/** Bağlantı/`action` adresinde birebir geçen, bundan uzun (adres biçimli olmayan) oturum değeri kaydı düşürür. */
+export const HARITA_ADRES_SIR_EN_KISA = 16;
+
+/**
+ * Harita (`map.json`, `--output json`) maskesi. Yalnız GÖRÜNEN SERBEST METNE uygulanır (başlık,
+ * başlıklar, düğme, menü, disclosure, alan etiketi/placeholder/seçenekler); yapısal alanlar (`url`,
+ * `links`, form `action`, `redirectedTo`, alan `name`) HİÇBİR ZAMAN değiştirilmez.
+ * - Oturum değeri: 8+ karakter, adres biçimli değil, 16 harften kısa düz sözcük değil. Ham, URL-kodlu.
+ * - Parola: 8+ karakter, büyük/küçük harfe duyarsız (`Secret12` için `SECRET12` de). Kısa parola
+ *   (`admin`) maskelenmez: `/admin` sayfasının başlığı ve menüsü bozulurdu (bilinen sınır).
+ * - `adresiDusur`: bağlantı ya da `action` adresinde 16+ karakterlik, adres biçimli olmayan bir
+ *   oturum değeri birebir geçiyorsa o kayıt düşer. Parolaya adreste hiç bakılmaz.
+ */
+export interface HaritaMaskesi {
+  metin(deger: string): string;
+  /** Yapısal değer (bağlantı, `action`, alan `name`/`type`) 16+ karakterlik oturum değeri taşıyor mu? Taşıyorsa kayıt düşer. */
+  yapisalDusur(deger: string): boolean;
+  bos: boolean;
+}
+
+/** Harita için aranacak biçim; yüzde-kodlu biçim (`%2F`/`%2f`) harfe duyarsız karşılaştırılır. */
+interface HaritaBicimi {
+  bicim: string;
+  harfDuyarsiz: boolean;
+}
+
+/** Ağ envanteriyle aynı üretici: ham, URL-kodlu, base64, base64url. */
+function haritaBicimleri(deger: string): HaritaBicimi[] {
+  const kodlu = encodeURIComponent(deger);
+  return [
+    { bicim: deger, harfDuyarsiz: false },
+    ...(kodlu === deger ? [] : [{ bicim: kodlu, harfDuyarsiz: true }]),
+    ...base64Bicimleri(deger).map((bicim) => ({ bicim, harfDuyarsiz: false })),
+  ];
+}
+
+/** Düz sözcük: yalnız harf (Unicode), `-` ve `_` (`dashboard`, `sidebar-open`, `kullanıcılar`). */
+const DUZ_SOZCUK = /^[\p{L}_-]+$/u;
+
+export function haritaMaskesi(oturumDegerleri: readonly string[], parola?: string): HaritaMaskesi {
+  const metinAranan: HaritaBicimi[] = [];
+  const yapisalAranan: HaritaBicimi[] = [];
+  for (const deger of new Set(oturumDegerleri)) {
+    if (deger.length < HARITA_MASKESI_EN_KISA || sirsizAdresMi(deger)) continue;
+    if (deger.length >= HARITA_ADRES_SIR_EN_KISA) yapisalAranan.push(...haritaBicimleri(deger));
+    if (DUZ_SOZCUK.test(deger) && deger.length < HARITA_DUZ_SOZCUK_TAVANI) continue;
+    metinAranan.push(...haritaBicimleri(deger));
+  }
+  // Düz sözcük parola (`password`, `dashboard`) sayfada zaten o sözcük olarak görünür; maskelenmez.
+  const parolaListesi = parola === undefined || parola.length < HARITA_PAROLA_EN_KISA
+    || (DUZ_SOZCUK.test(parola) && parola.length < HARITA_DUZ_SOZCUK_TAVANI) ? [] : [parola];
+  const duyarli = metinAranan.filter((b) => !b.harfDuyarsiz).map((b) => b.bicim);
+  const duyarsiz = metinAranan.filter((b) => b.harfDuyarsiz).map((b) => b.bicim);
+  return {
+    bos: metinAranan.length === 0 && parolaListesi.length === 0 && yapisalAranan.length === 0,
+    metin: (deger) => degistir(
+      degistir(degistir(deger, duyarli, '[redacted]'), duyarsiz, '[redacted]', true),
+      parolaListesi, '[redacted]', true,
+    ),
+    yapisalDusur: (deger) => yapisalAranan.some(({ bicim, harfDuyarsiz }) => (harfDuyarsiz
+      ? deger.toLowerCase().includes(bicim.toLowerCase())
+      : deger.includes(bicim))),
+  };
+}
+
+/**
+ * İçe alınan oturumun izinli kümesi: `baseUrl`'in TAM ana makinesi (aynı şema, port serbest; çerez
+ * de porta bakmaz) ve tam auth origin'ler. Aynı-site genellemesi (`api.example.com`) YOK: oturum
+ * yalnız gerçekten verildiği ana makineyle kullanılır.
+ */
+export function izinliAnaMakinedeMi(url: string, baseOrigin: string | undefined, authOrigins: readonly string[]): boolean {
+  const adres = httpAdres(url);
+  if (adres === null) return false;
+  const base = baseOrigin === undefined ? null : httpAdres(baseOrigin);
+  if (base !== null && adres.protocol === base.protocol && normalAd(adres.hostname) === normalAd(base.hostname)) return true;
+  return authOrigins.some((origin) => httpAdres(origin)?.origin === adres.origin);
 }
 
 function metinParolaTasiyorMu(metin: string, izler: string[]): boolean {
@@ -473,6 +655,11 @@ export interface GirisKorumasi {
    * Kimlikli evrede parola görünmeyen kesim olduysa stderr'e tek uyarı satırı yazar.
    */
   sonDenetim(): void;
+  /**
+   * Yönlendirme ayaklarının tam başlık (`allHeaders()`) denetimleri asenkron yürür; `denetle` ve
+   * `sonDenetim`den önce beklenir ki Cookie başlığındaki değer gözden kaçmasın.
+   */
+  bekle(): Promise<void>;
   /**
    * Kullanıcıya gidecek metni bu girişin sır envanterine göre maskeler (`metniGizle`):
    * kimlik (her uzunlukta), kurulumda yüklü oturumun çerez/localStorage değerleri ve
@@ -558,12 +745,14 @@ export function yabanciBelgeHatasi(origin: string, durum: 'acik' | 'yukleniyor' 
 }
 
 /** Kimlikli evre kesimlerinin `--auth-origin` ipucu (güven anlamı: parola o origin'e emanet edilir). */
-function guvenIpucu(originler: readonly string[], cumleBasi = true): string {
+function guvenIpucu(originler: readonly string[], cumleBasi = true, konu: KorumaKonusu = 'parola'): string {
   const tekil = [...new Set(originler)];
   const ekle = cumleBasi ? 'Add' : 'add';
+  // İçe alınan oturumda liste `project create --session-file … --auth-origin` ile verilir.
+  const neyle = konu === 'oturum' ? 'the session (re-import it with --session-file)' : 'the password';
   return tekil.length === 1
-    ? `${ekle} --auth-origin ${tekil[0] ?? ''} if you trust it with the password`
-    : `${ekle} --auth-origin <origin> for each origin you trust with the password`;
+    ? `${ekle} --auth-origin ${tekil[0] ?? ''} if you trust it with ${neyle}`
+    : `${ekle} --auth-origin <origin> for each origin you trust with ${neyle}`;
 }
 
 function orneklerMetni(originler: readonly string[]): string {
@@ -615,6 +804,51 @@ function sizintiHatasi(
 }
 
 /**
+ * Tam başlıklar (`allHeaders()`, Cookie dahil; `headers()` sözleşmede bunları vermeyebilir) en çok
+ * `GIRIS_SAYFA_ICI_MS` beklenerek okunur ve istek metni korunan değer için aranır.
+ */
+export async function tamBasliklardaDegerVarMi(
+  istek: Pick<Request, 'allHeaders' | 'url' | 'postDataBuffer'>,
+  tasiyorMu: (metin: string) => boolean,
+): Promise<boolean> {
+  const basliklar = await sinirli(istek.allHeaders(), GIRIS_SAYFA_ICI_MS).catch(() => undefined);
+  if (basliklar === undefined || zamanAsimiMi(basliklar)) return false;
+  return tasiyorMu(istekMetni(istek, basliklar));
+}
+
+/** İzinli kümenin okunur metni (içe alınan oturum): ana makine, port serbest + tam auth origin'ler. */
+export function oturumIzinliMetni(baseOrigin: string | undefined, authOrigins: readonly string[]): string {
+  const base = baseOrigin === undefined ? undefined : new URL(baseOrigin);
+  return [
+    ...(base === undefined ? [] : [`${base.protocol}//${base.hostname} (any port)`]),
+    ...(authOrigins.length === 0 ? [] : [`exactly ${authOrigins.join(', ')}`]),
+  ].join(' and ');
+}
+
+/**
+ * Mesaja girecek çerez/anahtar adı. Bazı adlar kimlik taşır (Cognito: `CognitoIdentityServiceProvider.
+ * <clientId>.<kullanıcı>.idToken`): e-posta benzeri parça ve 16+ karakterlik harf/rakam dizisi `[redacted]`.
+ */
+export function oturumAdiniGizle(ad: string): string {
+  return ad.replace(/[^\s@.]+(?:\.[^\s@.]+)*@[^\s@.]+(?:\.[^\s@.]+)+/g, '[redacted]').replace(/[A-Za-z0-9]{16,}/g, '[redacted]');
+}
+
+/** İçe alınan oturumun değerini taşıyan yabancı istek; değer yazılmaz, yalnız origin'ler. */
+function oturumSizintiHatasi(
+  sizanOriginler: Set<string>,
+  baseOrigin: string | undefined,
+  authOrigins: readonly string[],
+  adlar: readonly string[],
+): CredentialLeakBlockedError {
+  const neyi = adlar.length === 0 ? 'a cookie or a storage value' : adlar.slice(0, 5).map(oturumAdiniGizle).join(', ');
+  return new CredentialLeakBlockedError(
+    `The app tried to send a value from the imported session (${neyi}) to a different site `
+      + `(${[...sizanOriginler].join(', ')}); the session is only used with ${oturumIzinliMetni(baseOrigin, authOrigins)}. `
+      + 'Exploration was stopped.',
+  );
+}
+
+/**
  * Koruma kümesi kimliğin onayladığı kümeyi aşamaz: her izinli origin ya kimliğin origin'i ya da
  * kimlik verilirken onaylanan auth origin'lerden biri olmalı. Çağıran yanlış küme geçse bile
  * parolanın gidebileceği yer sessizce büyümez; koruma hiç kurulmadan reddedilir.
@@ -654,15 +888,77 @@ export async function girisKorumasiKur(
     maske.depoEkle(yuklu.cookies.map((cerez) => cerez.value));
     maske.depoEkle(yuklu.origins.flatMap((origin) => origin.localStorage.map((oge) => oge.value)));
   }
-  const gizle = (metin: string): string => maske.gizle(metin);
+  // Kimliğin kendi origin'i (`baseUrl`) aynı-site kuralıyla, geri kalanlar (auth origin'ler) tam origin.
+  const baseOrigin = izinliOriginler.find((origin) => origin === kimlik.origin);
+  const authListesi = izinliOriginler.filter((origin) => origin !== kimlik.origin);
+  return korumayiKur(context, {
+    baseOrigin, authListesi, tasiyorMu: parolaEsleyici(parolaIzleri(kimlik)), maske, baslangic: 'once', konu: 'parola',
+  });
+}
+
+/**
+ * İçe alınan oturumla (`--session-file`) açılan keşif bağlamının korumasıdır: bağlam ilk
+ * sayfadan önce kimlikli evrede ("giriş sonrası") başlar, çünkü oturum bağlama ilk istekle
+ * girer. İzinli küme dışına HİÇBİR istek gitmez (belge, yazma, okuma, WebSocket); yönlendirme
+ * ayağı yalnız tespit edilir (parolalı yolla aynı sınır). Oturumun çerez ve localStorage
+ * değerleri parola izinin yerini alır: bu değerlerden birini taşıyan yabancı istek sızıntı
+ * sayılır ve keşif durur; aynı değerler çıktı maskesine de girer.
+ */
+export async function oturumKorumasiKur(
+  context: BrowserContext,
+  hedefOrigin: string,
+  authOrigins: readonly string[],
+  girdiler: readonly OturumGirdisi[],
+): Promise<GirisKorumasi> {
+  const varOlan = korumalar.get(context);
+  if (varOlan !== undefined) return varOlan;
+  const maske = new SirMaskesi();
+  maske.depoEkle(girdiler.map(({ deger }) => deger));
+  return korumayiKur(context, {
+    baseOrigin: hedefOrigin,
+    authListesi: [...authOrigins],
+    tasiyorMu: oturumEsleyici(girdiler),
+    eslesenAdlar: oturumEslesenAdlar(girdiler),
+    maske,
+    // Çıktı maskesinin eşiklerinin dışında kalan (çok uzun, adres biçimli) değerler de hata/uyarı metninden çıkar.
+    ekMaske: oturumMetinMaskesi(girdiler),
+    baslangic: 'sonra',
+    konu: 'oturum',
+  });
+}
+
+/** Korumanın neyi koruduğu: `parola` (giriş akışı) ya da `oturum` (içe alınan oturum). Yalnız metinleri değiştirir. */
+type KorumaKonusu = 'parola' | 'oturum';
+
+async function korumayiKur(
+  context: BrowserContext,
+  ayar: {
+    baseOrigin: string | undefined;
+    authListesi: readonly string[];
+    tasiyorMu: DegerEsleyici;
+    /** Eşleşen değerlerin adları (`cookie sid`); sızıntı mesajı nedeni göstersin diye. */
+    eslesenAdlar?: (metin: string) => string[];
+    maske: SirMaskesi;
+    ekMaske?: (metin: string) => string;
+    baslangic: Evre;
+    konu: KorumaKonusu;
+  },
+): Promise<GirisKorumasi> {
+  const { baseOrigin, authListesi, maske, konu } = ayar;
+  /** Sızıntı sayılan isteklerde eşleşen değer adları (değer değil). */
+  const sizanAdlar = new Set<string>();
+  const tasiyorMu = (metin: string): boolean => {
+    if (!ayar.tasiyorMu(metin)) return false;
+    for (const ad of ayar.eslesenAdlar?.(metin) ?? []) sizanAdlar.add(ad);
+    return true;
+  };
+  const ekMaske = ayar.ekMaske ?? ((metin: string): string => metin);
+  const maskele = (metin: string, secenek?: { alan?: boolean }): string => ekMaske(maske.gizle(metin, secenek));
+  const gizle = (metin: string): string => maskele(metin);
   const hatayiGizle = <T>(hata: T): T => {
     if (hata instanceof Error) hata.message = gizle(hata.message);
     return hata;
   };
-  // Kimliğin kendi origin'i (`baseUrl`) aynı-site kuralıyla, geri kalanlar (auth origin'ler) tam origin.
-  const baseOrigin = izinliOriginler.find((origin) => origin === kimlik.origin);
-  const authListesi = izinliOriginler.filter((origin) => origin !== kimlik.origin);
-  const izler = parolaIzleri(kimlik);
   const sizanOriginler = new Set<string>();
   /** Giriş penceresinde kesilen, parola görünmeyen siteler-arası yazmalar (bilgi amaçlı). */
   const kesilenYazmalar = new Set<string>();
@@ -686,7 +982,7 @@ export async function girisKorumasiKur(
     sonra: { sayi: 0, originler: [] as string[] },
   };
   /** `denetle`nin gördüğü giriş sonucu; uyarı metni "during"/"after login" buna göre seçilir. */
-  let girisTamamlandi = false;
+  let girisTamamlandi = ayar.baslangic === 'sonra';
   /**
    * Kimlikli evrede parola görünmeden kesilen yabancı istekler (bilgi amaçlı, `sonDenetim` uyarısı).
    * Pencerede kesilen belge yüklemeleri `denetle`nin kendi uyarısında sayıldığı için buraya girmez.
@@ -698,8 +994,25 @@ export async function girisKorumasiKur(
     kimlikliKesimSayisi += 1;
     if (!kimlikliKesimOriginleri.includes(origin)) kimlikliKesimOriginleri.push(origin);
   };
-  let evre: Evre = 'once';
-  const yabanciMi = (url: string): boolean => !izinliKumedeMi(url, baseOrigin, authListesi);
+  let evre: Evre = ayar.baslangic;
+  // Parolalı giriş: `baseUrl` sitesi; içe alınan oturum: yalnız `baseUrl` ana makinesi (bkz. `izinliAnaMakinedeMi`).
+  const izinliMi = konu === 'oturum' ? izinliAnaMakinedeMi : izinliKumedeMi;
+  const yabanciMi = (url: string): boolean => !izinliMi(url, baseOrigin, authListesi);
+  /** `allHeaders()` ile yürüyen başlık denetimleri; `bekle` hepsini bitirir. */
+  const bekleyenDenetimler = new Set<Promise<void>>();
+  /**
+   * Tam başlıklar (Cookie dahil; `headers()` sözleşmede bunları vermeyebilir) asenkron okunur, en
+   * çok `GIRIS_SAYFA_ICI_MS` beklenir. Değer görülürse istek sızıntı sayılır.
+   */
+  const tamBasliklarTasiyorMu = (istek: Request): Promise<boolean> => tamBasliklardaDegerVarMi(istek, tasiyorMu);
+  const basliklariDenetle = (istek: Request, origin: string): void => {
+    const is: Promise<void> = tamBasliklarTasiyorMu(istek)
+      .then((tasiyor) => { if (tasiyor) sizanOriginler.add(origin); })
+      .catch(() => undefined)
+      .finally(() => { bekleyenDenetimler.delete(is); });
+    bekleyenDenetimler.add(is);
+  };
+  const istekTasiyorMu = (istek: Request): boolean => tasiyorMu(istekMetni(istek, istek.headers()));
 
   const yakala = async (route: Route, istek: Request): Promise<void> => {
     const url = istek.url();
@@ -708,7 +1021,7 @@ export async function girisKorumasiKur(
       return;
     }
     const origin = kokenAdi(url);
-    if (parolaTasiyorMu(istek, izler)) {
+    if (istekTasiyorMu(istek) || await tamBasliklarTasiyorMu(istek)) {
       sizanOriginler.add(origin);
       await route.abort('blockedbyclient');
       return;
@@ -749,7 +1062,10 @@ export async function girisKorumasiKur(
       kova.sayi += 1;
       if (!kova.originler.includes(origin)) kova.originler.push(origin);
     }
-    if (istek.redirectedFrom() !== null && parolaTasiyorMu(istek, izler)) sizanOriginler.add(origin);
+    if (istek.redirectedFrom() !== null) {
+      if (istekTasiyorMu(istek)) sizanOriginler.add(origin);
+      else basliklariDenetle(istek, origin);
+    }
   };
   const cercevesiOlmus = (istek: Request): boolean => {
     try {
@@ -788,7 +1104,7 @@ export async function girisKorumasiKur(
     const kapat = (): void => {
       void ws.close({ code: 1008, reason: 'kobay: cross-site WebSocket blocked' }).catch(() => undefined);
     };
-    if (metinParolaTasiyorMu(ws.url(), izler)) {
+    if (tasiyorMu(ws.url())) {
       sizanOriginler.add(origin);
       kapat();
       return;
@@ -803,7 +1119,7 @@ export async function girisKorumasiKur(
     let mesajKesildi = false;
     ws.onMessage((mesaj) => {
       const metin = typeof mesaj === 'string' ? mesaj : mesaj.toString('utf8');
-      if (metinParolaTasiyorMu(metin, izler)) {
+      if (tasiyorMu(metin)) {
         sizanOriginler.add(origin);
         return;
       }
@@ -893,16 +1209,21 @@ export async function girisKorumasiKur(
     },
     sonDenetim() {
       // denetle sızıntıda zaten fırlattığı için buraya gelen her kayıt giriş penceresi dışındadır.
-      if (sizanOriginler.size > 0) throw sizintiHatasi(sizanOriginler, baseOrigin, authListesi, true);
+      if (sizanOriginler.size > 0) {
+        throw konu === 'oturum'
+          ? oturumSizintiHatasi(sizanOriginler, baseOrigin, authListesi, [...sizanAdlar])
+          : sizintiHatasi(sizanOriginler, baseOrigin, authListesi, true);
+      }
       const { pencere, sonra } = yonlendirmeyleUlasan;
       if ((kimlikliKesimSayisi > 0 || pencere.sayi > 0 || sonra.sayi > 0) && !kimlikliUyariYazildi) {
         kimlikliUyariYazildi = true;
         // Giriş tamamlanmadıysa her şey hâlâ "giriş sırasında"dır.
-        const ne = girisTamamlandi ? 'after login' : 'during login';
+        const ne = konu === 'oturum' ? 'with the imported session' : girisTamamlandi ? 'after login' : 'during login';
+        const neyi = konu === 'oturum' ? 'the session' : 'the password';
         const parcalar: string[] = [];
         if (kimlikliKesimSayisi > 0) {
           parcalar.push(`blocked ${kimlikliKesimSayisi} third-party request${kimlikliKesimSayisi === 1 ? '' : 's'} `
-            + `${ne} to protect the password: ${orneklerMetni(kimlikliKesimOriginleri)}`);
+            + `${ne} to protect ${neyi}: ${orneklerMetni(kimlikliKesimOriginleri)}`);
         }
         const yonlendirmeMetni = (sayi: number, originler: readonly string[], ne2: string): string => `${sayi} `
           + `request${sayi === 1 ? '' : 's'} reached ${orneklerMetni(originler)} via redirect ${ne2}`;
@@ -910,13 +1231,13 @@ export async function girisKorumasiKur(
           parcalar.push(yonlendirmeMetni(pencere.sayi + sonra.sayi, [...pencere.originler, ...sonra.originler], ne));
         } else {
           if (pencere.sayi > 0) parcalar.push(yonlendirmeMetni(pencere.sayi, pencere.originler, 'during login'));
-          if (sonra.sayi > 0) parcalar.push(yonlendirmeMetni(sonra.sayi, sonra.originler, 'after login'));
+          if (sonra.sayi > 0) parcalar.push(yonlendirmeMetni(sonra.sayi, sonra.originler, konu === 'oturum' ? ne : 'after login'));
         }
         if (pencere.sayi > 0 || sonra.sayi > 0) {
           parcalar[parcalar.length - 1] += ' (Chromium does not let kobay block a redirected request)';
         }
         const tumu = [...new Set([...kimlikliKesimOriginleri, ...pencere.originler, ...sonra.originler])];
-        process.stderr.write(gizle(`[kobay] Warning: ${parcalar.join('; ')}. ${guvenIpucu(tumu)}.\n`));
+        process.stderr.write(gizle(`[kobay] Warning: ${parcalar.join('; ')}. ${guvenIpucu(tumu, true, konu)}.\n`));
       }
     },
   };
@@ -942,8 +1263,12 @@ export async function girisKorumasiKur(
         throw hatayiGizle(hata);
       }
     },
+    async bekle() {
+      // Bekleyen denetim bittikçe yenisi eklenebilir (yönlendirme zinciri): küme boşalana dek.
+      while (bekleyenDenetimler.size > 0) await Promise.allSettled([...bekleyenDenetimler]);
+    },
     kesimNotu: () => gizle(kesimNotu()),
-    metniGizle: (metin, secenek) => maske.gizle(metin, secenek),
+    metniGizle: (metin, secenek) => maskele(metin, secenek),
     gizlilereEkle: (degerler) => { maske.depoEkle(degerler); },
     envanterEksik: () => { maske.eksikIsaretle(); },
     envanterEksikMi: () => maske.eksikMi(),
@@ -957,7 +1282,13 @@ export function girisKorumasiBul(context: BrowserContext): GirisKorumasi | undef
   return korumalar.get(context);
 }
 
-/** Bağlamda giriş koruması kurulduysa son denetimi yapar; kurulmadıysa (giriş yoksa) bir şey yapmaz. */
-export function girisKorumasiSonDenetim(context: BrowserContext): void {
-  korumalar.get(context)?.sonDenetim();
+/**
+ * Bağlamda giriş koruması kurulduysa yürüyen başlık denetimlerini bitirip son denetimi yapar;
+ * kurulmadıysa (giriş yoksa) bir şey yapmaz.
+ */
+export async function girisKorumasiSonDenetim(context: BrowserContext): Promise<void> {
+  const koruma = korumalar.get(context);
+  if (koruma === undefined) return;
+  await koruma.bekle();
+  koruma.sonDenetim();
 }

@@ -9,7 +9,6 @@ import {
   type BeyinKullanimi,
   cliCikisHatasi,
   gizliDegerleriMaskele,
-  insanOnayiNotu,
   komutSonucu,
   type KomutSonucu,
   semaylaSor,
@@ -113,17 +112,14 @@ export class ClaudeBeyni implements Beyin {
         }
 
         // Başlamış ve başarısız çağrı: rezervasyon iade edilmez; JSON'da gerçek maliyet varsa onunla uzlaşılır.
-        this.butce.cagriHarcandi(rezervasyon, maliyetUsd);
+        const tavanHatasi = this.butce.cagriHarcandi(rezervasyon, maliyetUsd);
         const butceAsimi = altTur === undefined
           ? disYanit?.is_error === true && BUTCE_METNI_DESENI.test(sonHam)
           : altTur === BUTCE_ASIMI_ALT_TURU;
         if (butceAsimi) {
-          throw new BrainRuntimeError(
-            'cost_cap',
-            `Claude per-call cost limit reached (${rezervasyon.azamiMaliyetUsd} USD). `
-              + insanOnayiNotu('KOBAY_MAX_BUDGET_USD or brain.maxBudgetUsd'),
-          );
+          throw new BrainRuntimeError('cost_cap', this.butce.claudeCagriSiniriMesaji(rezervasyon, maliyetUsd));
         }
+        if (tavanHatasi !== undefined) throw tavanHatasi;
         if (calisma.zamanAsimi) throw new BrainError('timeout');
         if (calisma.kod !== 0) throw cliCikisHatasi(calisma.kod, calisma.stderr);
         if (disYanit === undefined) {

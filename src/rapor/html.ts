@@ -1,7 +1,7 @@
 import { gizliDegerleriMaskele } from '../beyin/ortak.js';
 import { metindekiKimligiGizle } from '../depo/adres.js';
 import type { FailureKind, Oncelik, Verdict } from '../depo/index.js';
-import { dikkatGerekenMi, duzeltmeIstemi, hataDokumuMetni, hepsiniDuzeltIstemi, topluIstemBasligi, type IstemBaglami } from './istem.js';
+import { dikkatGerekenMi, duzeltmeIstemi, failureKindEtiketi, hataDokumuMetni, hepsiniDuzeltIstemi, topluIstemBasligi, type IstemBaglami } from './istem.js';
 import { dikkatCumlesi } from './ozet.js';
 
 /**
@@ -363,7 +363,7 @@ function ozellikler(test: RaporTesti): GuvenliHtml {
   return html`<dl class="ozellikler">
 <div><dt>Test ID</dt><dd><code>${test.id}</code></dd></div>
 <div><dt>Priority</dt><dd>${test.priority}</dd></div>
-${test.failureKind === undefined ? html`` : html`<div><dt>Failure kind</dt><dd><code>${test.failureKind}</code></dd></div>`}
+${test.failureKind === undefined ? html`` : html`<div><dt>Failure kind</dt><dd><code>${failureKindEtiketi(test.failureKind, test.failure?.rootCauseHypothesis)}</code></dd></div>`}
 ${test.durationMs === undefined ? html`` : html`<div><dt>Duration</dt><dd class="veri">${sureMetni(test.durationMs)}</dd></div>`}
 ${test.runId === undefined ? html`` : html`<div><dt>Run ID</dt><dd><code>${test.runId}</code></dd></div>`}
 ${test.startedAt === undefined ? html`` : html`<div><dt>Started</dt><dd class="veri">${zaman(test.startedAt)}</dd></div>`}

@@ -608,7 +608,7 @@ describe('istemler', () => {
     expect(PLAN_SISTEM_ISTEMI).toContain('Logged in: no');
     expect(PLAN_SISTEM_ISTEMI).not.toMatch(/[çğıöşüÇĞİÖŞÜ]/);
     expect(PLAN_SISTEM_ISTEMI).toContain('requiresRealCredentials as a boolean: true if any step needs the real username/password');
-    expect(PLAN_SISTEM_ISTEMI).toContain('"requiresRealCredentials":false}]}');
+    expect(PLAN_SISTEM_ISTEMI).toContain('"requiresRealCredentials":false,"loginRedirectCheck":false}]}');
   });
 
   it('kod üretim istemi sessiz skip yasaklar ve kimlik adımını yorumlatmaz, throw yazdırır', () => {

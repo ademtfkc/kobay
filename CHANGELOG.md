@@ -7,6 +7,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-14
+
+### Added
+
+- `kobay explore` now records fields that sit outside any `<form>` (one virtual
+  `detached` form per page), the first 20 options of each `select` with the
+  count of usable options, buttons named by `aria-label`, `title` or `value` or
+  marked `role="button"`, and the `details > summary` texts as `disclosures`.
+  Hidden fields (Next.js `$ACTION_*` fields, CSRF tokens) are no longer
+  recorded. Open shadow roots are read (up to 10 levels); closed ones and
+  iframes are not.
+- A page that sends an unauthenticated visit to a login page is now recorded
+  under the URL you asked for with `requiresLogin: true` and `redirectedTo`,
+  instead of being dropped. A redirect to another origin is marked the same
+  way, with only the origin as `redirectedTo`, so it can be a false positive.
+  Exploring with a saved login does not mark pages.
+- `kobay explore --seed <url>` (repeatable, project origin only; another
+  origin exits `2`) adds start URLs. `/sitemap.xml` is read by default when the
+  project origin has one (sitemap index followed; 1 MB per file, 500 URLs, 20
+  child sitemaps, one 15-second budget, `200` only, no redirects, no `.xml.gz`,
+  `robots.txt` is never read); `--no-sitemap` turns it off. The map records
+  `seeds` and `sitemap` as a trace.
+- `kobay explore --max-pages <n>` (default 40, login-required entries count)
+  and `--depth <n>` (default 3).
+- The MCP `explore` tool takes `seeds` (up to 50), `sitemap`, `maxPages` and
+  `depth`.
+- The plan prompt tells the brain about page-level fields, option lists,
+  disclosures and login-required pages; the `requiresRealCredentials` rule
+  applies to login-required pages unchanged.
+- Without a saved login, the plan brain may propose redirect checks on
+  login-required pages ("visiting the page without a session lands on the login
+  page") and marks them `loginRedirectCheck: true`; those are kept. Other
+  proposals on those pages, including responses without the flag, are still
+  dropped; the output then says once how to save a login
+  (`kobay project create --login` or `kobay project update --login`): a `next step` line in text
+  mode and an optional `nextStep` field in the JSON body (also in the MCP `plan_generate` result).
+  The flag is not stored in `plan.json`. When every proposal is dropped, the
+  `No usable proposal was produced` error now lists the dropped proposals and their reasons, with
+  the same hint once at the end.
+  Only a real boolean `true` keeps such a proposal; a string such as `"true"` counts as no flag.
+  A proposal whose URL matches the path pattern of a login-required page (for example
+  `/orders/999` when `/orders/36` needs a login) counts as login-required too.
+- `kobay project create --session-file <path>` and `kobay explore
+  --session-file <path>` import a logged-in Playwright `storageState` file, for
+  apps whose login kobay cannot complete (CAPTCHA, 2FA). The file (at most
+  1 MB) is checked against the `cookies[]`/`origins[]` format and written with
+  only its known fields to `.kobay/storageState.json` (0600); the source file
+  is not touched. A cookie domain or storage origin outside the base URL's
+  exact host (any port) and the exact `--auth-origin` origins is refused with
+  exit `2`, naming the domain or origin and never a value (cookie domains are
+  matched by host name, since cookies have no port; a dotted parent of the base
+  host is accepted, a sibling host or a known public suffix never; the suffix
+  list is a built-in approximation, not the Public Suffix List; auth-origin
+  cookies follow the same host-or-dotted-parent rule; identity-provider tenant
+  domains such as `okta.com` and `auth0.com` count as suffixes; `expires` must be `-1` or a positive time). `explore` with an
+  imported session skips the login form, maps the pages behind it with
+  `loggedIn: true` and `sessionSource: "imported"`, and keeps the post-login
+  network guard on from the first request. Not available over MCP; MCP
+  `explore` uses a session imported on the CLI. `--session-file` and `--login`
+  are exclusive (`project create --session-file --force` removes saved
+  credentials; `explore --session-file` exits `2` while credentials are saved).
+
+### Changed
+
+- `kobay test plan generate` drops a proposal whose URL is on another origin than the project
+  (`URL is outside the project origin`), even when its path is in the map; before, only the path
+  was compared.
+- `map.json` gains optional fields (`Form.detached`, `FormAlani.options` and
+  `optionCount`, `Page.disclosures`, `requiresLogin` and `redirectedTo`,
+  `seeds`, `sitemap`, `sessionSource`). Older maps load unchanged.
+- The risky-link filter now matches whole words, so a link such as
+  `nasil-calisir` is crawled instead of being skipped for containing a risky
+  fragment.
+- A page that redirects to a login page is requested once; the login page
+  itself is explored once.
+- `map.json` now writes `sessionSource: "login"` when kobay logged in with the
+  saved credentials (nothing else about the `--login` path changes).
+- On `project create`, `--auth-origin` is accepted with `--session-file` as
+  well as with `--login`.
+- A login whose submit button stays locked (a CAPTCHA, say) now ends its error
+  with the `--session-file` way out.
+
+### Security
+
+- An `explore` with an imported session blocks every HTTP(S) request,
+  document and interceptable WebSocket to a host outside its allowed set (the
+  base host and exact auth origins, no same-site widening), and stops (exit
+  `5`) when an HTTP(S) request or interceptable WebSocket to another host
+  carries a cookie or storage value from the session in its URL, headers
+  (`Cookie` included) or body (raw, URL-encoded, base64 or base64url); values
+  shorter than 8 characters are not treated as secrets. The message names the
+  matching cookie or storage key, never the value. Not covered: Web Worker WebSockets,
+  WebTransport, WebRTC and DNS prefetch; an HTTP redirect from a trusted
+  endpoint to another host is detected, not blocked. `test refresh` with an
+  imported session runs under the same guard. Test runs with an imported
+  session are not limited, as with a `--login` session, and `trace.zip` records the session in clear (as before): remove it
+  from a bundle before sharing.
+- Visible page text that echoes an imported session value (8+ characters, not
+  URL-shaped, not a plain word under 16 letters) or the `--login` password (8+
+  characters, case-insensitive, not a plain word such as `password`) is written to `map.json` and `--output json`
+  as `[redacted]` (explore and test refresh). URLs, links, form actions and
+  input names are never changed; a link, action or form field carrying a 16+
+  character session value is left out of the map. Base64, base64url and
+  URL-encoded forms (any letter case) are masked too; plain words of letters,
+  `-` and `_` under 16 characters are not. A shorter password (`admin`) is not
+  masked.
+- A `.kobay/storageState.json` that exists but cannot be read, is over 1 MB or
+  is not JSON stops `explore` with exit `2` and is left alone.
+- `test refresh` hands the browser the validated imported session, not the
+  file path, so a file swapped in between is not used.
+- Request headers are now read in full (`allHeaders()`, `Cookie` included)
+  when the login guard looks for the password in a cross-site request or
+  redirect leg; it can only catch more.
+- kobay no longer writes `.kobay/storageState.json` through a symbolic link:
+  an existing symlink there is refused with exit `2`, and the file is written
+  atomically. A browser context that fails to open no longer leaves the
+  `explore` or `test refresh` process hanging.
+
+### Fixed
+
+- A test that failed under `kobay test run --no-analysis` now reads `not analysed` everywhere text is shown (the run line, the summary table, the HTML detail, the fix prompt and the bulk fix prompt), not just in the failure-kinds breakdown; JSON, MCP and `result.json` still say `unknown`.
+- `kobay test plan generate` now prints readable lines in text mode (a summary line, then
+  one tab-separated line per proposal and per dropped proposal) instead of indented
+  JSON; `--output json` is unchanged.
+- A `claude` brain call now starts only when its full per-call budget (`KOBAY_MAX_BUDGET_USD`, or the total limit if that is lower) still fits under `KOBAY_MAX_TOTAL_COST_USD`; it no longer starts with a budget shrunk to the remainder, which `claude` can overrun and bill for nothing, so the total limit is no longer overshot that way, and cost-limit messages now show the real spend, the limit and the setting that set it.
+- A failed `claude` call (exit 1, `error_during_execution`) whose real spend goes over the reservation or the total limit is now reported as `cost_cap`, not `cli_error`, and its spend counts toward `KOBAY_MAX_TOTAL_COST_USD`.
+- Brain cost caps are compared in whole micro-dollars, so floating-point sums (0.4 three times against a 1.2 cap) no longer reject the last call that fits.
+- When `KOBAY_MAX_BUDGET_USD` and `KOBAY_MAX_TOTAL_COST_USD` are equal, the cost-limit message names both settings instead of only the per-call one.
+- README (EN/TR): the brain cost caps are documented as best effort; a single call can end above its own budget and the last slice of the total cap may go unused (about $4 of the default $5).
+
 ## [0.5.0] - 2026-10-13
 
 ### Added
@@ -853,7 +983,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/ademtfkc/kobay/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ademtfkc/kobay/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ademtfkc/kobay/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/ademtfkc/kobay/compare/v0.3.0...v0.3.1

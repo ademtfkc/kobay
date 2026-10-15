@@ -1,5 +1,5 @@
 import type { RaporSayimlari, RaporTesti } from './html.js';
-import { guvenilmezBlok, hataDokumuMetni, topluIstemBasligi } from './istem.js';
+import { failureKindEtiketi, guvenilmezBlok, hataDokumuMetni, topluIstemBasligi } from './istem.js';
 
 /**
  * `kobay test report --summary`: PR yorumuna ve iş özetine hazır GitHub-flavored
@@ -96,7 +96,7 @@ function testTablosu(testler: readonly RaporTesti[], temizle: (metin: string) =>
       // Kimlik desen doğrulamalı, verdict ve failureKind sabit kümeden; yine de kaçışlanır.
       const ad = hucreKacisi(tekSatir(temizle(test.name), adSiniri));
       const verdict = test.verdict === 'not_run' ? 'not run' : test.verdict;
-      return `| ${hucreKacisi(test.id)} | ${ad} | ${hucreKacisi(verdict)} | ${hucreKacisi(test.failureKind ?? '-')} |`;
+      return `| ${hucreKacisi(test.id)} | ${ad} | ${hucreKacisi(verdict)} | ${hucreKacisi(failureKindEtiketi(test.failureKind, test.failure?.rootCauseHypothesis) ?? '-')} |`;
     }),
   ];
 }

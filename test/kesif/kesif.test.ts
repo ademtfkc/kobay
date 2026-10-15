@@ -175,8 +175,11 @@ describe('kesfet', () => {
     const harita = await kesfet({ baseUrl: demo.url, storageStateYolu: join(dizin, 'storage.json') });
 
     expect(harita.loggedIn).toBe(false);
-    expect(harita.pages).toHaveLength(1);
-    expect(new URL(harita.pages[0]?.url ?? '').pathname).toBe('/login');
+    // Kök adres girişe yönlenir: istenen adres `requiresLogin` kaydıyla, giriş sayfası bir kez normal.
+    expect(harita.pages).toHaveLength(2);
+    expect(harita.pages[0]).toMatchObject({ url: `${demo.url}/`, requiresLogin: true, redirectedTo: `${demo.url}/login`, forms: [] });
+    expect(new URL(harita.pages[1]?.url ?? '').pathname).toBe('/login');
+    expect(harita.pages[1]?.requiresLogin).toBeUndefined();
   });
 
   it('maxSayfa sınırında yalnız bir sayfa döner', async (context) => {

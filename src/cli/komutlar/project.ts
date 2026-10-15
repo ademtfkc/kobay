@@ -1,6 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   KobayDizini,
   SchemaError,
@@ -12,8 +12,9 @@ import {
   type KobayConfig,
 } from '../../depo/index.js';
 import { kimlikOriginDogrula, loginUrlDogrula } from '../../kesif/oturum.js';
+import { oturumDosyasiniHazirla } from '../../kesif/oturum-dosyasi.js';
 import { UsageError, basarili, basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
-import { belgeYoluDenetle, dizinBul } from './ortak.js';
+import { belgeYoluDenetle, dizinBul, oturumHatasiniCevir } from './ortak.js';
 
 function beyinAyariMi(deger: unknown): deger is BeyinAyari {
   if (typeof deger !== 'object' || deger === null || !('adaptor' in deger)) return false;
@@ -41,6 +42,9 @@ async function varsayilanBeyinOku(): Promise<BeyinAyari> {
     throw hata;
   }
 }
+
+/** `project create --login --session-file`: iki giriş yolu bir arada verilemez (CLI ve komut aynı metni kullanır). */
+export const LOGIN_VE_OTURUM_DOSYASI = '--login and --session-file cannot be used together; choose one way to sign in';
 
 const URL_IPUCU = 'Use an http:// or https:// URL, e.g. http://localhost:3000';
 
@@ -91,16 +95,23 @@ function loginUrlDenetle(baseUrl: string, loginUrl: string | undefined, authOrig
  * Parolanın gidebileceği küme yalnız kullanıcı kimliği yeniden girerken genişler/değişir:
  * `--auth-origin` ve `--clear-auth-origins` `--login` olmadan reddedilir.
  */
-function authOriginBayraklariniDenetle(a: { login?: Kimlik; authOrigins?: readonly string[]; clearAuthOrigins?: boolean }): void {
+function authOriginBayraklariniDenetle(a: {
+  login?: Kimlik;
+  authOrigins?: readonly string[];
+  clearAuthOrigins?: boolean;
+  oturumDosyasi?: string;
+}): void {
   const listeVar = a.authOrigins !== undefined && a.authOrigins.length > 0;
   if (listeVar && a.clearAuthOrigins === true) {
     throw new UsageError('--auth-origin and --clear-auth-origins cannot be used together');
   }
-  if (a.login !== undefined) return;
+  // `project create --session-file`: liste içe alınan oturumun kökenlerini sınırlar. Kayıtlı
+  // kimlik bu komutta kaldırılır; parolanın gideceği küme ancak yeniden `--login` ile onaylanır.
+  if (a.login !== undefined || a.oturumDosyasi !== undefined) return;
   if (listeVar) {
     throw new UsageError(
-      '--auth-origin requires --login: the list of sites that may receive the password is only changed'
-      + ' while you re-enter the credentials',
+      '--auth-origin requires --login (or --session-file on `project create`): the list of sites that may'
+      + ' receive the password is only changed while you re-enter the credentials',
     );
   }
   if (a.clearAuthOrigins === true) throw new UsageError('--clear-auth-origins requires --login');
@@ -235,8 +246,17 @@ export async function projectCreate(a: {
   /** Verilen alanlar; --force ile mevcut beyin ayarının üstüne yazılır, tavanlar korunur. */
   beyin?: BeyinGirdisi;
   force?: boolean;
+  /**
+   * Hazır oturum dosyası (`--session-file`, Playwright storageState). Doğrulanıp
+   * `.kobay/storageState.json`'a yazılır; kayıtlı kimlik ve eski oturum kaldırılır. `login` ile
+   * birlikte verilemez. Yalnız CLI; MCP geçmez.
+   */
+  oturumDosyasi?: string;
 }): Promise<KomutSonucu> {
   return komutCalistir(async () => {
+    if (a.login !== undefined && a.oturumDosyasi !== undefined) {
+      throw new UsageError(LOGIN_VE_OTURUM_DOSYASI);
+    }
     const mevcut = await KobayDizini.bul(a.cwd);
     if (mevcut !== null && a.force !== true) {
       throw new UsageError(
@@ -253,6 +273,10 @@ export async function projectCreate(a: {
     }
     const projeKoku = mevcut?.projeKoku ?? a.cwd;
     if (a.docs !== undefined) await belgeYoluDenetle(projeKoku, a.docs, 'docs');
+    // Oturum dosyası hiçbir şey yazılmadan doğrulanır: yabancı köken, şema, boy hatası exit 2.
+    const oturum = a.oturumDosyasi === undefined
+      ? undefined
+      : await oturumHatasiniCevir(oturumDosyasiniHazirla(resolve(a.cwd, a.oturumDosyasi), a.url, authOrigins));
     // --force: mevcut beyin ayarı (maliyet tavanları dahil) temel alınır; okunamıyorsa varsayılana düşülür.
     const eskiConfig = mevcut === null ? null : await mevcut.configOku().catch(() => null);
     const temelBeyin = eskiConfig?.brain
@@ -268,17 +292,27 @@ export async function projectCreate(a: {
     const dizin = mevcut ?? await KobayDizini.ac(a.cwd, config);
     const yeniKimlik = a.login === undefined ? undefined : kimlikKaydi(a.login, config);
     let silinen: string[] = [];
+    let kimlikKaldirildi = false;
     if (mevcut === null) {
       if (yeniKimlik !== undefined) await dizin.kimlikYaz(yeniKimlik);
+      if (oturum !== undefined) await dizin.storageStateYaz(oturum.metin);
     } else {
       // İşlem gibi: eski giriş bilgisi/oturumu önce kenara alınır, config ve yeni
       // kimlik yazıldıktan sonra silinir. Arada bir adım düşerse hepsi geri gelir.
-      const islem = a.login === undefined
-        ? await yabanciKimligiKenaraAl(mevcut, eskiConfig, config)
-        : await mevcut.kimlikVeOturumuKenaraAl({ eskiConfig, yeniKimlikYazilacak: true });
+      // --session-file: eski kimlik ve oturum --login'deki gibi her durumda kenara alınır.
+      const islem = a.login !== undefined
+        ? await mevcut.kimlikVeOturumuKenaraAl({ eskiConfig, yeniKimlikYazilacak: true })
+        : oturum !== undefined
+          ? await mevcut.kimlikVeOturumuKenaraAl({ eskiConfig })
+          : await yabanciKimligiKenaraAl(mevcut, eskiConfig, config);
+      let oturumYazildi = false;
       try {
         await mevcut.configYaz(config);
         if (yeniKimlik !== undefined) await mevcut.kimlikYaz(yeniKimlik);
+        if (oturum !== undefined) {
+          oturumYazildi = true;
+          await mevcut.storageStateYaz(oturum.metin);
+        }
         // Kesinleştirme de işlemin parçası, ama yalnız doğrulama aşaması:
         // kenara alınan dosya yerinde değilse komut hata dönüp yeni config'i
         // bırakmaz. Kesinleşmeden sonraki silme hatası işlemi düşürmez
@@ -292,6 +326,9 @@ export async function projectCreate(a: {
         // durur. Eskiden config geri yazımının hatası yutuluyor, yedekler yine
         // de geri konuyor ve işaret siliniyordu: yeni config eski oturumun
         // yanında, düzeltecek iz olmadan kalıyordu.
+        // İçe alınan oturum yeni config'e göre doğrulandı; eski config'in yanında kalmasın
+        // (eski oturumun kopyası varsa geri alma onu yerine koyar).
+        if (oturumYazildi) await rm(mevcut.storageStateYolu(), { force: true }).catch(() => undefined);
         if (islem === null) {
           // Kenara alınan dosya yok (kimlik zaten yeni origin'e bağlı): geri
           // alınacak tek şey config ve atomik yazım düştüyse zaten değişmedi.
@@ -305,17 +342,34 @@ export async function projectCreate(a: {
         }
         throw hata;
       }
-      // --login verildiyse kullanıcı yenisini koydu; "geçersiz kılındı" denmez.
-      silinen = a.login === undefined ? islem?.adlar ?? [] : [];
+      // --login ya da --session-file verildiyse kullanıcı yenisini koydu; "geçersiz kılındı" denmez.
+      silinen = a.login === undefined && oturum === undefined ? islem?.adlar ?? [] : [];
+      kimlikKaldirildi = oturum !== undefined && (islem?.adlar.includes('credentials.json') ?? false);
     }
+    const oturumOzeti = oturum === undefined
+      ? undefined
+      : { source: 'imported' as const, cookies: oturum.durum.cookies.length, origins: oturum.durum.origins.length };
     return basariliMetin(
-      { root: dizin.kok, config, ...(silinen.length === 0 ? {} : { invalidated: silinen }) },
+      {
+        root: dizin.kok,
+        config,
+        // --session-file kayıtlı kimliği kaldırdıysa JSON'da da görünür (insan metnindeki "Credentials: removed").
+        ...(silinen.length === 0 && !kimlikKaldirildi ? {} : { invalidated: kimlikKaldirildi ? ['credentials.json'] : silinen }),
+        ...(oturumOzeti === undefined ? {} : { session: oturumOzeti }),
+      },
       projeOzeti({
         baslik: mevcut === null ? 'Project created' : 'Project config overwritten',
         kok: dizin.kok,
         config,
         silinen,
-        ...(a.login === undefined ? {} : { ekSatirlar: ['Credentials: saved'] }),
+        ekSatirlar: [
+          ...(a.login === undefined ? [] : ['Credentials: saved']),
+          ...(oturumOzeti === undefined ? [] : [
+            `Session: imported (${oturumOzeti.cookies} cookie${oturumOzeti.cookies === 1 ? '' : 's'},`
+            + ` ${oturumOzeti.origins} storage origin${oturumOzeti.origins === 1 ? '' : 's'})`,
+          ]),
+          ...(kimlikKaldirildi ? ['Credentials: removed (the project now uses the imported session)'] : []),
+        ],
         sonraki: 'kobay explore',
       }),
     );

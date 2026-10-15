@@ -4,6 +4,7 @@ const BELGE_SINIRI = 20_000;
 const ISTEM_SINIRI = 60_000;
 const HARITA_SINIRI = 35_000;
 const SAYFA_SINIRI = 2_000;
+const ISTEM_SECENEK_SINIRI = 8;
 
 /** Beynin serbest metin alanlarını hangi dilde yazacağını söyleyen ortak cümle. */
 export const DIL_KURALI = 'Write names, descriptions and rationale in the language of the '
@@ -17,17 +18,21 @@ Record URLs that match a path pattern in the map but do not exist (for example /
 
 When the map says "Logged in: yes", the session is already authenticated through kobay's login step and the generated tests cannot type the real credentials. Do not propose tests that log in with the real credentials (for example "Log in with valid credentials"). Tests that only check that the login page renders, or that invalid or empty credentials show an error, are fine because they do not need the real credentials. When the map says "Logged in: no", there is no such restriction.
 
+Map pages marked "login required" were redirected to a login page when explored without a session; their content is not in the map. When the map says "Logged in: no", the only tests allowed on such a page are redirect checks: visit the page without a session and assert that it lands on the login page (for example that the URL becomes the login page or the login form is visible), without logging in and without asserting anything about the page's own content. Use the login-required page as the url of such a proposal and set loginRedirectCheck to true; any other proposal on that page is dropped. Tests on the page's own content need a saved login ("Logged in: yes"). The requiresRealCredentials rule applies to them unchanged.
+
+Every proposal must carry loginRedirectCheck as a boolean: true only for such a redirect check, otherwise false.
+
 Every proposal must carry requiresRealCredentials as a boolean: true if any step needs the real username/password (typing them, submitting the login form with them, or signing in as a configured account), otherwise false. Set it honestly for every proposal, also when the map says "Logged in: no".
 
 Propose destructive operations such as delete and logout only when they are explicitly reversible. Do not propose things that cannot be tested, such as sending e-mail or calling an external service.
 
 Return only an object matching the JSON skeleton below. Do not send proposalId; the system assigns it locally:
-{"proposals":[{"title":"...","description":"...","priority":"p1","category":"...","feature":"...","type":"frontend","url":"/example","steps":[{"type":"action","description":"..."},{"type":"assertion","description":"..."}],"requiresRealCredentials":false}]}
+{"proposals":[{"title":"...","description":"...","priority":"p1","category":"...","feature":"...","type":"frontend","url":"/example","steps":[{"type":"action","description":"..."},{"type":"assertion","description":"..."}],"requiresRealCredentials":false,"loginRedirectCheck":false}]}
 
 Full example:
-{"proposals":[{"title":"View the product list","description":"Verifies that the user opens the products page and sees the list.","priority":"p1","category":"navigation","feature":"products","type":"frontend","url":"/products","steps":[{"type":"action","description":"Open the products page"},{"type":"assertion","description":"Verify that the product list is visible"}],"requiresRealCredentials":false}]}
+{"proposals":[{"title":"View the product list","description":"Verifies that the user opens the products page and sees the list.","priority":"p1","category":"navigation","feature":"products","type":"frontend","url":"/products","steps":[{"type":"action","description":"Open the products page"},{"type":"assertion","description":"Verify that the product list is visible"}],"requiresRealCredentials":false,"loginRedirectCheck":false}]}
 
-The keys title, description, priority, category, feature, type, url, requiresRealCredentials and the type and description keys inside steps are English and fixed; do not translate them into any other language. Only the text values may be in another language.
+The keys title, description, priority, category, feature, type, url, requiresRealCredentials, loginRedirectCheck and the type and description keys inside steps are English and fixed; do not translate them into any other language. Only the text values may be in another language.
 ${DIL_KURALI}`;
 
 function metniKes(metin: string, sinir: number): string {
@@ -40,18 +45,31 @@ function listeOzeti(degerler: string[], ogeSiniri = 12, ogeKarakterSiniri = 140)
   return kalan > 0 ? `${ozet.join(' | ')} | +${kalan}` : ozet.join(' | ');
 }
 
+function secenekOzeti(alan: FormAlani): string {
+  if (alan.options === undefined || alan.options.length === 0) return '';
+  const secenekler = alan.options.slice(0, ISTEM_SECENEK_SINIRI).map((secenek) => metniKes(secenek, 60));
+  const toplam = alan.optionCount ?? alan.options.length;
+  const devam = toplam > secenekler.length ? ` … (${toplam} options)` : '';
+  return `, options: ${secenekler.join(' / ')}${devam}`;
+}
+
 function alanOzeti(alan: FormAlani): string {
   const etiket = alan.label === undefined ? '' : `, label: ${metniKes(alan.label, 100)}`;
   const placeholder = alan.placeholder === undefined ? '' : `, placeholder: ${metniKes(alan.placeholder, 100)}`;
-  return `${metniKes(alan.name, 100)} (${metniKes(alan.type, 60)}${etiket}${placeholder})`;
+  return `${metniKes(alan.name, 100)} (${metniKes(alan.type, 60)}${etiket}${placeholder}${secenekOzeti(alan)})`;
 }
 
 function formOzeti(form: Form): string {
   const action = form.action === undefined ? '' : ` action=${metniKes(form.action, 160)}`;
-  return `[${form.fields.slice(0, 16).map(alanOzeti).join('; ')}]${action}`;
+  const alanlar = `[${form.fields.slice(0, 16).map(alanOzeti).join('; ')}]${action}`;
+  return form.detached === true ? `page-level fields (outside any <form>): ${alanlar}` : alanlar;
 }
 
 function sayfaOzeti(sayfa: Sayfa): string {
+  if (sayfa.requiresLogin === true) {
+    const hedef = sayfa.redirectedTo === undefined ? 'the login page' : metniKes(sayfa.redirectedTo, 300);
+    return `url: ${metniKes(sayfa.url, 500)}\nlogin required (redirects to ${hedef}); without a saved login propose only redirect checks here (loginRedirectCheck: true)`;
+  }
   const metin = [
     `url: ${metniKes(sayfa.url, 500)}`,
     `title: ${metniKes(sayfa.title, 300)}`,
@@ -59,6 +77,9 @@ function sayfaOzeti(sayfa: Sayfa): string {
     `form fields: ${sayfa.forms.slice(0, 8).map(formOzeti).join(' | ')}`,
     `buttons: ${listeOzeti(sayfa.buttons)}`,
     `menu: ${listeOzeti(sayfa.menu)}`,
+    ...(sayfa.disclosures !== undefined && sayfa.disclosures.length > 0
+      ? [`disclosures: ${listeOzeti(sayfa.disclosures)}`]
+      : []),
   ].join('\n');
   return metniKes(metin, SAYFA_SINIRI);
 }
@@ -96,7 +117,7 @@ export const PLAN_YENILEME_SISTEM_ISTEMI = `You are a QA planner. A test plan we
 Rules:
 - DO NOT change the number of steps. Return exactly as many steps as you were given.
 - Preserve the order and the intent of the steps: every step must be the counterpart that does the same job as the old one. An action stays an action, an assertion stays an assertion.
-- Update only the renamed elements: headings, buttons, menu entries or form labels that existed on the old page and now appear under a different name must be written with their new names.
+- Update only the renamed elements: headings, buttons, menu entries, form labels, select option texts or disclosure titles that existed on the old page and now appear under a different name must be written with their new names.
 - Do NOT add new steps, new assertions or new flows; do not drop an old step either.
 - If an element has no counterpart on the new page, leave the step as close as possible; do not invent elements.
 - The name field is the test's name: update it if it mentions a renamed element, otherwise return it unchanged.

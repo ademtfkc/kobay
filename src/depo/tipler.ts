@@ -10,10 +10,13 @@ export interface FormAlani {
   type: string;
   label?: string;
   placeholder?: string;
+  options?: string[];
+  optionCount?: number;
 }
 
 export interface Form {
   action?: string;
+  detached?: true;
   fields: FormAlani[];
 }
 
@@ -25,6 +28,9 @@ export interface Sayfa {
   forms: Form[];
   buttons: string[];
   menu: string[];
+  disclosures?: string[];
+  requiresLogin?: true;
+  redirectedTo?: string;
 }
 
 export interface Harita {
@@ -32,6 +38,34 @@ export interface Harita {
   loggedIn: boolean;
   pages: Sayfa[];
   exploredAt: string;
+  seeds?: string[];
+  sitemap?: { url: string; urlCount: number };
+  sessionSource?: 'login' | 'imported';
+}
+
+/**
+ * Playwright `storageState` biçimi (`cookies[]`, `origins[]`); `--session-file` ile içe alınan
+ * oturum bu biçimde doğrulanır. Bilinmeyen alanlar atılır.
+ */
+export interface OturumCerezi {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: 'Strict' | 'Lax' | 'None';
+}
+
+export interface OturumOrigini {
+  origin: string;
+  localStorage: Array<{ name: string; value: string }>;
+}
+
+export interface OturumDurumu {
+  cookies: OturumCerezi[];
+  origins: OturumOrigini[];
 }
 
 export interface Oneri {

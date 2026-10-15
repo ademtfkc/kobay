@@ -1,4 +1,4 @@
-import { realpath, stat } from 'node:fs/promises';
+import { realpath, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   FileNotFound,
@@ -8,6 +8,7 @@ import {
   type Harita,
   type Kimlik,
   type KobayConfig,
+  type OturumDurumu,
   type Sayfa,
   type TestKaydi,
 } from '../../depo/index.js';
@@ -20,7 +21,15 @@ import {
   sayfayiYenile,
   type KesifSonucu,
 } from '../../kesif/index.js';
-import { CredentialOriginError, LoginFormOriginError, kimlikOriginDogrula } from '../../kesif/oturum.js';
+// Doğrudan modülden: keşif modülünü taklit eden testlerde de oturum dosyası doğrulaması gerçek kalır.
+import {
+  iceAlinanOturumuOku,
+  oturumDosyasiniHazirla,
+  SessionFileError,
+} from '../../kesif/oturum-dosyasi.js';
+// Doğrudan modülden: keşif modülünü taklit eden testlerde de tohum doğrulaması gerçek kalır.
+import { SeedUrlError, tohumlariDogrula } from '../../kesif/sitemap.js';
+import { CredentialOriginError, LoginFormOriginError, StorageStateSymlinkError, kimlikOriginDogrula } from '../../kesif/oturum.js';
 import { hedefAyaktaMi } from '../../kos/index.js';
 import { TargetUnreachableError, UsageError, PermissionError } from '../komut.js';
 
@@ -250,6 +259,8 @@ function agHatasiniCevir(hata: unknown, baseUrl: string): never {
  * yetki hatası (exit 5) olarak döner. Mesaj aynen korunur.
  */
 function girisHatasiniCevir(hata: unknown): void {
+  // Sembolik bağ `.kobay/storageState.json`: kullanıcının düzelteceği durum, exit 2.
+  if (hata instanceof StorageStateSymlinkError) throw new UsageError(hata.message);
   if (
     hata instanceof CredentialLeakBlockedError
     || hata instanceof CredentialOriginError
@@ -259,24 +270,114 @@ function girisHatasiniCevir(hata: unknown): void {
   }
 }
 
-export async function kesfiYenile(dizin: KobayDizini): Promise<Harita> {
+/** `kobay explore` bayraklarından (ya da MCP girdisinden) gelen keşif ayarı; boş alan varsayılandır. */
+export interface KesifAyari {
+  tohumlar?: readonly string[];
+  siteHaritasi?: boolean;
+  maxSayfa?: number;
+  derinlik?: number;
+}
+
+/** Oturum dosyası hataları kullanım hatasıdır (exit 2); mesaj değer taşımaz. */
+export async function oturumHatasiniCevir<T>(is: Promise<T>): Promise<T> {
+  try {
+    return await is;
+  } catch (hata: unknown) {
+    if (hata instanceof SessionFileError) throw new UsageError(hata.message);
+    throw hata;
+  }
+}
+
+/**
+ * `--session-file`: dosyayı doğrulayıp `.kobay/storageState.json`'a (0600) yazar; kaynak dosyaya
+ * dokunulmaz. Doğrulama düşerse hiçbir şey yazılmaz. Yazılan oturum döner.
+ *
+ * Yazım kimlik işleminin kilidi altında yapılır (`kimlikVeOturumuKenaraAl`): eşzamanlı bir
+ * `project create --force --login` ya da hedef değişimi ile yarışmasın. Kilit alındıktan sonra
+ * config ve kimlik yeniden okunur: config doğrulamadakinden farklıysa ya da bu arada kimlik
+ * kaydedilmişse işlem geri alınır (eski oturum yerine konur), komut exit 2 ile durur.
+ */
+export async function oturumDosyasiniIceAl(
+  dizin: KobayDizini,
+  config: KobayConfig,
+  oturumDosyasi: string,
+): Promise<OturumDurumu> {
+  const { durum, metin } = await oturumHatasiniCevir(
+    oturumDosyasiniHazirla(oturumDosyasi, config.baseUrl, config.authOrigins ?? []),
+  );
+  const islem = await dizin.kimlikVeOturumuKenaraAl({ eskiConfig: config });
+  let oturumYazildi = false;
+  try {
+    const guncel = await dizin.configOku();
+    if (JSON.stringify(guncel) !== JSON.stringify(config)) {
+      throw new UsageError('The project config changed while the session was being imported; nothing was imported. Run the command again');
+    }
+    if (islem.adlar.includes('credentials.json')) throw new UsageError(OTURUM_VE_KIMLIK_HATASI);
+    oturumYazildi = true;
+    await dizin.storageStateYaz(metin);
+    await islem.kesinlestir();
+  } catch (hata: unknown) {
+    // Yeni oturum kalmasın; eski oturum (varsa) ve kimlik geri alma ile yerine konur. Config'e
+    // dokunulmadı: geri alma onu yazmaz.
+    if (oturumYazildi) await rm(dizin.storageStateYolu(), { force: true }).catch(() => undefined);
+    await islem.geriAl({ asilHata: hata });
+    throw hata;
+  }
+  return durum;
+}
+
+/** `--session-file` ile kayıtlı kimlik bir arada olamaz: keşif kimlikle giriş yapıp içe alınan oturumu ezerdi. */
+export const OTURUM_VE_KIMLIK_HATASI = 'This project has saved login credentials (`--login`), so `kobay explore` logs in'
+  + ' with them and would replace an imported session. Use one or the other: re-create the project with'
+  + ' `kobay project create --url <URL> --session-file <file> --force` (this removes the saved credentials).';
+
+export async function kesfiYenile(dizin: KobayDizini, ayar: KesifAyari = {}, oturumDosyasi?: string): Promise<Harita> {
   const [config, kimlik] = await Promise.all([dizin.configOku(), dizin.kimlikOku()]);
   if (kimlik !== null) kimlikHedefeUyar(kimlik, config);
+  // Kullanım hatası ağdan önce: başka kökenli tohum hedefe hiç istek atmadan exit 2.
+  let tohumlar: string[];
+  try {
+    tohumlar = tohumlariDogrula(config.baseUrl, ayar.tohumlar ?? []);
+  } catch (hata: unknown) {
+    if (hata instanceof SeedUrlError) throw new UsageError(hata.message);
+    throw hata;
+  }
+  // İçe alınan oturum: yeni dosya verildiyse önce o doğrulanıp yazılır; verilmediyse kayıtlı
+  // dosya içe alınmış mı diye bakılır (işaretli değilse eski yol aynen sürer).
+  let oturum: OturumDurumu | null = null;
+  if (oturumDosyasi !== undefined) {
+    if (kimlik !== null) throw new UsageError(OTURUM_VE_KIMLIK_HATASI);
+    oturum = await oturumDosyasiniIceAl(dizin, config, oturumDosyasi);
+  } else if (kimlik === null) {
+    oturum = await oturumHatasiniCevir(iceAlinanOturumuOku(dizin.storageStateYolu(), config.baseUrl, config.authOrigins ?? []));
+  }
   await hedefiDogrula(config.baseUrl);
   let sonuc: KesifSonucu;
   try {
     sonuc = await kesfetAyrintili({
       baseUrl: config.baseUrl,
       storageStateYolu: dizin.storageStateYolu(),
+      ...(tohumlar.length === 0 ? {} : { tohumlar }),
+      ...(ayar.siteHaritasi === undefined ? {} : { siteHaritasi: ayar.siteHaritasi }),
+      ...(ayar.maxSayfa === undefined ? {} : { maxSayfa: ayar.maxSayfa }),
+      ...(ayar.derinlik === undefined ? {} : { derinlik: ayar.derinlik }),
       ...(kimlik === null ? {} : { kimlik }),
       ...(config.loginUrl === undefined ? {} : { loginUrl: config.loginUrl }),
       ...(config.authOrigins === undefined ? {} : { authOrigins: config.authOrigins }),
+      ...(oturum === null ? {} : { oturum }),
     });
   } catch (hata: unknown) {
     girisHatasiniCevir(hata);
     agHatasiniCevir(hata, config.baseUrl);
   }
   const { harita } = sonuc;
+  const dusenSayfa = oturum === null ? 0 : harita.pages.filter((sayfa) => sayfa.requiresLogin === true).length;
+  if (dusenSayfa > 0) {
+    process.stderr.write(
+      `[kobay] Warning: ${dusenSayfa} page${dusenSayfa === 1 ? '' : 's'} sent the imported session to a login page;`
+      + ' the session may have expired. Import a fresh one with `kobay explore --session-file <file>`.\n',
+    );
+  }
   if (kimlik !== null && !harita.loggedIn) {
     // Sayfanın ret gerekçesi (maskeli, etiketli alıntı ya da "withheld" notu) varsa eklenir;
     // yoksa mesaj eskisiyle birebir aynı kalır.
@@ -309,6 +410,10 @@ export async function sayfaKesfiniYenile(
     throw new UsageError(`Test page is not in the exploration map: ${testUrl}; run \`kobay explore\` first`);
   }
   if (kimlik !== null) kimlikHedefeUyar(kimlik, config);
+  // İçe alınan oturumun değerleri yenilenen sayfa özetinden maskelenir (keşifteki gibi).
+  const oturum = kimlik !== null
+    ? null
+    : await oturumHatasiniCevir(iceAlinanOturumuOku(dizin.storageStateYolu(), config.baseUrl, config.authOrigins ?? []));
   await hedefiDogrula(config.baseUrl);
 
   let yeniSayfa: Sayfa;
@@ -320,6 +425,7 @@ export async function sayfaKesfiniYenile(
       ...(kimlik === null ? {} : { kimlik }),
       ...(config.loginUrl === undefined ? {} : { loginUrl: config.loginUrl }),
       ...(config.authOrigins === undefined ? {} : { authOrigins: config.authOrigins }),
+      ...(oturum === null ? {} : { oturum }),
     });
   } catch (hata: unknown) {
     girisHatasiniCevir(hata);

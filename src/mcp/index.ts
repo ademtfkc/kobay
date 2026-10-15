@@ -319,10 +319,22 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
   })));
 
   sunucu.registerTool('explore', {
-    description: 'Explores the target app and updates the page map.',
+    description: 'Explores the target app and updates the page map. Pages that redirect to a login form are recorded with requiresLogin and redirectedTo. seeds: extra start URLs on the project origin. sitemap: read /sitemap.xml (default true). maxPages: map size limit (default 40). depth: link depth (default 3).',
     annotations: YAZAR,
-    inputSchema: PROJE_DIZINI_SEMASI,
-  }, async ({ projectDir }) => aracCalistir(async () => explore({ cwd: await projeSec(projectDir) })));
+    inputSchema: {
+      ...PROJE_DIZINI_SEMASI,
+      seeds: z.array(z.string().min(1)).max(50).optional(),
+      sitemap: z.boolean().optional(),
+      maxPages: z.number().int().min(1).max(9999).optional(),
+      depth: z.number().int().min(0).max(9999).optional(),
+    },
+  }, async ({ projectDir, seeds, sitemap, maxPages, depth }) => aracCalistir(async () => explore({
+    cwd: await projeSec(projectDir),
+    ...(seeds === undefined ? {} : { tohumlar: seeds }),
+    ...(sitemap === undefined ? {} : { siteHaritasi: sitemap }),
+    ...(maxPages === undefined ? {} : { maxSayfa: maxPages }),
+    ...(depth === undefined ? {} : { derinlik: depth }),
+  })));
 
   sunucu.registerTool('plan_generate', {
     description: 'Generates test proposals from the exploration data.',

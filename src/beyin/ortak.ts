@@ -78,6 +78,20 @@ function politikaOku(ayar: BeyinAyari, env: NodeJS.ProcessEnv): ButcePolitikasi 
   };
 }
 
+const MIKRO = 1_000_000;
+
+/**
+ * Tavan karşılaştırmaları tamsayı mikro-dolarla yapılır: 0.4 + 0.4 + 0.4 kayan noktada 1.2000000000000002
+ * çıkar ve tam 1.2 tavanındaki son geçerli çağrıyı reddederdi. Çarpım güvenli tamsayı aralığını
+ * aşıyorsa (çok büyük değerler) ham karşılaştırmaya düşülür; sonlu olmayan değer olduğu gibi kalır.
+ */
+function asiyor(a: number, b: number): boolean {
+  const ma = Math.round(a * MIKRO);
+  const mb = Math.round(b * MIKRO);
+  if (Number.isSafeInteger(ma) && Number.isSafeInteger(mb)) return ma > mb;
+  return a > b;
+}
+
 /** Tavana takılan ajana kararı insana bıraktıran ortak not. */
 export function insanOnayiNotu(ayarlar: string): string {
   return 'Ask the user for approval before continuing; do not change the setting yourself. '
@@ -160,11 +174,12 @@ export class BeyinButcesi {
       );
     }
     const kalan = this.kalanMaliyetUsd();
-    if (azamiMaliyetUsd > kalan || kalan <= 0) {
+    if (asiyor(azamiMaliyetUsd, kalan) || !asiyor(kalan, 0)) {
       throw new BrainRuntimeError(
         'cost_cap',
         `Cost limit reached: ${Math.max(0, kalan).toFixed(4)} USD left for the known and reserved total; `
-          + `the call needs up to ${azamiMaliyetUsd.toFixed(4)} USD. Limit ${this.azamiMaliyetUsd.toFixed(4)} USD. `
+          + `the call needs up to ${azamiMaliyetUsd.toFixed(4)} USD. Spent ${this.toplamMaliyetUsd.toFixed(4)} USD. `
+          + `Limit ${this.azamiMaliyetUsd.toFixed(4)} USD. `
           + insanOnayiNotu('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd'),
       );
     }
@@ -175,8 +190,60 @@ export class BeyinButcesi {
     return rezervasyon;
   }
 
+  /**
+   * Claude çağrısı yalnız tam çağrı bütçesi (toplam tavandan büyükse toplam tavan) kalan
+   * bütçeye sığıyorsa başlar. `--max-budget-usd` tur sonunda denetlenir: tek turlu bir
+   * çağrı ona verilen sınırı aşsa da tamamlanır ve faturalanır. Bütçeyi kalan tutara
+   * küçültmek toplam tavanı korumaz, yalnız ödenmiş yanıtın atılmasına yol açar.
+   */
   claudeCagrisiBaslat(): BeyinRezervasyonu {
-    return this.cagriBaslat(Math.min(this.claudeCagriButcesiUsd, Math.max(0, this.kalanMaliyetUsd())));
+    return this.cagriBaslat(Math.min(this.claudeCagriButcesiUsd, this.azamiMaliyetUsd));
+  }
+
+  /** Claude kendi çağrı sınırında durduğunda: gerçek maliyet, toplam ve sınırı koyan ayar. */
+  claudeCagriSiniriMesaji(rezervasyon: BeyinRezervasyonu, maliyetUsd: number | undefined): string {
+    const toplamAyari = 'KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd';
+    const cagriAyari = 'KOBAY_MAX_BUDGET_USD or brain.maxBudgetUsd';
+    // Rezervasyon min(çağrı bütçesi, toplam tavan)'dır: toplamdan yalnız çağrı bütçesinden küçükse gelir.
+    // Eşitlik ham yapılandırma değerleriyle karar verilir (mikro-dolara yuvarlanmış değerlerle değil).
+    const rez = rezervasyon.azamiMaliyetUsd;
+    const toplamdan = rez < this.claudeCagriButcesiUsd;
+    const esit = rez === this.claudeCagriButcesiUsd && this.claudeCagriButcesiUsd === this.azamiMaliyetUsd;
+    const kaynak = esit ? 'the per-call and the total cost limit, which are equal'
+      : toplamdan ? 'capped by the total cost limit' : 'the per-call cost limit';
+    const ayarlar = esit ? `${cagriAyari} and ${toplamAyari}` : toplamdan ? toplamAyari : cagriAyari;
+    const gercek = maliyetUsd === undefined || !Number.isFinite(maliyetUsd) ? 'an unknown amount' : `${maliyetUsd.toFixed(4)} USD`;
+    return `Claude stopped at the ${rezervasyon.azamiMaliyetUsd.toFixed(4)} USD per-call limit `
+      + `(${kaynak}); the call cost ${gercek}. `
+      + `Spent ${this.toplamMaliyetUsd.toFixed(4)} USD, total limit ${this.azamiMaliyetUsd.toFixed(4)} USD. `
+      + insanOnayiNotu(ayarlar);
+  }
+
+  /** Hangi sınırın aşıldığını (rezervasyon, toplam ya da ikisi) ve doğru ayar adını yazar. */
+  private tavanAsimiHatasi(maliyetUsd: number, ayrilan: number): BrainRuntimeError {
+    const rezAsimi = asiyor(maliyetUsd, ayrilan);
+    const toplamAsimi = asiyor(this.toplamMaliyetUsd, this.azamiMaliyetUsd);
+    const parcalar: string[] = [];
+    const ayarlar: string[] = [];
+    if (rezAsimi) {
+      parcalar.push(`the actual cost ${maliyetUsd.toFixed(4)} USD exceeded the ${ayrilan.toFixed(4)} USD call reservation`);
+      if (ayrilan === this.claudeCagriButcesiUsd) ayarlar.push('KOBAY_MAX_BUDGET_USD or brain.maxBudgetUsd');
+      if (ayrilan !== this.claudeCagriButcesiUsd || ayrilan === this.azamiMaliyetUsd) {
+        ayarlar.push('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd');
+      }
+    }
+    if (toplamAsimi) {
+      parcalar.push('the total spend went over the total cost limit');
+      if (!ayarlar.some((ayar) => ayar.startsWith('KOBAY_MAX_TOTAL'))) {
+        ayarlar.push('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd');
+      }
+    }
+    return new BrainRuntimeError(
+      'cost_cap',
+      `Cost limit reached: ${parcalar.join('; ')}; `
+        + `spent ${this.toplamMaliyetUsd.toFixed(4)} USD, limit ${this.azamiMaliyetUsd.toFixed(4)} USD. `
+        + insanOnayiNotu(ayarlar.join(' and ')),
+    );
   }
 
   /**
@@ -197,13 +264,8 @@ export class BeyinButcesi {
       );
     }
     this.toplamMaliyetUsd += maliyetUsd;
-    if (maliyetUsd > ayrilan + Number.EPSILON || this.toplamMaliyetUsd > this.azamiMaliyetUsd + Number.EPSILON) {
-      throw new BrainRuntimeError(
-        'cost_cap',
-        `Cost limit reached: the actual cost ${maliyetUsd.toFixed(4)} USD exceeded the ${ayrilan.toFixed(4)} USD reservation; `
-          + `known total ${this.toplamMaliyetUsd.toFixed(4)} USD. `
-          + insanOnayiNotu('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd'),
-      );
+    if (asiyor(maliyetUsd, ayrilan) || asiyor(this.toplamMaliyetUsd, this.azamiMaliyetUsd)) {
+      throw this.tavanAsimiHatasi(maliyetUsd, ayrilan);
     }
   }
 
@@ -211,14 +273,20 @@ export class BeyinButcesi {
    * Başlamış ama başarısız biten çağrı (zaman aşımı, sıfır dışı çıkış, ağ hatası):
    * sağlayıcı faturalamış olabilir, rezervasyon iade edilmez. Gerçek maliyet
    * okunabildiyse onunla uzlaşılır; okunamadıysa rezervasyonun tamamı harcanmış sayılır.
+   * Gerçek maliyet rezervasyonu ya da toplam tavanı aştıysa tavan hatasını DÖNDÜRÜR (fırlatmaz):
+   * çağıran kendi hatasından (örn. Claude'un kendi bütçe mesajı) önce hangisini bildireceğine karar verir.
    */
-  cagriHarcandi(rezervasyon: BeyinRezervasyonu, maliyetUsd?: number): void {
+  cagriHarcandi(rezervasyon: BeyinRezervasyonu, maliyetUsd?: number): BrainRuntimeError | undefined {
     const ayrilan = this.rezervasyonlar.get(rezervasyon.kimlik);
-    if (ayrilan === undefined) return;
+    if (ayrilan === undefined) return undefined;
     this.rezervasyonlar.delete(rezervasyon.kimlik);
     this.kullanimIsle(maliyetUsd);
     const bilinen = maliyetUsd !== undefined && Number.isFinite(maliyetUsd) && maliyetUsd >= 0;
     this.toplamMaliyetUsd += bilinen ? maliyetUsd : ayrilan;
+    if (bilinen && (asiyor(maliyetUsd, ayrilan) || asiyor(this.toplamMaliyetUsd, this.azamiMaliyetUsd))) {
+      return this.tavanAsimiHatasi(maliyetUsd, ayrilan);
+    }
+    return undefined;
   }
 
   /** Yalnız çağrı hiç başlamadıysa (süreç spawn edilemedi, dosya yok) rezervasyonu iade eder. */

@@ -1,8 +1,16 @@
 import { access } from 'node:fs/promises';
-import { chromium } from '@playwright/test';
-import { authOriginleriDogrula, type Harita, type Kimlik, type Sayfa } from '../depo/index.js';
+import { chromium, type BrowserContext, type Page } from '@playwright/test';
+import { authOriginleriDogrula, type Harita, type Kimlik, type OturumDurumu, type Sayfa } from '../depo/index.js';
 import { girisFormuBul } from './giris.js';
-import { girisKorumasiKur, girisKorumasiSonDenetim } from './giris-korumasi.js';
+import {
+  girisKorumasiBul,
+  girisKorumasiKur,
+  girisKorumasiSonDenetim,
+  haritaMaskesi,
+  oturumKorumasiKur,
+  oturumMetinMaskesi,
+} from './giris-korumasi.js';
+import { oturumDegerleri, oturumGirdileri } from './oturum-dosyasi.js';
 import {
   girisiGonder,
   girisSayfaMesajiNotu,
@@ -13,7 +21,7 @@ import {
   oturumDurumunuYaz,
   type GirisSonucu,
 } from './oturum.js';
-import { sayfaOzeti } from './sayfa-ozeti.js';
+import { sayfaMetinleriniGizle, sayfaOzeti } from './sayfa-ozeti.js';
 
 export interface SayfaYenilemeSecenekleri {
   baseUrl: string;
@@ -25,6 +33,12 @@ export interface SayfaYenilemeSecenekleri {
   /** Ayrı giriş (SSO) origin'leri; bkz. `KesifSecenekleri.authOrigins`. */
   authOrigins?: readonly string[];
   sayfaZamanAsimiMs?: number;
+  /**
+   * Doğrulanmış içe alınan oturum. Verilirse tarayıcıya dosya yolu DEĞİL bu nesne verilir (diskteki
+   * dosya arada değişse de maskelenen oturumla kullanılan oturum aynı kalır); değerleri yenilenen
+   * sayfa özetinden maskelenir.
+   */
+  oturum?: OturumDurumu;
 }
 
 /**
@@ -59,18 +73,37 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
   const beklenenYol = new URL(hedef).pathname;
   const sayfaZamanAsimiMs = secenekler.sayfaZamanAsimiMs ?? 15_000;
   const tarayici = await chromium.launch({ headless: true });
-  const oturumVar = await dosyaVarMi(secenekler.storageStateYolu);
+  const oturum = secenekler.oturum;
+  const oturumVar = oturum === undefined && await dosyaVarMi(secenekler.storageStateYolu);
   // Service worker istekleri context.route'a uğramaz; giriş korumasının dışında kalmasın diye
   // kimlik verildiğinde kapalı. Kimliksiz yenilemede koruma yok, worker'lar çalışır.
-  const context = await tarayici.newContext({
-    serviceWorkers: secenekler.kimlik !== undefined ? 'block' : 'allow',
-    ...(oturumVar ? { storageState: secenekler.storageStateYolu } : {}),
-  });
-  // WebSocket yönlendirmesi yalnız sonra açılan belgelere işler; koruma ilk sayfadan önce kurulur.
-  if (secenekler.kimlik !== undefined) {
-    await girisKorumasiKur(context, secenekler.kimlik, izinliOriginler(hedefOrigin, authOrigins));
+  let context: BrowserContext | undefined;
+  let sayfa: Page;
+  try {
+    context = await tarayici.newContext({
+      // İçe alınan oturumda da kimlikli bağlam: service worker'lar route'a uğramaz, kapalı.
+      serviceWorkers: secenekler.kimlik !== undefined || oturum !== undefined ? 'block' : 'allow',
+      ...(oturum !== undefined
+        ? { storageState: { cookies: oturum.cookies, origins: oturum.origins } }
+        : oturumVar ? { storageState: secenekler.storageStateYolu } : {}),
+    });
+    // WebSocket yönlendirmesi yalnız sonra açılan belgelere işler; koruma ilk sayfadan önce kurulur.
+    if (secenekler.kimlik !== undefined) {
+      await girisKorumasiKur(context, secenekler.kimlik, izinliOriginler(hedefOrigin, authOrigins));
+    } else if (oturum !== undefined) {
+      // Keşifteki gibi: içe alınan oturumla yenileme ilk istekten kimlikli evrede (bkz. `oturumKorumasiKur`).
+      await oturumKorumasiKur(context, hedefOrigin, authOrigins, oturumGirdileri(oturum));
+    }
+    sayfa = await context.newPage();
+  } catch (hata: unknown) {
+    // Kurulum hatasında (ör. Chromium'un reddettiği oturum dosyası) tarayıcı kapanır, süreç asılı kalmaz.
+    await context?.close().catch(() => undefined);
+    await tarayici.close().catch(() => undefined);
+    if (hata instanceof Error && oturum !== undefined) {
+      hata.message = oturumMetinMaskesi(oturumGirdileri(oturum))(hata.message);
+    }
+    throw hata;
   }
-  const sayfa = await context.newPage();
   let giris: GirisSonucu | undefined;
 
   try {
@@ -106,9 +139,19 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
         `Page could not be refreshed: asked for ${beklenenYol}, got ${gelenYol} (the session may have expired)${not === '' ? '' : `.${not}`}`,
       );
     }
-    const ozet = await sayfaOzeti(sayfa, hedefOrigin);
-    girisKorumasiSonDenetim(context);
+    const maske = haritaMaskesi(oturum === undefined ? [] : oturumDegerleri(oturum), secenekler.kimlik?.password);
+    const hamOzet = await sayfaOzeti(sayfa, hedefOrigin);
+    const ozet = maske.bos ? hamOzet : sayfaMetinleriniGizle(hamOzet, maske);
+    await girisKorumasiSonDenetim(context);
     return ozet;
+  } catch (hata: unknown) {
+    // Çalışma hatası (ör. `/login/<jeton>` yoluna yönlenme mesajı) da oturum değerlerinden arınır.
+    if (oturum !== undefined && hata instanceof Error) {
+      const koruma = girisKorumasiBul(context);
+      const metin = oturumMetinMaskesi(oturumGirdileri(oturum))(hata.message);
+      hata.message = koruma === undefined ? metin : koruma.metniGizle(metin);
+    }
+    throw hata;
   } finally {
     await context.close();
     await tarayici.close();
