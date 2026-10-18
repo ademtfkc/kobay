@@ -108,6 +108,7 @@ import {
   testRerun,
   testRun,
 } from '../../src/cli/komutlar/index.js';
+import { sayfaKesfiniYenile } from '../../src/cli/komutlar/ortak.js';
 import { kesfet } from '../../src/kesif/index.js';
 import { CHROMIUM_ONERISI, gitBashDenetle, nodeSurumuYeterliMi } from '../../src/cli/komutlar/doctor.js';
 
@@ -1024,45 +1025,230 @@ describe('hata mesajları eyleme yönlendirir', () => {
     expect(sonuc.json).toEqual({ error: expect.objectContaining({ code: 'TargetUnreachableError' }) });
   });
 
-  it('hedef adresindeki kullanıcı:parola mesajlarda maskelenir (reachable, project create/update)', async () => {
+  it('kullanıcı bilgili adres project create/update ile reddedilir (exit 2, parola mesajda yok)', async () => {
     const cwd = await bosProje();
-    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
-    const olustur = await projectCreate({ cwd, url: kimlikli, force: true, beyin: { adaptor: 'sahte' } });
-    const guncelle = await projectUpdate({ cwd, url: kimlikli });
-    for (const sonuc of [olustur, guncelle]) {
-      expect(sonuc.exitCode).toBe(0);
-      expect(sonuc.metin).not.toContain('Hunter2Pass');
-      expect(sonuc.metin).toContain('Target: http://[redacted]@localhost:3000\n');
+    for (const kimlikli of ['http://admin:Hunter2Pass@localhost:3000', 'http://admin@localhost:3000']) {
+      for (const sonuc of [
+        await projectCreate({ cwd, url: kimlikli, force: true, beyin: { adaptor: 'sahte' } }),
+        await projectCreate({ cwd, url: 'http://localhost:3000', loginUrl: `${kimlikli}/giris`, force: true, beyin: { adaptor: 'sahte' } }),
+        await projectUpdate({ cwd, url: kimlikli }),
+        await projectUpdate({ cwd, loginUrl: `${kimlikli}/giris` }),
+      ]) {
+        expect(sonuc.exitCode).toBe(2);
+        expect(sonuc.mesaj).toContain('The address must not contain a username or password: http://[redacted]@localhost:3000');
+        expect(sonuc.mesaj).toContain('--login');
+        expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
+      }
     }
-
-    sahteler.hedefAyakta = false;
-    const yok = await explore({ cwd });
-    expect(yok.exitCode).toBe(3);
-    expect(yok.mesaj).toContain('Target app is not reachable: http://[redacted]@localhost:3000;');
-    expect(yok.mesaj).not.toContain('Hunter2Pass');
+    // Ayrı giriş sitesinde de kullanıcı bilgisi yasak (ortak auth origin denetimi).
+    const authOrigin = await projectCreate({
+      cwd, url: 'http://localhost:3000', login: { username: 'u', password: 'p' }, authOrigins: ['http://admin:Hunter2Pass@sso.test'],
+      force: true, beyin: { adaptor: 'sahte' },
+    });
+    expect(authOrigin.exitCode).toBe(2);
+    expect(authOrigin.mesaj).toContain('user info is not allowed');
+    const sonConfig = await readFile(join(cwd, '.kobay', 'config.json'), 'utf8');
+    expect(sonConfig).not.toContain('Hunter2Pass');
+    expect(JSON.parse(sonConfig)).toMatchObject({ baseUrl: 'http://uygulama.test' });
   });
 
-  it('project get: insan modunda parola yok, --output json baseUrl ham kalır', async () => {
-    const cwd = await bosProje();
-    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
-    const loginUrl = 'http://admin:Hunter2Pass@localhost:3000/giris';
-    const olustur = await projectCreate({ cwd, url: kimlikli, loginUrl, force: true, beyin: { adaptor: 'sahte' } });
-    const al = await projectGet({ cwd });
-    for (const sonuc of [olustur, al]) {
-      expect(JSON.stringify(sonuc.json)).toContain(kimlikli);
-      const cikti = (json: boolean): { stdout: string; stderr: string } => {
-        const stdout = new PassThrough();
-        const stderr = new PassThrough();
-        ciktiYaz(sonuc, json, stdout, stderr);
-        return { stdout: String(stdout.read() ?? ''), stderr: String(stderr.read() ?? '') };
-      };
-      const insan = cikti(false);
-      expect(insan.stdout + insan.stderr).not.toContain('Hunter2Pass');
-      expect(insan.stdout).toContain('http://[redacted]@localhost:3000');
-      expect(cikti(true).stdout).toContain(kimlikli);
+  it('kayıtlı kimlikli config ile explore ve sayfa yenileme koşmaz (exit 2, harita yazılmaz)', async () => {
+    const cwd = await geciciDizin('kobay-mesaj-');
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://admin:Hunter2Pass@localhost:3000', beyin: { adaptor: 'sahte' } });
+    const sonuc = await explore({ cwd });
+    expect(sonuc.exitCode).toBe(2);
+    expect(sonuc.mesaj).toContain('The address must not contain a username or password: http://[redacted]@localhost:3000');
+    expect(sonuc.mesaj).toContain('kobay project update --base-url <URL>');
+    expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
+    await expect(access(join(cwd, '.kobay', 'map.json'))).rejects.toThrow();
+    await expect(sayfaKesfiniYenile(dizin, 'http://localhost:3000/x')).rejects.toThrow(/kobay project update --base-url <URL>/);
+
+    // Kayıtlı giriş adresi kimlikliyse de aynı ret; öneri --login-url.
+    const cwd2 = await geciciDizin('kobay-mesaj-');
+    await KobayDizini.ac(cwd2, { baseUrl: 'http://localhost:3000', loginUrl: 'http://admin:Hunter2Pass@localhost:3000/giris', beyin: { adaptor: 'sahte' } });
+    const giris = await explore({ cwd: cwd2 });
+    expect(giris.exitCode).toBe(2);
+    expect(giris.mesaj).toContain('kobay project update --login-url <URL>');
+    expect(JSON.stringify(giris)).not.toContain('Hunter2Pass');
+    await expect(access(join(cwd2, '.kobay', 'map.json'))).rejects.toThrow();
+
+    // Düzeltme yolu açık: kimliksiz adresle güncellenince keşif koşar.
+    expect((await projectUpdate({ cwd, url: 'http://localhost:3000' })).exitCode).toBe(0);
+    expect((await explore({ cwd })).exitCode).toBe(0);
+  });
+
+  it('kayıtlı kimlikli config ile test run/rerun koşmaz (exit 2, koşu yazılmaz); düzeltince koşar', async () => {
+    const { cwd, dizin, test } = await budamaProjesi();
+    await dizin.haritaYaz({ baseUrl: 'http://uygulama.test', loggedIn: false, exploredAt: '2026-09-17T00:00:00.000Z', pages: [] });
+    const configYolu = join(cwd, '.kobay', 'config.json');
+    const temiz = await readFile(configYolu, 'utf8');
+    await writeFile(configYolu, temiz.replace('http://uygulama.test', 'http://admin:Hunter2Pass@uygulama.test'));
+    const kos = await import('../../src/kos/index.js');
+    const kosturSahte = vi.mocked(kos.kostur);
+    kosturSahte.mockClear();
+    for (const sonuc of [
+      await testRun({ cwd, ids: [test.id] }),
+      await testRun({ cwd, all: true, noAnalysis: true }),
+      await testRerun({ cwd, id: test.id }),
+    ]) {
+      expect(sonuc.exitCode).toBe(2);
+      expect(JSON.stringify(sonuc)).toContain('The address must not contain a username or password: http://[redacted]@uygulama.test');
+      expect(JSON.stringify(sonuc)).toContain('kobay project update --base-url <URL>');
+      expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
     }
+    expect(kosturSahte).not.toHaveBeenCalled();
+    await expect(readdir(join(cwd, '.kobay', 'runs'))).resolves.toEqual([]);
+    expect((await dizin.testOku(test.id)).lastRunId).toBeUndefined();
+
+    expect((await projectUpdate({ cwd, url: 'http://uygulama.test' })).exitCode).toBe(0);
+    sahteler.verdict = 'passed';
+    const kosu = await testRun({ cwd, ids: [test.id] });
+    expect(kosu.exitCode).toBe(0);
+    expect(kosturSahte).toHaveBeenCalledTimes(1);
+  });
+
+  it('project get: elle kaydedilmiş kimlikli adres insan modunda ve JSON\'da maskelenir (yol/port aynen)', async () => {
+    const cwd = await geciciDizin('kobay-mesaj-');
+    const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
+    const loginUrl = 'http://admin:Hunter2Pass@localhost:3000/giris?x=1';
+    await KobayDizini.ac(cwd, { baseUrl: kimlikli, loginUrl, beyin: { adaptor: 'sahte' } });
+    const al = await projectGet({ cwd });
+    expect(al.exitCode).toBe(0);
+    expect(al.json).toMatchObject({
+      config: { baseUrl: 'http://[redacted]@localhost:3000', loginUrl: 'http://[redacted]@localhost:3000/giris?x=1' },
+    });
+    const cikti = (json: boolean): { stdout: string; stderr: string } => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      ciktiYaz(al, json, stdout, stderr);
+      return { stdout: String(stdout.read() ?? ''), stderr: String(stderr.read() ?? '') };
+    };
+    const insan = cikti(false);
+    expect(insan.stdout + insan.stderr).not.toContain('Hunter2Pass');
+    expect(insan.stdout).toContain('http://[redacted]@localhost:3000');
+    const makine = cikti(true);
+    expect(makine.stdout + makine.stderr).not.toContain('Hunter2Pass');
+    expect(makine.stdout).toContain('http://[redacted]@localhost:3000/giris?x=1');
     const gecersiz = await projectUpdate({ cwd, url: 'http://admin:Hunter2Pass@' });
     expect(gecersiz.mesaj ?? '').not.toContain('Hunter2Pass');
+  });
+
+  it('kimlikli kayıtlı adresle project update yalnız adresi düzeltirken geçer', async () => {
+    const cwd = await geciciDizin('kobay-mesaj-');
+    await KobayDizini.ac(cwd, { baseUrl: 'http://admin:Hunter2Pass@localhost:3000', beyin: { adaptor: 'sahte' } });
+    for (const sonuc of [
+      await projectUpdate({ cwd, beyin: { adaptor: 'codex' } }),
+      await projectUpdate({ cwd, login: { username: 'u', password: 'p' } }),
+      await projectUpdate({ cwd, loginUrl: 'http://localhost:3000/giris' }),
+    ]) {
+      expect(sonuc.exitCode).toBe(2);
+      expect(sonuc.mesaj).toContain('fix it with `kobay project update --base-url <URL>`');
+      expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
+    }
+    expect(await readFile(join(cwd, '.kobay', 'config.json'), 'utf8')).not.toContain('codex');
+    const duzelt = await projectUpdate({ cwd, url: 'http://localhost:3000' });
+    expect(duzelt.exitCode).toBe(0);
+    expect(JSON.stringify(duzelt)).not.toContain('Hunter2Pass');
+    expect((await projectUpdate({ cwd, beyin: { adaptor: 'codex' } })).exitCode).toBe(0);
+
+    // Kimlikli giriş adresi: --base-url düzeltmesi yetmez, öneri --login-url.
+    const cwd2 = await geciciDizin('kobay-mesaj-');
+    await KobayDizini.ac(cwd2, { baseUrl: 'http://localhost:3000', loginUrl: 'http://admin:Hunter2Pass@localhost:3000/giris', beyin: { adaptor: 'sahte' } });
+    for (const sonuc of [await projectUpdate({ cwd: cwd2, url: 'http://localhost:3001' }), await projectUpdate({ cwd: cwd2, beyin: { adaptor: 'codex' } })]) {
+      expect(sonuc.exitCode).toBe(2);
+      expect(sonuc.mesaj).toContain('fix it with `kobay project update --login-url <URL>`');
+      expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
+    }
+    const girisDuzelt = await projectUpdate({ cwd: cwd2, loginUrl: 'http://localhost:3000/giris' });
+    expect(girisDuzelt.exitCode).toBe(0);
+    expect(JSON.stringify(girisDuzelt)).not.toContain('Hunter2Pass');
+  });
+
+  it('kimlikli kayıtlı adresle plan generate mevcut haritayı kullanmaz (exit 2)', async () => {
+    const cwd = await geciciDizin('kobay-mesaj-');
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://admin:Hunter2Pass@localhost:3000', beyin: { adaptor: 'sahte' } });
+    await dizin.haritaYaz({ baseUrl: 'http://admin:Hunter2Pass@localhost:3000', loggedIn: false, exploredAt: '2026-09-17T00:00:00.000Z', pages: [] });
+    const sonuc = await planGenerate({ cwd });
+    expect(sonuc.exitCode).toBe(2);
+    expect(sonuc.mesaj).toContain('fix it with `kobay project update --base-url <URL>`');
+    expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
+    await expect(dizin.onerileriOku()).resolves.toEqual([]);
+  });
+
+  it('config temiz ama eski harita kimlikliyse plan generate ve test run reddeder; explore haritayı temizler', async () => {
+    const { cwd, dizin, test } = await budamaProjesi();
+    const eskiHarita = (alan: 'baseUrl' | 'url' | 'links' | 'action' | 'redirectedTo'): Parameters<KobayDizini['haritaYaz']>[0] => {
+      const kirli = 'http://admin:Hunter2Pass@uygulama.test';
+      return {
+        baseUrl: alan === 'baseUrl' ? kirli : 'http://uygulama.test', loggedIn: false, exploredAt: '2026-09-17T00:00:00.000Z',
+        pages: [{
+          url: alan === 'url' ? `${kirli}/` : 'http://uygulama.test/', title: 'Ana', headings: [], buttons: [], menu: [],
+          links: alan === 'links' ? [`${kirli}/a`] : ['/a'],
+          forms: [{ ...(alan === 'action' ? { action: `${kirli}/gonder` } : {}), fields: [] }],
+          ...(alan === 'redirectedTo' ? { redirectedTo: `${kirli}/giris` } : {}),
+        }],
+      };
+    };
+    const kos = await import('../../src/kos/index.js');
+    const kosturSahte = vi.mocked(kos.kostur);
+    const beyinGunlukleri = async (): Promise<string[]> => (await readdir(join(cwd, '.kobay', 'logs')).catch(() => []))
+      .filter((ad) => ad.startsWith('brain-'));
+    for (const alan of ['baseUrl', 'url', 'links', 'action', 'redirectedTo'] as const) {
+      await dizin.haritaYaz(eskiHarita(alan));
+      kosturSahte.mockClear();
+      for (const sonuc of [await planGenerate({ cwd }), await testRun({ cwd, ids: [test.id] })]) {
+        expect(sonuc.exitCode, alan).toBe(2);
+        expect(JSON.stringify(sonuc), alan).toContain('The saved map was built with an address that contains a username or password (http://[redacted]@uygulama.test');
+        expect(JSON.stringify(sonuc), alan).toContain('run `kobay explore` to rebuild it');
+        expect(JSON.stringify(sonuc), alan).not.toContain('Hunter2Pass');
+      }
+      await expect(sayfaKesfiniYenile(dizin, 'http://uygulama.test/'), alan).rejects.toThrow(/saved map was built/);
+      expect(kosturSahte).not.toHaveBeenCalled();
+    }
+    expect(await beyinGunlukleri()).toEqual([]);
+    await expect(dizin.onerileriOku()).resolves.toEqual([]);
+
+    expect((await explore({ cwd })).exitCode).toBe(0);
+    expect(await readFile(join(cwd, '.kobay', 'map.json'), 'utf8')).not.toContain('Hunter2Pass');
+    expect((await planGenerate({ cwd })).exitCode).toBe(0);
+    expect(await beyinGunlukleri()).not.toEqual([]);
+  });
+
+  it('kimliksiz config project get --output json içinde ham config ile birebir aynı kalır', async () => {
+    const cwd = await geciciDizin('kobay-mesaj-');
+    await mkdir(join(cwd, 'docs'), { recursive: true });
+    await writeFile(join(cwd, 'docs', 'rehber.md'), '# Rehber\n');
+    expect((await projectCreate({
+      cwd, url: 'http://localhost:3000/app?x=1', loginUrl: 'https://sso.test/giris?r=1', docs: 'docs/rehber.md',
+      login: { username: 'u', password: 'p' }, authOrigins: ['https://sso.test'],
+      beyin: { adaptor: 'claude', model: 'claude-opus-5-5', effort: 'high' }, force: true,
+    })).exitCode).toBe(0);
+    const ham = JSON.parse(await readFile(join(cwd, '.kobay', 'config.json'), 'utf8')) as Record<string, unknown>;
+    expect(ham).toHaveProperty('authOrigins');
+    expect(ham).toHaveProperty('docsPath');
+    const al = await projectGet({ cwd });
+    expect((al.json as { config: unknown }).config).toStrictEqual(ham);
+  });
+
+  it('doctor kimlikli kayıtlı adresi yoklamaz, hedef satırı düzeltmeyi söyler', async () => {
+    const kos = await import('../../src/kos/index.js');
+    const yoklama = vi.mocked(kos.hedefAyaktaMi);
+    sahteler.hedefAyakta = true;
+    for (const [config, beklenen] of [
+      [{ baseUrl: 'http://admin:Hunter2Pass@localhost:3000' },
+        '✗ target — http://[redacted]@localhost:3000 contains a username or password; fix it with `kobay project update --base-url <URL>`'],
+      [{ baseUrl: 'http://localhost:3000', loginUrl: 'http://admin:Hunter2Pass@localhost:3000/giris' },
+        '✗ target — login URL http://[redacted]@localhost:3000/giris contains a username or password; fix it with `kobay project update --login-url <URL>`'],
+    ] as const) {
+      const cwd = await geciciDizin('kobay-doctor-');
+      await KobayDizini.ac(cwd, { ...config, beyin: { adaptor: 'sahte' } });
+      yoklama.mockClear();
+      const sonuc = await doctor({ cwd });
+      expect((sonuc.metin ?? '').split('\n')).toContain(beklenen);
+      expect(yoklama).not.toHaveBeenCalled();
+      expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
+      expect((sonuc.json as Array<{ name: string; ok: boolean }>).find((k) => k.name === 'target')?.ok).toBe(false);
+    }
   });
 
   it('hata paketi yokken hangi komutun paket ürettiğini söyler', async () => {

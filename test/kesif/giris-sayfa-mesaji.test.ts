@@ -1,10 +1,11 @@
 import { access, readFile, writeFile } from 'node:fs/promises';
-import { createServer, type Server } from 'node:http';
+import { createServer, type Server, type ServerResponse } from 'node:http';
 import { chromium, type Browser } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest';
 import type { Kimlik } from '../../src/depo/index.js';
 import { kimlikIzleri, SirMaskesi, type GirisKorumasi } from '../../src/kesif/giris-korumasi.js';
 import {
+  CredentialLeakBlockedError,
   girisFormuBul,
   girisiGonder,
   girisSayfaMesajiNotu,
@@ -132,6 +133,25 @@ const RETLER: Record<string, { get?: string; ret: Ret }> = {
   },
 };
 
+/**
+ * Yavaş ret gövdesi: başlıklar ve sayfanın başı (boş uyarı) hemen gider, uyarıyı dolduran
+ * script'li kalan `YAVAS_GOVDE_MS` sonra gelir. Gezinme hemen yerleşir; `load`, testteki URL
+ * bütçesi (1 sn) + 2 sn ağ durulması tavanından sonra gelir (yükleme beklemesi olmadan okuma
+ * `readyState=loading` belgede boş uyarıyı görür, gerekçe kaybolur).
+ */
+const YAVAS_GOVDE_MS = 6_000;
+/**
+ * `/gec-sekme`: ret sayfasının başı hemen gider; `GEC_SEKME_MS` sonra gelen script aynı-köken
+ * `/sekme-302`ye gider, o da yabancı kökene (`localhost`, ayrı site) 302 döner.
+ */
+const GEC_SEKME_MS = 4_000;
+/** `/bitmeyen`: başı gönderilip hiç tamamlanmayan ret yanıtları (afterAll'da kapatılır). */
+const bitmeyenYanitlar: ServerResponse[] = [];
+/** JavaScript ile ret: gönderim engellenir (gezinme yok), uyarı 300 ms sonra DOM'a yazılır. */
+const JS_RET_SAYFASI = sayfa(`<div role="alert" id="u"></div>${form('/js-ret')}<script>document.querySelector('form')`
+  + '.addEventListener(\'submit\',(olay)=>{olay.preventDefault();setTimeout(()=>{'
+  + 'document.getElementById(\'u\').textContent=\'Wrong password (checked in browser)\';},300);});</script>');
+
 beforeAll(async () => {
   try {
     tarayici = await chromium.launch({ headless: true });
@@ -149,6 +169,41 @@ beforeAll(async () => {
         if (yol === '/panel') {
           yanit.writeHead(200, { 'content-type': 'text/html' });
           yanit.end(sayfa('<p>Panel</p>'));
+          return;
+        }
+        if (yol === '/yavas-govde' && istek.method === 'POST') {
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.write('<!doctype html><html><body><h1>Sign in</h1><div role="alert" id="u"></div>');
+          setTimeout(() => {
+            yanit.end(`${form('/yavas-govde')}<script>document.getElementById('u').textContent='Slow server says no';`
+              + '</script></body></html>');
+          }, YAVAS_GOVDE_MS);
+          return;
+        }
+        if (yol === '/gec-sekme' && istek.method === 'POST') {
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.write('<!doctype html><html><body><h1>Sign in</h1><div role="alert" id="u"></div>');
+          setTimeout(() => {
+            yanit.end(`${form('/gec-sekme')}<script>location.href='/sekme-302';</script></body></html>`);
+          }, GEC_SEKME_MS);
+          return;
+        }
+        if (yol === '/sekme-302') {
+          const adres = sunucu?.address();
+          const port = typeof adres === 'object' && adres !== null ? adres.port : 0;
+          yanit.writeHead(302, { location: `http://localhost:${port}/yabanci-belge` });
+          yanit.end();
+          return;
+        }
+        if (yol === '/bitmeyen' && istek.method === 'POST') {
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.write('<!doctype html><html><body><h1>Sign in</h1><div role="alert" id="u"></div>');
+          bitmeyenYanitlar.push(yanit);
+          return;
+        }
+        if (yol === '/yavas-govde' || yol === '/js-ret' || yol === '/bitmeyen' || yol === '/gec-sekme') {
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.end(yol === '/js-ret' ? JS_RET_SAYFASI : sayfa(form(yol)));
           return;
         }
         if (yol === '/basarili' && istek.method === 'POST') {
@@ -182,6 +237,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  for (const yanit of bitmeyenYanitlar) yanit.destroy();
   await tarayici?.close();
   await demo?.kapat();
   if (sunucu?.listening) await new Promise((coz) => { sunucu?.close(coz); });
@@ -274,6 +330,36 @@ describe('A6: giriş reddinde sayfa uyarısı (gerçek Chromium)', () => {
     expect(metin).toBe('Bad login now [redacted]!');
     // eslint-disable-next-line no-control-regex
     expect(metin).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u200b]/);
+  });
+
+  it('ret gövdesi yavaş gelirse (load, ağ durulması tavanından sonra) uyarı yine okunur', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    const bas = Date.now();
+    expect(alinti(await girisDene(`${appOrigin}/yavas-govde`))).toBe('Slow server says no');
+    expect(Date.now() - bas).toBeLessThan(YAVAS_GOVDE_MS + 4_000);
+  }, 30_000);
+
+  it('ret gövdesi hiç tamamlanmazsa yükleme beklemesi tavanda bırakılır: metin yok, süre sınırlı', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    const bas = Date.now();
+    expect(await girisDene(`${appOrigin}/bitmeyen`)).toEqual({ basarili: false });
+    // URL bütçesi (1 sn) + ağ durulması (2 sn) + yükleme tavanı (5 sn) + okuma (2 sn) + pay.
+    expect(Date.now() - bas).toBeLessThan(13_000);
+  }, 30_000);
+
+  it('ret sayfasının geç gelen script\'i aynı-köken adres üzerinden yabancıya 302 olursa giriş reddedilir', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    const sonuc = await girisDene(`${appOrigin}/gec-sekme`).catch((hata: unknown) => hata);
+    expect(sonuc).toBeInstanceOf(CredentialLeakBlockedError);
+    expect((sonuc as Error).message).toMatch(/^Login refused: kobay detected 1 cross-origin document redirect/);
+  }, 30_000);
+
+  it('JavaScript ile ret (gezinme yok): uyarı okunur, yükleme beklemesi süre eklemez', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    const bas = Date.now();
+    expect(alinti(await girisDene(`${appOrigin}/js-ret`))).toBe('Wrong password (checked in browser)');
+    // URL bütçesi (1 sn) + networkidle (~0,5 sn) + okuma; yükleme beklemesi hemen döner.
+    expect(Date.now() - bas).toBeLessThan(4_000);
   });
 
   it('boş aria-live bölgesi atlanır, düz <p> farkı gelir', async (context) => {

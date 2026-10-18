@@ -504,16 +504,9 @@ describe('Opus kör kabul: kurulum hatası ve sembolik bağ', () => {
           coz({ kod: h === null ? 0 : h.code ?? null, cikti: `${stdout}${stderr}`, olduruldu: h?.killed === true });
         });
     });
-    // Ayrı CLI süreci tarayıcıdan önce hedefi Node `fetch` ile yoklar; Windows'un çözücüsü
-    // `*.localhost` alt adlarını çözmez (Chromium kendi çözer), yoklama "not reachable" der ve
-    // çerez denetimine hiç varılmaz. Bu test yalnız Chromium'un çerez reddini sınadığından
-    // hedef her platformda çözülen 127.0.0.1'dir; sunucu tanımadığı Host'u hedef sayar.
-    const yerelUrl = hedefUrl.replace('app.kobay.localhost', '127.0.0.1');
-    expect((await cli('project', 'create', '--url', `${yerelUrl}/`, '--brain', 'sahte')).kod).toBe(0);
+    expect((await cli('project', 'create', '--url', `${hedefUrl}/`, '--brain', 'sahte')).kod).toBe(0);
     // Şema adı/değeri serbest bırakır; Chromium `Storage.setCookies`te reddeder (newContext hatası).
     const d = oturum();
-    d.cookies = d.cookies.map((c) => ({ ...c, domain: '127.0.0.1' }));
-    d.origins = d.origins.map((o) => ({ ...o, origin: yerelUrl }));
     d.cookies[0] = { ...d.cookies[0]!, name: 'a;b=c', value: `${SID}\u0000x` };
     await writeFile(join(proje, '.kobay', 'storageState.json'), iceAlinanOturumMetni(d));
     const sonuc = await cli('explore');

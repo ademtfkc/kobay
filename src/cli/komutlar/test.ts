@@ -31,6 +31,8 @@ import {
 import {
   belgeYoluDenetle,
   dizinBul,
+  kayitliAdresleriDenetle,
+  kayitliHaritayiDenetle,
   hataPaketiVarsayilanYol,
   hataPaketiYoluDenetle,
   haritaSagla,
@@ -224,6 +226,10 @@ async function tekTestKostur(
   const { rerun, analizYok } = secenek;
   try {
     const config = await dizin.configOku();
+    // Kimlikli kayıtlı adresle hiçbir şey yazılmaz, kod üretilmez, tarayıcı açılmaz (exit 2).
+    kayitliAdresleriDenetle(config);
+    // Kod üretimi ve hata analizi haritayı beyne yollar: eski kimlikli harita da reddedilir.
+    kayitliHaritayiDenetle(await dizin.haritaOku());
     let guncelTest = test;
     const mevcutKod = await dizin.kodOku(test.id);
     // `--no-analysis` (CI): beyin yok, kod üretilemez. Kodsuz ya da taslak (planı

@@ -14,7 +14,9 @@ import {
 import { kimlikOriginDogrula, loginUrlDogrula } from '../../kesif/oturum.js';
 import { oturumDosyasiniHazirla } from '../../kesif/oturum-dosyasi.js';
 import { UsageError, basarili, basariliMetin, komutCalistir, type KomutSonucu } from '../komut.js';
-import { belgeYoluDenetle, dizinBul, oturumHatasiniCevir } from './ortak.js';
+import {
+  belgeYoluDenetle, configKimligiGizle, dizinBul, kayitliAdresleriDenetle, kimlikliAdresReddet, oturumHatasiniCevir,
+} from './ortak.js';
 
 function beyinAyariMi(deger: unknown): deger is BeyinAyari {
   if (typeof deger !== 'object' || deger === null || !('adaptor' in deger)) return false;
@@ -69,6 +71,7 @@ function urlDogrula(url: string): void {
   if ((protokol !== 'http:' && protokol !== 'https:') || !/^https?:\/\//i.test(url)) {
     throw new UsageError(`Unsupported URL scheme: ${adresKimligiGizle(url)}. ${URL_IPUCU}`);
   }
+  kimlikliAdresReddet(url);
 }
 
 type BeyinGirdisi = Partial<BeyinAyari>;
@@ -417,6 +420,13 @@ export async function projectUpdate(a: {
       throw hata;
     });
     const yeniBaseUrl = a.url ?? mevcut.baseUrl;
+    // Kimlikli kayıtlı adresle yalnız o adresi düzelten güncelleme geçer (yeni adres zaten
+    // `urlDogrula`'dan geçti); başka alan değiştirilirse önce adres düzeltilmeli.
+    kayitliAdresleriDenetle({
+      ...mevcut,
+      baseUrl: yeniBaseUrl,
+      ...(a.loginUrl === undefined ? {} : { loginUrl: a.loginUrl }),
+    });
     // Kimlik yeni hedefin origin'ine kilitlenir; elle bozulmuş hedefle parola kaydedilmez.
     if (a.login !== undefined) urlDogrula(yeniBaseUrl);
     let originDegisti: boolean;
@@ -477,7 +487,7 @@ export async function projectUpdate(a: {
     const silinen = yeniKimlik === undefined ? islem?.adlar ?? [] : [];
     const listeDustu = originDegisti && a.login === undefined && (mevcut.authOrigins?.length ?? 0) > 0;
     return basariliMetin(
-      { root: dizin.kok, config, ...(silinen.length === 0 ? {} : { invalidated: silinen }) },
+      { root: dizin.kok, config: configKimligiGizle(config), ...(silinen.length === 0 ? {} : { invalidated: silinen }) },
       projeOzeti({
         baslik: 'Project updated',
         kok: dizin.kok,
@@ -502,6 +512,7 @@ export async function projectGet(a: { cwd: string }): Promise<KomutSonucu> {
       dizin.testListele(),
       dizin.haritaOku(),
     ]);
-    return basarili({ config, testCount: testler.length, hasMap: harita !== null });
+    // Elle/eski sürümle kaydedilmiş kimlikli adresin parolası JSON'a da düz yazılmaz.
+    return basarili({ config: configKimligiGizle(config), testCount: testler.length, hasMap: harita !== null });
   });
 }

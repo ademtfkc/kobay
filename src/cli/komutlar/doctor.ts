@@ -3,6 +3,7 @@ import { hedefAyaktaMi } from '../../kos/index.js';
 import { basariliMetin, type KomutSonucu } from '../komut.js';
 import { chromiumVarMi, komutVarMi } from './setup.js';
 import { KobayDizini, adresKimligiGizle } from '../../depo/index.js';
+import { adresKimlikliMi } from './ortak.js';
 
 /** Doctor satırı: `oneri` yalnız `ok: false` iken bulunur. */
 export interface Kontrol {
@@ -95,10 +96,21 @@ export async function doctor(a: {
   ]);
   let hedef = false;
   let baseUrl: string | undefined;
+  // Kimlikli kayıtlı adres yoklanmaz (parola hedefe gitmez); satır düzeltme komutunu söyler.
+  let kimlikliAdresNotu: string | undefined;
   if (dizin !== null) {
     try {
-      baseUrl = (await dizin.configOku()).baseUrl;
-      hedef = await hedefAyaktaMi(baseUrl);
+      const config = await dizin.configOku();
+      baseUrl = config.baseUrl;
+      if (adresKimlikliMi(baseUrl)) {
+        kimlikliAdresNotu = `${adresKimligiGizle(baseUrl)} contains a username or password;`
+          + ' fix it with `kobay project update --base-url <URL>`';
+      } else if (config.loginUrl !== undefined && adresKimlikliMi(config.loginUrl)) {
+        kimlikliAdresNotu = `login URL ${adresKimligiGizle(config.loginUrl)} contains a username or password;`
+          + ' fix it with `kobay project update --login-url <URL>`';
+      } else {
+        hedef = await hedefAyaktaMi(baseUrl);
+      }
     } catch {
       hedef = false;
     }
@@ -132,7 +144,7 @@ export async function doctor(a: {
       ok: hedef,
       oneri: dizin === null
         ? 'no project; run `kobay project create --url <URL>` first'
-        : `${baseUrl === undefined ? 'target' : adresKimligiGizle(baseUrl)} is not reachable; start the app or fix the address with \`kobay project update --base-url <URL>\``,
+        : kimlikliAdresNotu ?? `${baseUrl === undefined ? 'target' : adresKimligiGizle(baseUrl)} is not reachable; start the app or fix the address with \`kobay project update --base-url <URL>\``,
     },
   ];
   const metin = ham

@@ -1,3 +1,8 @@
+import dns from 'node:dns';
+import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { createServer as httpsSunucu } from 'node:https';
+import { createServer as tcpSunucu, type AddressInfo, type Socket } from 'node:net';
 import { access, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { dirname, join, sep } from 'node:path';
@@ -12,6 +17,7 @@ import {
   kostur,
   testSureciOrtami,
 } from '../../src/kos/index.js';
+import { loopbackLookup } from '../../src/kos/loopback-yokla.js';
 import { contextAc, contextKapat, videoSaklanmali, videoyuSonlandir } from '../../src/kos/fixture.js';
 import { eylemZamanAsimiCoz, kaliciConfigMetni } from '../../src/kos/calisma-alani.js';
 import { kanitiYaz } from '../../src/kos/fixture-sablonu.js';
@@ -611,5 +617,266 @@ test('verifies the login screen', async ({ page }) => {
     }
     const testIci = JSON.parse(await readFile(ortamDosyasi, 'utf8')) as Record<string, string>;
     expect(testIci.KOBAY_BASE_URL).toBe(demo.url);
+  });
+});
+
+describe('hedefAyaktaMi loopback adları', () => {
+  async function sunucuAc(): Promise<{ port: number; hostlar: string[]; kapat: () => Promise<void> }> {
+    const hostlar: string[] = [];
+    const sunucu = createServer((istek, yanit) => {
+      hostlar.push(String(istek.headers.host));
+      yanit.statusCode = 503;
+      yanit.end();
+    });
+    await new Promise<void>((coz) => sunucu.listen(0, '127.0.0.1', coz));
+    const port = (sunucu.address() as AddressInfo).port;
+    return { port, hostlar, kapat: () => new Promise<void>((coz) => { sunucu.close(() => coz()); sunucu.closeAllConnections(); }) };
+  }
+
+  it('*.localhost adını çözücüye sormadan loopback\'e yoklar ve Host özgün adı taşır', async () => {
+    const s = await sunucuAc();
+    const cozucu = vi.spyOn(dns, 'lookup');
+    const fetchCagrisi = vi.fn();
+    vi.stubGlobal('fetch', fetchCagrisi);
+    try {
+      const ad = `kobay-${Math.random().toString(36).slice(2, 10)}.localhost`;
+      await expect(hedefAyaktaMi(`http://${ad}:${s.port}`)).resolves.toBe(true);
+      expect(s.hostlar[0]).toBe(`${ad}:${s.port}`);
+      expect(cozucu).not.toHaveBeenCalled();
+      expect(fetchCagrisi).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      cozucu.mockRestore();
+      await s.kapat();
+    }
+  });
+
+  it('dinlenmeyen portu erişilemez sayar', async () => {
+    const s = await sunucuAc();
+    const port = s.port;
+    await s.kapat();
+    await expect(hedefAyaktaMi(`http://yok.localhost:${port}`, 500)).resolves.toBe(false);
+  });
+
+  it('kullanıcı bilgili URL yoklamada kimlik göndermez (loopback yolu)', async () => {
+    const basliklar: Array<string | undefined> = [];
+    const sunucu = createServer((istek, yanit) => { basliklar.push(istek.headers.authorization); yanit.end(); });
+    await new Promise<void>((coz) => sunucu.listen(0, '127.0.0.1', coz));
+    const port = (sunucu.address() as AddressInfo).port;
+    try {
+      await expect(hedefAyaktaMi(`http://admin:parola@app.localhost:${port}`)).resolves.toBe(true);
+      expect(basliklar.length).toBeGreaterThan(0);
+      expect(basliklar.every((b) => b === undefined)).toBe(true);
+    } finally {
+      sunucu.closeAllConnections();
+      await new Promise<void>((coz) => { sunucu.close(() => coz()); });
+    }
+  });
+
+  it('kullanıcı bilgili URL fetch yoluna kimlik geçirmez', async () => {
+    const fetchCagrisi = vi.fn(async (_url: string) => new Response('', { status: 200 }));
+    vi.stubGlobal('fetch', fetchCagrisi);
+    try {
+      await expect(hedefAyaktaMi('http://admin:parola@ornek.test:1')).resolves.toBe(true);
+      const gecen = String(fetchCagrisi.mock.calls[0]![0]);
+      expect(gecen).not.toContain('admin');
+      expect(gecen).not.toContain('parola');
+      expect(new URL(gecen).username).toBe('');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('yönlendirmeyi izlemez: kapalı porta 302 her iki yolda ayakta sayılır', async () => {
+    const sunucu = createServer((_istek, yanit) => { yanit.statusCode = 302; yanit.setHeader('location', 'http://127.0.0.1:1/'); yanit.end(); });
+    await new Promise<void>((coz) => sunucu.listen(0, '127.0.0.1', coz));
+    const port = (sunucu.address() as AddressInfo).port;
+    try {
+      await expect(hedefAyaktaMi(`http://app.localhost:${port}`)).resolves.toBe(true);
+      // fetch yolu: yönlendirme izlenseydi kapalı porta gidip false dönerdi.
+      await expect(hedefAyaktaMi(`http://127.0.0.1:${port}`)).resolves.toBe(true);
+    } finally {
+      sunucu.closeAllConnections();
+      await new Promise<void>((coz) => { sunucu.close(() => coz()); });
+    }
+  });
+
+  it('yalnız ::1 dinleyen uygulama ayaktadır', async (ctx) => {
+    const sunucu = createServer((_istek, yanit) => { yanit.end(); });
+    try {
+      await new Promise<void>((coz, red) => { sunucu.once('error', red); sunucu.listen(0, '::1', coz); });
+    } catch {
+      ctx.skip();
+      return;
+    }
+    const port = (sunucu.address() as AddressInfo).port;
+    try {
+      await expect(hedefAyaktaMi(`http://v6.localhost:${port}`)).resolves.toBe(true);
+    } finally {
+      sunucu.closeAllConnections();
+      await new Promise<void>((coz) => { sunucu.close(() => coz()); });
+    }
+  });
+
+  it('lookup all:false iken de seçilen tek adresi verir (autoSelectFamily kapalı Node)', () => {
+    const sonuc: Array<[string, number]> = [];
+    loopbackLookup('::1')('x.localhost', { all: false }, ((_e: unknown, a: string, f: number) => { sonuc.push([a, f]); }) as never);
+    loopbackLookup('127.0.0.1')('x.localhost', {}, ((_e: unknown, a: string, f: number) => { sonuc.push([a, f]); }) as never);
+    expect(sonuc).toEqual([['::1', 6], ['127.0.0.1', 4]]);
+  });
+
+  it('bağlantıyı kabul edip yanıt vermeyen dinleyicide süre ~2 x zamanAsimiMs ile sınırlı kalır', async () => {
+    const soketler: Socket[] = [];
+    const sunucu = tcpSunucu((soket) => { soketler.push(soket); });
+    await new Promise<void>((coz) => sunucu.listen(0, '127.0.0.1', coz));
+    const port = (sunucu.address() as AddressInfo).port;
+    try {
+      const t0 = Date.now();
+      await expect(hedefAyaktaMi(`http://donuk.localhost:${port}`, 300)).resolves.toBe(false);
+      const gecen = Date.now() - t0;
+      expect(soketler.length).toBeGreaterThan(0);
+      // Geniş pay: yavaş CI'da bile 2 x 300 ms + 4 sn altında kalmalı (adresler paralel, yöntemler sıralı).
+      expect(gecen).toBeLessThan(2 * 300 + 4_000);
+    } finally {
+      for (const s of soketler) s.destroy();
+      await new Promise<void>((coz) => { sunucu.close(() => coz()); });
+    }
+  });
+
+  it('kendinden imzalı sertifikalı https hedefi ayaktadır', async (ctx) => {
+    const dizin = await geciciDizinAc('kobay-sert-');
+    const uret = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
+      '-keyout', join(dizin, 'k.pem'), '-out', join(dizin, 's.pem')], { stdio: 'ignore' });
+    if (uret.status !== 0) {
+      ctx.skip();
+      return;
+    }
+    const sunucu = httpsSunucu({ key: await readFile(join(dizin, 'k.pem')), cert: await readFile(join(dizin, 's.pem')) }, (_i, y) => { y.end(); });
+    await new Promise<void>((coz) => sunucu.listen(0, '127.0.0.1', coz));
+    const port = (sunucu.address() as AddressInfo).port;
+    try {
+      await expect(hedefAyaktaMi(`https://app.localhost:${port}`)).resolves.toBe(true);
+    } finally {
+      sunucu.closeAllConnections();
+      await new Promise<void>((coz) => { sunucu.close(() => coz()); });
+    }
+  });
+
+  /** Sunucu tarafı soketlerin hepsi `sinirMs` içinde kapanırsa true. */
+  function soketlerKapandiMi(soketler: Socket[], sinirMs: number): Promise<boolean> {
+    return Promise.race([
+      Promise.all(soketler.map((s) => (s.destroyed ? Promise.resolve() : new Promise<void>((coz) => s.once('close', () => coz()))))).then(() => true),
+      new Promise<boolean>((coz) => setTimeout(() => coz(false), sinirMs).unref()),
+    ]);
+  }
+
+  it('yoklama yalnız kök adresi ister: yol, sorgu, parça ve kimlik gitmez (loopback yolu)', async () => {
+    const istekler: Array<{ yol: string | undefined; yetki: string | undefined }> = [];
+    const sunucu = createServer((istek, yanit) => { istekler.push({ yol: istek.url, yetki: istek.headers.authorization }); yanit.end(); });
+    await new Promise<void>((coz) => sunucu.listen(0, '127.0.0.1', coz));
+    const port = (sunucu.address() as AddressInfo).port;
+    try {
+      await expect(hedefAyaktaMi(`http://admin:parola@x.localhost:${port}/gizli/yol?access_token=secret#p`)).resolves.toBe(true);
+      expect(istekler.length).toBeGreaterThan(0);
+      expect(istekler.every((i) => i.yol === '/' && i.yetki === undefined)).toBe(true);
+    } finally {
+      sunucu.closeAllConnections();
+      await new Promise<void>((coz) => { sunucu.close(() => coz()); });
+    }
+  });
+
+  it('yoklama yalnız kök adresi ister (fetch yolu)', async () => {
+    const fetchCagrisi = vi.fn(async (_url: string) => new Response('', { status: 200 }));
+    vi.stubGlobal('fetch', fetchCagrisi);
+    try {
+      await expect(hedefAyaktaMi('http://admin:parola@ornek.test:1/gizli/yol?access_token=secret#p')).resolves.toBe(true);
+      expect(fetchCagrisi.mock.calls.map((c) => String(c[0]))).toEqual(['http://ornek.test:1/']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('yol altına monte uygulama kökte 404 verse de ayaktadır', async () => {
+    const sunucu = createServer((istek, yanit) => { yanit.statusCode = istek.url?.startsWith('/app') === true ? 200 : 404; yanit.end(); });
+    await new Promise<void>((coz) => sunucu.listen(0, '127.0.0.1', coz));
+    const port = (sunucu.address() as AddressInfo).port;
+    try {
+      await expect(hedefAyaktaMi(`http://app.localhost:${port}/app`)).resolves.toBe(true);
+      await expect(hedefAyaktaMi(`http://127.0.0.1:${port}/app`)).resolves.toBe(true);
+    } finally {
+      sunucu.closeAllConnections();
+      await new Promise<void>((coz) => { sunucu.close(() => coz()); });
+    }
+  });
+
+  for (const [hizli, asili] of [['::1', '127.0.0.1'], ['127.0.0.1', '::1']] as const) {
+    it(`${hizli} hemen yanıt verirken ${asili} asılı kalırsa kaybeden iptal edilir`, async (ctx) => {
+      const yanitlayan = createServer((_istek, yanit) => { yanit.end(); });
+      const soketler: Socket[] = [];
+      // Okur ama hiç yanıt vermez; okumak, istemcinin kapattığını (FIN) görmek için gerekir.
+      const asiliSunucu = tcpSunucu((soket) => { soketler.push(soket); soket.resume(); });
+      try {
+        await new Promise<void>((coz, red) => { yanitlayan.once('error', red); yanitlayan.listen(0, hizli, coz); });
+        const p = (yanitlayan.address() as AddressInfo).port;
+        await new Promise<void>((coz, red) => { asiliSunucu.once('error', red); asiliSunucu.listen(p, asili, coz); });
+      } catch {
+        yanitlayan.close();
+        asiliSunucu.close();
+        ctx.skip();
+        return;
+      }
+      const port = (yanitlayan.address() as AddressInfo).port;
+      try {
+        const t0 = Date.now();
+        await expect(hedefAyaktaMi(`http://iki.localhost:${port}`, 5_000)).resolves.toBe(true);
+        expect(Date.now() - t0).toBeLessThan(2_000);
+        expect(soketler.length).toBeGreaterThan(0);
+        // İstemci asılı tarafı zaman aşımını (5 sn) beklemeden kapatmış olmalı.
+        await expect(soketlerKapandiMi(soketler, 1_500)).resolves.toBe(true);
+      } finally {
+        for (const s of soketler) s.destroy();
+        yanitlayan.closeAllConnections();
+        await new Promise<void>((coz) => { yanitlayan.close(() => coz()); });
+        await new Promise<void>((coz) => { asiliSunucu.close(() => coz()); });
+      }
+    });
+  }
+
+  it('gövdesini kapatmayan 302 yanıtında fetch gövdesi iptal edilir', async () => {
+    const soketler: Socket[] = [];
+    const sunucu = createServer((istek, yanit) => {
+      soketler.push(istek.socket);
+      yanit.writeHead(302, { location: 'http://127.0.0.1:1/' });
+      yanit.write('bitmeyen gövde');
+    });
+    await new Promise<void>((coz) => sunucu.listen(0, '127.0.0.1', coz));
+    const port = (sunucu.address() as AddressInfo).port;
+    try {
+      await expect(hedefAyaktaMi(`http://127.0.0.1:${port}`, 5_000)).resolves.toBe(true);
+      expect(soketler.length).toBeGreaterThan(0);
+      await expect(soketlerKapandiMi(soketler, 1_500)).resolves.toBe(true);
+    } finally {
+      sunucu.closeAllConnections();
+      await new Promise<void>((coz) => { sunucu.close(() => coz()); });
+    }
+  });
+
+  it('geçersiz zaman aşımı yoklamayı asılı bırakmaz, false döner', async () => {
+    for (const sure of [-1, Number.NaN]) {
+      await expect(hedefAyaktaMi('http://x.localhost:1', sure)).resolves.toBe(false);
+      await expect(hedefAyaktaMi('http://127.0.0.1:1', sure)).resolves.toBe(false);
+    }
+  }, 5_000);
+
+  it('localhost dışı ad eski fetch yolundan geçer', async () => {
+    const fetchCagrisi = vi.fn(async () => new Response('', { status: 200 }));
+    vi.stubGlobal('fetch', fetchCagrisi);
+    try {
+      await expect(hedefAyaktaMi('http://ornek.test:1')).resolves.toBe(true);
+      await expect(hedefAyaktaMi('http://notlocalhost.example:1')).resolves.toBe(true);
+      expect(fetchCagrisi).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

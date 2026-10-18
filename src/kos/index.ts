@@ -15,6 +15,7 @@ import { testSureciOrtami } from './ortam.js';
 import { raporuAyristir } from './rapor.js';
 import { kobayOlurkenAgaciOldur, sureciSonlandir } from '../ortak/komut-coz.js';
 import { gizliDegerleriMaskele } from '../beyin/ortak.js';
+import { kokAdres, loopbackAdiMi, loopbackYokla } from './loopback-yokla.js';
 
 export { FixtureModuleMissing, fixtureYenidenAktarimMetni, kaliciCalismaAlaniHazirla } from './calisma-alani.js';
 export { testSureciOrtami } from './ortam.js';
@@ -134,9 +135,20 @@ function kosuSureci(
 
 /** Hedefe HEAD, gerekirse GET ile erişilebildiğini denetler; HTTP hata yanıtı da erişilebilirdir. */
 export async function hedefAyaktaMi(url: string, zamanAsimiMs = 3_000): Promise<boolean> {
+  // Windows'ta Node `*.localhost` adını çözemez (Chromium çözer); bu adlar çözücüsüz loopback'e gider.
+  if (loopbackAdiMi(url)) return loopbackYokla(url, zamanAsimiMs);
+  let hedef: string;
+  try {
+    hedef = kokAdres(url);
+  } catch {
+    return false;
+  }
   for (const method of ['HEAD', 'GET']) {
     try {
-      await fetch(url, { method, signal: AbortSignal.timeout(zamanAsimiMs) });
+      // Yalnız kök adres istenir; yönlendirme izlenmez (loopback yoluyla aynı); yanıt veren uygulama ayaktadır.
+      const yanit = await fetch(hedef, { method, redirect: 'manual', signal: AbortSignal.timeout(zamanAsimiMs) });
+      // Gövde beklenmez: açık tutulan (ör. bitmeyen chunked 302) gövde soketi canlı tutmasın.
+      void yanit.body?.cancel().catch(() => {});
       return true;
     } catch {
       // HEAD reddedilmiş olabilir; GET ile yeniden dene.

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, `kobay explore`, `kobay test run` and `kobay doctor` no longer report
+  "Target app is not reachable" for `localhost` and `*.localhost` addresses such as
+  `http://app.localhost:3000`. The reachability check now connects to loopback
+  directly (RFC 6761) instead of asking the OS resolver, and keeps the original
+  name in the `Host` header. The check requests only the site root (`origin + /`), so no
+  credentials, path or query from the URL are sent, and it does not follow redirects:
+  an app that answers is treated as running.
+- An address with a username or password in it (`http://user:pass@host`) is now rejected:
+  `kobay project create --url`, `kobay project update --base-url` and `--login-url` (and the
+  MCP `project_create`/`project_update` tools) exit with code 2. A config saved earlier with
+  such an address is refused by `kobay explore`, `kobay test plan generate`, `kobay test run`,
+  `kobay test rerun`, `kobay test refresh` and by `kobay project update` unless it fixes that
+  address; the message points to `kobay project update --base-url` (or `--login-url` for the
+  login page), and `kobay doctor` shows the same fix on the `target` line. Save the login
+  with `--login` instead. Before, the password could end up in plain text in `.kobay/map.json`
+  and in the JSON output; `kobay project get` and `kobay project update` (and MCP
+  `project_get` and `project_update`) now also mask the user name and password in their
+  JSON output. A map saved by such an exploration is refused by `kobay test plan generate`,
+  `kobay test run`, `kobay test rerun` and `kobay test refresh` until `kobay explore`
+  rebuilds it, so the password is not sent to the brain.
+- When a login is rejected on the same URL and the server finishes sending the
+  rejection page slowly, the "Login failed" message no longer drops the page's
+  own reason. kobay now waits up to 5 seconds for that page to finish loading
+  before reading its warning.
+
 ## [0.6.0] - 2026-10-14
 
 ### Added

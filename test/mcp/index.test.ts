@@ -217,6 +217,30 @@ describe('MCP sunucusu', () => {
       await baglanti.kapat();
     }
   });
+  it('project_create/project_update kullanıcı bilgili adresi reddeder, parola yanıtta yok', async () => {
+    const cwd = await geciciDizinAc('kobay-mcp-');
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const olustur = await baglanti.istemci.callTool({
+        name: 'project_create', arguments: { url: 'http://admin:Hunter2Pass@localhost:3000' },
+      });
+      expect(olustur.isError).toBe(true);
+      expect(JSON.stringify(olustur)).not.toContain('Hunter2Pass');
+      expect(JSON.stringify(olustur)).toContain('must not contain a username or password');
+      await expect(access(join(cwd, '.kobay'))).rejects.toThrow();
+
+      await baglanti.istemci.callTool({ name: 'project_create', arguments: { url: 'http://localhost:3000' } });
+      for (const alan of [{ baseUrl: 'http://admin:Hunter2Pass@localhost:3000' }, { loginUrl: 'http://admin:Hunter2Pass@localhost:3000/giris' }]) {
+        const guncelle = await baglanti.istemci.callTool({ name: 'project_update', arguments: alan });
+        expect(guncelle.isError).toBe(true);
+        expect(JSON.stringify(guncelle)).not.toContain('Hunter2Pass');
+      }
+      expect(await readFile(join(cwd, '.kobay', 'config.json'), 'utf8')).not.toContain('Hunter2Pass');
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
   it('project_update yalnız verilen alanı değiştirir, proje yoksa hata döner', async () => {
     const cwd = await geciciDizinAc('kobay-mcp-');
     const baglanti = await bagliMcp(cwd);
