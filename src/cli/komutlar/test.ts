@@ -15,6 +15,7 @@ import {
   yeniRunId,
 } from '../../depo/index.js';
 import { girisKuraliIhlali, planDosyasindanTest, planYenile } from '../../plan/index.js';
+import { girisYapilandirildiMi } from './giris-durumu.js';
 import { kostur } from '../../kos/index.js';
 import { kodUret } from '../../uret/index.js';
 import { CIKIS, type CikisKodu } from '../cikis.js';
@@ -31,6 +32,8 @@ import {
 import {
   belgeYoluDenetle,
   dizinBul,
+  kayitliAdresleriDenetle,
+  kayitliHaritayiDenetle,
   hataPaketiVarsayilanYol,
   hataPaketiYoluDenetle,
   haritaSagla,
@@ -83,9 +86,9 @@ export async function testCreate(a: { cwd: string; planPath: string }): Promise<
     }
     const test = planDosyasindanTest(plan);
     if (test.url !== undefined) test.url = planUrlDogrula(test.url, (await dizin.configOku()).baseUrl);
-    // Plan üretimiyle aynı kural: kayıtlı kimlik varsa oturum kobay'ın giriş adımıyla açılır ve test
-    // gerçek kimliği yazamaz. Anlamı değişmesin diye plan reddedilir, test yazılmaz.
-    const girisIhlali = girisKuraliIhlali(test.planSteps, (await dizin.kimlikOku()) !== null);
+    // Plan üretimiyle aynı kural: kayıtlı kimlik ya da içe alınan oturum varsa oturum zaten açılır ve
+    // test gerçek kimliği yazamaz. Anlamı değişmesin diye plan reddedilir, test yazılmaz.
+    const girisIhlali = girisKuraliIhlali(test.planSteps, await girisYapilandirildiMi(dizin));
     if (girisIhlali !== null) {
       throw new UsageError(
         `${girisIhlali}. Remove that step, or test the login flow only with invalid or empty values.`,
@@ -224,6 +227,10 @@ async function tekTestKostur(
   const { rerun, analizYok } = secenek;
   try {
     const config = await dizin.configOku();
+    // Kimlikli kayıtlı adresle hiçbir şey yazılmaz, kod üretilmez, tarayıcı açılmaz (exit 2).
+    kayitliAdresleriDenetle(config);
+    // Kod üretimi ve hata analizi haritayı beyne yollar: eski kimlikli harita da reddedilir.
+    kayitliHaritayiDenetle(await dizin.haritaOku());
     let guncelTest = test;
     const mevcutKod = await dizin.kodOku(test.id);
     // `--no-analysis` (CI): beyin yok, kod üretilemez. Kodsuz ya da taslak (planı
@@ -408,15 +415,16 @@ export async function testResult(a: { cwd: string; id: string; history?: boolean
   });
 }
 
-export async function failureGet(a: { cwd: string; id: string; out?: string }): Promise<KomutSonucu> {
+export async function failureGet(a: { cwd: string; id: string; out?: string; includeTrace?: boolean }): Promise<KomutSonucu> {
   return komutCalistir(async () => {
     const dizin = await dizinBul(a.cwd);
     const istenen = a.out ?? await hataPaketiVarsayilanYol(dizin.projeKoku, a.id);
     const hedef = isAbsolute(istenen) ? istenen : resolve(a.cwd, istenen);
     // Paket oturum çerezi taşır: .git/, .claude/, .kobay/ altı yasak, tek istisna .kobay/failure-out/.
     await hataPaketiYoluDenetle(dizin.projeKoku, hedef, '--out');
+    let kopya;
     try {
-      await dizin.hataPaketiKopyala(a.id, hedef);
+      kopya = await dizin.hataPaketiKopyala(a.id, hedef, { traceDahil: a.includeTrace === true });
     } catch (hata: unknown) {
       if (hata instanceof FileNotFound) {
         throw new UsageError(
@@ -428,7 +436,18 @@ export async function failureGet(a: { cwd: string; id: string; out?: string }): 
     }
     // İnsan modunda düz metin stdout'a: `kobay test failure get ... > not.txt` yönlendirmesi
     // JSON dökümü değil, okunur satırı almalı.
-    return basariliMetin({ id: a.id, destination: hedef }, `Failure bundle copied: ${hedef}`);
+    // trace.zip oturum çerezini açık taşır (spec 2026-11-06 Ş-C): varsayılan kopyada yok, yeri söylenir.
+    const satirlar = [`Failure bundle copied: ${hedef}`];
+    if (kopya.traceDahil) {
+      satirlar.push(`Trace included: ${kopya.traceYolu ?? ''} (it contains session cookies in plain text; do not share it)`);
+    } else if (kopya.traceYolu !== null) {
+      satirlar.push(`Trace not copied (it contains session cookies in plain text): ${kopya.traceYolu}; pass --include-trace to copy it`);
+    }
+    return basariliMetin({
+      id: a.id,
+      destination: hedef,
+      trace: { included: kopya.traceDahil, path: kopya.traceYolu },
+    }, satirlar.join('\n'));
   });
 }
 
@@ -471,6 +490,15 @@ export async function testRefresh(a: { cwd: string; id: string; run?: boolean })
       },
       dizin.yol('logs'),
     );
+    // Plan üretimi ve elle planla aynı kural: giriş yapılandırılmışsa beynin yenilediği adımlar gerçek
+    // kimliği yazamaz. Beyin çıktısı reddi motor hatasıdır (exit 4); eski test hiç yazılmadan kalır.
+    const girisIhlali = girisKuraliIhlali(yeniPlan.planSteps, await girisYapilandirildiMi(dizin));
+    if (girisIhlali !== null) {
+      throw new Error(
+        `The refreshed plan was rejected: ${girisIhlali}. The test was not changed.`
+        + ` Run \`kobay test refresh ${a.id}\` again; to write the steps yourself, create a new test with \`kobay test create --plan <file>\`.`,
+      );
+    }
 
     // status draft: `test run` eski kodu atıp yeniden üretir; kodu ayrıca silmek gerekmez.
     const guncelTest: TestKaydi = {

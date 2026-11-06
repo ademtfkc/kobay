@@ -127,6 +127,21 @@ const PaketMetaSemasi = v.object({ snapshotId: v.string() });
 /** Paketin hangi koşuyu gösterdiğini okumak için; paketin geri kalanı doğrulanmaz. */
 const PaketKosuSemasi = v.object({ runId: v.string() });
 
+/** Trace arşivinin adı: koşu dizininde (ve eski sürümlerin paketinde) bu adla durur. */
+const TRACE_ADI = 'trace.zip';
+
+export interface HataPaketiKopyaSecenekleri {
+  /** true ise trace.zip de kopyalanır; oturum çerezini açık taşıdığı için varsayılan false. */
+  traceDahil?: boolean;
+}
+
+export interface HataPaketiKopyaSonucu {
+  /** trace.zip kopyaya girdi mi. */
+  traceDahil: boolean;
+  /** Girdiyse kopyadaki yolu; girmediyse diskteki yeri (önce koşu dizini); hiç trace yoksa null. */
+  traceYolu: string | null;
+}
+
 /** Test başına `.kobay/runs/` altında saklanan koşu dizini sayısı; eskisi budanır. */
 export const SAKLANAN_KOSU = 5;
 
@@ -1775,6 +1790,8 @@ export class KobayDizini {
       await yazAtomik(partialYolu, '');
       for (const ek of ekDosyalar) {
         guvenliAd(ek.hedefAd);
+        // trace.zip oturum çerezini açık taşır (spec 2026-11-06 Ş-C): pakette hiç durmaz.
+        if (ek.hedefAd.toLowerCase() === TRACE_ADI) continue;
         // `icerik` verilmişse (maskelenmiş metin kanıtı) o yazılır; yoksa bayt bayt kopya.
         await yazAtomik(altYol(geciciDizin, ek.hedefAd), ek.icerik ?? await readFile(ek.kaynak));
       }
@@ -1832,18 +1849,33 @@ export class KobayDizini {
   /**
    * Yayımlanmış paketin dosyalarını boş bir klasöre kopyalar. Kopya sırasında
    * paket yeniden yazıldıysa (snapshotId değiştiyse) yarım kopya kabul edilmez.
+   *
+   * trace.zip oturum çerezini açık taşır (spec 2026-11-06 Ş-C): yalnız `traceDahil`
+   * ile kopyalanır. Kaynak, paketin gösterdiği koşunun `runs/<runId>/trace.zip`'i;
+   * yoksa eski sürümün paketine koyduğu kopya. Symlink trace izlenmez.
+   * Bulunan trace'in diskteki yolunu (yoksa null) döndürür.
    */
-  private async paketDosyalariniKopyala(testId: string, hedef: string): Promise<void> {
+  private async paketDosyalariniKopyala(testId: string, hedef: string, traceDahil: boolean): Promise<string | null> {
     const kaynak = this.hataPaketiYolu(testId);
     const oncekiMeta = await jsonOku(join(kaynak, 'meta.json'), PaketMetaSemasi);
+    const { runId } = await jsonOku(join(kaynak, 'failure.json'), PaketKosuSemasi);
+    let paketIzi: string | null = null;
     for (const girdi of await readdir(kaynak, { withFileTypes: true })) {
       if (!girdi.isFile()) continue;
+      if (girdi.name === TRACE_ADI) {
+        paketIzi = join(kaynak, girdi.name);
+        continue;
+      }
       await yazAtomik(join(hedef, girdi.name), await readFile(join(kaynak, girdi.name)));
     }
+    const kosuIzi = this.kosuYolu(runId, TRACE_ADI);
+    const izKaynagi = await lstat(kosuIzi).then((bilgi) => bilgi.isFile(), () => false) ? kosuIzi : paketIzi;
+    if (traceDahil && izKaynagi !== null) await yazAtomik(join(hedef, TRACE_ADI), await readFile(izKaynagi));
     const sonrakiMeta = await jsonOku(join(kaynak, 'meta.json'), PaketMetaSemasi);
     if (oncekiMeta.snapshotId !== sonrakiMeta.snapshotId) {
       throw new Error(`Failure bundle changed while being copied: ${testId}`);
     }
+    return izKaynagi;
   }
 
   /**
@@ -1852,24 +1884,30 @@ export class KobayDizini {
    * Böylece aynı testin yeni paketi eskisini eksiksiz değiştirir; kopya yarıda
    * kalırsa var olan klasöre dokunulmamış olur.
    */
-  private async hataPaketiniYerineKoy(testId: string, hedef: string): Promise<void> {
+  private async hataPaketiniYerineKoy(testId: string, hedef: string, traceDahil: boolean): Promise<string | null> {
     const reddet = (yol: string, sebep: string): Error => new UnsafeOutputPath(yol, sebep);
     await this.cikisKokunuHazirla(reddet);
     // `failure/` ile aynı kilit: aynı testin kopyalayıcıları sıraya girer (en iyi çaba).
     const kilit = await paketKilidiniAl({ kobayKoku: this.kok, ad: 'failure-out', testId, reddet });
     try {
-      await this.hataPaketiniKilitAltindaYerineKoy(testId, hedef, kilit);
+      return await this.hataPaketiniKilitAltindaYerineKoy(testId, hedef, kilit, traceDahil);
     } finally {
       await kilit.birak();
     }
   }
 
-  private async hataPaketiniKilitAltindaYerineKoy(testId: string, hedef: string, kilit: PaketKilidi): Promise<void> {
+  private async hataPaketiniKilitAltindaYerineKoy(
+    testId: string,
+    hedef: string,
+    kilit: PaketKilidi,
+    traceDahil: boolean,
+  ): Promise<string | null> {
     const cikisKoku = await this.varsayilanCikisiDogrula(hedef);
     const geciciDizin = altYol(cikisKoku, `.tmp-${testId}-${randomUUID()}`);
     await mkdir(geciciDizin, { recursive: false });
+    let izKaynagi: string | null = null;
     try {
-      await this.paketDosyalariniKopyala(testId, geciciDizin);
+      izKaynagi = await this.paketDosyalariniKopyala(testId, geciciDizin, traceDahil);
     } catch (hata: unknown) {
       await geciciyiSilipFirlat(geciciDizin, hata);
     }
@@ -1895,6 +1933,7 @@ export class KobayDizini {
     await this.varsayilanCikisiDogrula(hedef);
     if (eskiDizinler.length > 0) await kilit.dogrula();
     await eskileriSil(eskiDizinler);
+    return izKaynagi;
   }
 
   /**
@@ -1950,13 +1989,20 @@ export class KobayDizini {
    * yazılır: eski paketten kalıntı kalmaz. Kullanıcının verdiği başka bir
    * klasör var olamaz; oradaki dosyaları ezmeyiz.
    */
-  async hataPaketiKopyala(testId: string, hedefKlasor: string): Promise<void> {
+  async hataPaketiKopyala(
+    testId: string,
+    hedefKlasor: string,
+    secenekler: HataPaketiKopyaSecenekleri = {},
+  ): Promise<HataPaketiKopyaSonucu> {
     kimlikDogrula(testId, 'testId');
     await this.hataPaketiOku(testId);
     const hedef = resolve(hedefKlasor);
+    const traceDahil = secenekler.traceDahil === true;
+    const sonuc = (iz: string | null): HataPaketiKopyaSonucu => (traceDahil && iz !== null
+      ? { traceDahil: true, traceYolu: join(hedef, TRACE_ADI) }
+      : { traceDahil: false, traceYolu: iz });
     if (hedef === hataPaketiCikisYolu(this.projeKoku, testId)) {
-      await this.hataPaketiniYerineKoy(testId, hedef);
-      return;
+      return sonuc(await this.hataPaketiniYerineKoy(testId, hedef, traceDahil));
     }
 
     try {
@@ -1969,7 +2015,7 @@ export class KobayDizini {
 
     await mkdir(dirname(hedef), { recursive: true });
     await mkdir(hedef, { recursive: false });
-    await this.paketDosyalariniKopyala(testId, hedef);
+    return sonuc(await this.paketDosyalariniKopyala(testId, hedef, traceDahil));
   }
 
   /** Yayımlanmış paketin gösterdiği koşu; paket yoksa ya da okunamıyorsa undefined. */

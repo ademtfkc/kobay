@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { readdir, readFile, writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import { inflateRawSync } from 'node:zlib';
 import { chromium } from '@playwright/test';
@@ -117,7 +117,7 @@ async function tumDosyalar(kok: string): Promise<string[]> {
   return girdiler.filter((g) => g.isFile()).map((g) => join(g.parentPath, g.name));
 }
 
-it('içe alınan oturumla koşu: trace.zip dışındaki hiçbir çıktıda çerez/localStorage değeri yok; trace.zip bilinen sınır', async (context) => {
+it('içe alınan oturumla koşu: trace.zip dışındaki hiçbir çıktıda çerez/localStorage değeri yok; trace.zip yalnız koşu dizininde ve --include-trace kopyasında', async (context) => {
   if (!tarayiciMumkun(context)) return;
   const cwd = await geciciDizinAc('kobay-oturum-sizinti-');
   const kaynak = join(cwd, 'state.json');
@@ -167,6 +167,8 @@ test('Records page shows the total', async ({ page }) => {
 `);
   expect(await adim('test', 'run', test.id, '--rerun', '--no-analysis'), ciktilar.at(-1)).toBe(1);
   expect(await adim('test', 'failure', 'get', test.id)).toBe(0);
+  // Spec 2026-11-06 Ş-C: trace yalnız açık seçenekle paket kopyasına girer.
+  expect(await adim('test', 'failure', 'get', test.id, '--include-trace', '--out', 'trace-out')).toBe(0);
   expect(await adim('test', 'report', '--all')).toBe(0);
 
   const dosyalar = (await tumDosyalar(cwd)).filter((yol) => yol !== kaynak && yol !== join(cwd, '.kobay', 'storageState.json'));
@@ -183,10 +185,16 @@ test('Records page shows the total', async ({ page }) => {
   // trace.zip DIŞINDAKİ her dosya (harita, koşu sonucu, adımlar, DOM, hata paketi JSON'u, HTML rapor,
   // komut çıktıları) temiz.
   expect(sizanlar.filter((ad) => !ad.includes('trace.zip!'))).toEqual([]);
-  // Bilinen, README'de belgeli sınır ("Traces contain session cookies"; `src/kos`, bu şeridin dokunma
-  // listesinde değil): Playwright trace'i bağlam seçeneklerindeki storageState'i (`.trace`) ve isteklerin
+  // Bilinen, README'de belgeli sınır ("Traces contain session cookies"): Playwright trace'i bağlam seçeneklerindeki storageState'i (`.trace`) ve isteklerin
   // Cookie başlığını (`.network`) olduğu gibi kaydeder. `--login` yolunun oturumu da aynı yoldan geçer;
   // içe alınan oturuma özgü değil. Trace maskelenirse bu satır düşer ve yukarıdaki süzgeç kaldırılır.
   expect([...new Set(sizanlar.map((ad) => ad.replace(/^.*trace\.zip!/, '')))].sort()).toEqual(['1-trace.network', '1-trace.trace']);
+  // Spec 2026-11-06 Ş-C: çerezi taşıyan trace yalnız koşu dizininde ve --include-trace ile istenen kopyada;
+  // hata paketi (.kobay/failure/) ve varsayılan kopya (.kobay/failure-out/) trace'siz.
+  const sizanIzler = [...new Set(sizanlar.map((ad) => ad.replace(/!.*$/, '').split(sep).join('/')))].sort();
+  const kosular = await dizin.kosuListele(test.id);
+  expect(kosular).toHaveLength(1);
+  expect(sizanIzler).toEqual([`.kobay/runs/${kosular[0]?.runId ?? ''}/trace.zip`, 'trace-out/trace.zip']);
+  expect(dosyalar.filter((yol) => yol.endsWith('trace.zip')).map((yol) => relative(cwd, yol).split(sep).join('/')).sort()).toEqual(sizanIzler);
   for (const cikti of ciktilar) for (const deger of [SID, JWT]) expect(cikti).not.toContain(deger);
 }, 180_000);

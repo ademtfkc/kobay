@@ -314,6 +314,111 @@ describe('depo budama', () => {
   });
 });
 
+describe('trace.zip budaması (spec 2026-11-06 Ş-C, yükseltilmiş projeler)', () => {
+  it('removes failure bundle traces and traces of passed runs, keeping failed, blocked and unreadable runs', async () => {
+    const dizin = await proje();
+    const testId = 't_abc12345';
+    await testVar(dizin, testId);
+    const gecen = await kosuYaz(dizin, testId, 1, 'passed');
+    const basarisiz = await kosuYaz(dizin, testId, 2, 'failed');
+    const engelli = await kosuYaz(dizin, testId, 3, 'blocked');
+    const okunamayan = runId(4);
+    await mkdir(dizin.yol('runs', okunamayan));
+    await writeFile(dizin.yol('runs', okunamayan, 'result.json'), '{bozuk');
+    const sonucsuz = runId(5);
+    await mkdir(dizin.yol('runs', sonucsuz));
+    for (const id of [gecen, basarisiz, engelli, okunamayan, sonucsuz]) {
+      await writeFile(dizin.yol('runs', id, 'trace.zip'), `iz-${id}`);
+    }
+    await mkdir(dizin.yol('failure', testId));
+    await writeFile(dizin.yol('failure', testId, 'failure.json'), JSON.stringify({ runId: basarisiz }));
+    await writeFile(dizin.yol('failure', testId, 'trace.zip'), 'eski-paket-izi');
+
+    const sonuc = await depoyuBuda(dizin);
+
+    expect(sonuc.deleted.map((oge) => [oge.path, oge.kind])).toEqual([
+      [`.kobay/failure/${testId}/trace.zip`, 'failure-bundle-trace'],
+      [`.kobay/runs/${gecen}/trace.zip`, 'passed-run-trace'],
+    ]);
+    await expect(access(dizin.yol('failure', testId, 'trace.zip'))).rejects.toThrow();
+    await expect(access(dizin.yol('failure', testId, 'failure.json'))).resolves.toBeUndefined();
+    await expect(access(dizin.yol('runs', gecen, 'trace.zip'))).rejects.toThrow();
+    await expect(access(dizin.yol('runs', gecen, 'result.json'))).resolves.toBeUndefined();
+    for (const id of [basarisiz, engelli, okunamayan, sonucsuz]) {
+      await expect(readFile(dizin.yol('runs', id, 'trace.zip'), 'utf8')).resolves.toBe(`iz-${id}`);
+    }
+  });
+
+  it('dry-run lists the traces without removing them', async () => {
+    const dizin = await proje();
+    const testId = 't_abc12345';
+    await testVar(dizin, testId);
+    const gecen = await kosuYaz(dizin, testId, 1, 'passed');
+    await writeFile(dizin.yol('runs', gecen, 'trace.zip'), 'iz');
+    await mkdir(dizin.yol('failure', testId));
+    await writeFile(dizin.yol('failure', testId, 'trace.zip'), 'iz');
+
+    const sonuc = await depoyuBuda(dizin, { dryRun: true });
+
+    expect(sonuc.wouldDelete.map((oge) => oge.kind)).toEqual(['failure-bundle-trace', 'passed-run-trace']);
+    expect(sonuc.wouldReclaimBytes).toBe(4);
+    await expect(access(dizin.yol('runs', gecen, 'trace.zip'))).resolves.toBeUndefined();
+    await expect(access(dizin.yol('failure', testId, 'trace.zip'))).resolves.toBeUndefined();
+  });
+
+  it('keeps the trace of a passed run that the failure bundle points to', async () => {
+    const dizin = await proje();
+    const testId = 't_abc12345';
+    await testVar(dizin, testId);
+    const gecen = await kosuYaz(dizin, testId, 1, 'passed');
+    await writeFile(dizin.yol('runs', gecen, 'trace.zip'), 'iz');
+    await mkdir(dizin.yol('failure', testId));
+    await writeFile(dizin.yol('failure', testId, 'failure.json'), JSON.stringify({ runId: gecen }));
+
+    const sonuc = await depoyuBuda(dizin);
+
+    expect(sonuc.deleted).toEqual([]);
+    await expect(access(dizin.yol('runs', gecen, 'trace.zip'))).resolves.toBeUndefined();
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses a failure bundle directory that is a symlink, leaving its target alone', async () => {
+    const dizin = await proje();
+    const disari = await geciciDizinAc('kobay-prune-outside-');
+    await writeFile(join(disari, 'trace.zip'), 'valuable');
+    await symlink(disari, dizin.yol('failure', 't_abc12345'));
+
+    await expect(depoyuBuda(dizin, { dryRun: true })).rejects.toBeInstanceOf(UnsafePrunePath);
+    await expect(depoyuBuda(dizin)).rejects.toBeInstanceOf(UnsafePrunePath);
+    await expect(readFile(join(disari, 'trace.zip'), 'utf8')).resolves.toBe('valuable');
+  });
+
+  it.skipIf(process.platform === 'win32')('removes a trace.zip link in a bundle without following it', async () => {
+    const dizin = await proje();
+    const disari = await geciciDizinAc('kobay-prune-outside-');
+    await writeFile(join(disari, 'hedef.zip'), 'valuable');
+    await mkdir(dizin.yol('failure', 't_abc12345'));
+    await symlink(join(disari, 'hedef.zip'), dizin.yol('failure', 't_abc12345', 'trace.zip'));
+
+    const sonuc = await depoyuBuda(dizin);
+
+    expect(sonuc.deleted.map((oge) => oge.kind)).toEqual(['failure-bundle-trace']);
+    await expect(readFile(join(disari, 'hedef.zip'), 'utf8')).resolves.toBe('valuable');
+  });
+
+  it('leaves a directory named trace.zip alone', async () => {
+    const dizin = await proje();
+    await testVar(dizin, 't_abc12345');
+    const gecen = await kosuYaz(dizin, 't_abc12345', 1, 'passed');
+    await mkdir(dizin.yol('runs', gecen, 'trace.zip'));
+    await writeFile(dizin.yol('runs', gecen, 'trace.zip', 'veri'), 'x');
+
+    const sonuc = await depoyuBuda(dizin);
+
+    expect(sonuc.deleted.filter((oge) => oge.kind === 'passed-run-trace')).toEqual([]);
+    await expect(access(dizin.yol('runs', gecen, 'trace.zip', 'veri'))).resolves.toBeUndefined();
+  });
+});
+
 describe('0.1 data migration notice', () => {
   it('writes one stderr line only when migration changes data', async () => {
     const kok = await geciciDizinAc('kobay-migration-notice-');

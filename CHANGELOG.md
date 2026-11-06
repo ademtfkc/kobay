@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-07
+
+### Changed
+
+- **Breaking:** a passing test no longer keeps a Playwright trace. The
+  generated `.kobay/playwright.config.ts` now uses `trace: 'retain-on-failure'`
+  (was `'on'`), so `trace.zip` is written only for a failed test, at
+  `.kobay/runs/<run-id>/trace.zip`. A trace records the session cookies and
+  storage in plain text.
+- **Breaking:** the failure bundle no longer contains `trace.zip`. The analysis
+  never read it; it stays in the run folder, and pruning keeps the run a bundle
+  points at. `kobay test failure get` copies it only with the new
+  `--include-trace` flag (MCP `failure_get`: `includeTrace: true`); without it,
+  the output names the trace's path. A `trace.zip` left in a bundle written by
+  0.6.0 or older is skipped too, and the next `test failure get` into
+  `.kobay/failure-out/<id>/` replaces an earlier copy that held one. The JSON
+  `data` of `test failure get` gains `trace: { included, path }` (`path` is
+  `null` when the run has no trace).
+- `kobay prune` now stops with exit 2 (`Unsafe prune path`) when a folder in
+  `.kobay/failure/` is a symlink, also with `--dry-run`; it used to skip such a
+  folder silently. Nothing is deleted in that case; remove or replace the link
+  and run it again.
+- `kobay prune` (and the MCP `prune` tool, whose preview lists them) now
+  removes the `trace.zip` left inside `.kobay/failure/<id>/` and the
+  `trace.zip` of runs whose recorded verdict is `passed` (new item kinds
+  `failure-bundle-trace` and `passed-run-trace`, reason `trace-retention`).
+  Traces of failed, blocked or inconclusive runs, and of runs whose
+  `result.json` is missing or unreadable, stay. A rewritten failure bundle
+  never holds a `trace.zip`. **Projects upgraded from 0.6.0 or older should run
+  `kobay prune` once** to remove the older traces.
+
+### Documentation
+
+- The plan's credential filter is now a documented permanent limit: it can drop
+  a useful invalid-login proposal with a fake value such as
+  `Enter 'wrong_password_qa' in the Password field`, and it will not get more
+  rule rounds. It never lets a real credential step through.
+- `SECURITY.md` states that the generated-code check stays a speed bump, not a
+  sandbox, in 1.0 too; an escape is a known limit unless it beats a pattern the
+  README says is rejected.
+
+### Fixed
+
+- `kobay project update` no longer loops when both the saved `baseUrl` and `loginUrl` contain a username or password: a one-flag fix is refused with a single message that lists every address still holding credentials and asks for `kobay project update --base-url <URL> --login-url <URL>` in one command.
+- `kobay doctor` run outside a project now exits with code 2 and `ok: false` (still printing every row, with the `kobay project create --url <URL>` hint) instead of exiting 0; inside a project, failing rows still exit 0.
+- The `kobay doctor` JSON envelope outside a project carries both `error` (`UsageError`) and `data` (the rows); this is the first case where an envelope holds the two together.
+- The `kobay doctor` `target` row gives one combined hint when both the saved `baseUrl` and `loginUrl` contain credentials.
+- `kobay explore --seed /records` (and the MCP `explore` tool's `seeds`) now accepts a path starting with `/` and resolves it against the origin of the target URL (`http://h/app` + `/records` is `http://h/records`, not under `/app`); the resolved address still has to be on the project origin and carry no username or password. A seed that cannot be parsed, or one with a scheme other than http or https, gets the error message with an example; an off-origin seed or one carrying credentials gets its own message.
+- On Windows, `kobay explore`, `kobay test run` and `kobay doctor` no longer report
+  "Target app is not reachable" for `localhost` and `*.localhost` addresses such as
+  `http://app.localhost:3000`. The reachability check now connects to loopback
+  directly (RFC 6761) instead of asking the OS resolver, and keeps the original
+  name in the `Host` header. The check requests only the site root (`origin + /`), so no
+  credentials, path or query from the URL are sent, and it does not follow redirects:
+  an app that answers is treated as running.
+- An address with a username or password in it (`http://user:pass@host`) is now rejected:
+  `kobay project create --url`, `kobay project update --base-url` and `--login-url` (and the
+  MCP `project_create`/`project_update` tools) exit with code 2. A config saved earlier with
+  such an address is refused by `kobay explore`, `kobay test plan generate`, `kobay test run`,
+  `kobay test rerun`, `kobay test refresh` and by `kobay project update` unless it fixes that
+  address; the message points to `kobay project update --base-url` (or `--login-url` for the
+  login page), and `kobay doctor` shows the same fix on the `target` line. Save the login
+  with `--login` instead. Before, the password could end up in plain text in `.kobay/map.json`
+  and in the JSON output; `kobay project get` and `kobay project update` (and MCP
+  `project_get` and `project_update`) now also mask the user name and password in their
+  JSON output. A map saved by such an exploration is refused by `kobay test plan generate`,
+  `kobay test run`, `kobay test rerun` and `kobay test refresh` until `kobay explore`
+  rebuilds it, so the password is not sent to the brain.
+- When a login is rejected on the same URL and the server finishes sending the
+  rejection page slowly, the "Login failed" message no longer drops the page's
+  own reason. kobay now waits up to 5 seconds for that page to finish loading
+  before reading its warning.
+
+### Security
+
+- The real-credential refusal message now says the session is authenticated by
+  kobay's login step or an imported session (it named only the login step).
+- `kobay test create --plan` (and the MCP `test_create` tool) now rejects a plan
+  step that enters the real password or another secret also in a project set up
+  with an imported session (`--session-file`). Before, the rule was on only when
+  `credentials.json` existed, so such a step was accepted. Exit code `2`, no test
+  is written. A hand-written plan is still not checked against the exploration map.
+- `kobay test refresh` (and the MCP `test_refresh` tool) now runs the refreshed
+  steps from the brain through the same rule when a login is saved or a session
+  is imported. A step that enters the real credentials is rejected with exit
+  code `4`, the message names the step, and the test file is left unchanged.
+
 ## [0.6.0] - 2026-10-14
 
 ### Added
@@ -983,7 +1070,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/ademtfkc/kobay/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ademtfkc/kobay/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ademtfkc/kobay/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ademtfkc/kobay/compare/v0.3.1...v0.4.0

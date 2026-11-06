@@ -20,6 +20,9 @@ steps to reproduce and what an attacker gains.
 Do not attach `trace.zip`, screenshots, run videos (`video.webm`), an HTML
 report, a failure bundle or anything from `.kobay/` without checking it first:
 traces carry session cookies, and screenshots and videos are not redacted.
+kobay keeps a trace only for a failed test, in `.kobay/runs/<run-id>/trace.zip`,
+and `test failure get` leaves it out of the bundle unless you pass
+`--include-trace`; never attach a bundle copied with that flag.
 
 This is a small project maintained in spare time. You will get an answer, but
 there is no response-time guarantee.
@@ -46,3 +49,9 @@ runs or a `test refresh` that reuses a saved session send whatever the app
 sends, session cookies included.
 Use a test account, not a production one. Reports that make one of these
 worse than described are welcome.
+
+The code check stays a speed bump in 1.0 as well. It is not a sandbox and is
+not planned to become one before 1.0: a way around it is a known limit, not a
+vulnerability, unless it beats a pattern the README says the check rejects.
+Real isolation (a container or a separate user) is the only fix, and it is
+out of scope for 1.0.

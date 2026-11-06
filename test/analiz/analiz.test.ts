@@ -179,7 +179,9 @@ describe('hataAnalizEt', () => {
     expect(okunan).toEqual(paket);
     expect(okunan.failure.evidence.map((kanit) => kanit.path)).toEqual(['step-1.png', 'step-1.html', 'console.json', 'network.json']);
     await Promise.all(okunan.failure.evidence.map((kanit) => access(join(dizin.yol('failure', test.id), kanit.path))));
-    await expect(access(join(dizin.yol('failure', test.id), 'trace.zip'))).resolves.toBeUndefined();
+    // Spec 2026-11-06 Ş-C: koşunun trace'i pakete girmez, koşu dizininde kalır.
+    await expect(access(join(kosuDizini, 'trace.zip'))).resolves.toBeUndefined();
+    await expect(access(join(dizin.yol('failure', test.id), 'trace.zip'))).rejects.toThrow();
     const gunluk = await readFile(join(kosuDizini, `brain-analysis-${test.id}-1.log`), 'utf8');
     expect(gunluk).toContain('"stepIndex": 1');
     expect(gunluk).toContain('konsol-20');
@@ -568,7 +570,7 @@ describe.skipIf(process.platform === 'win32')('hata paketi yolu symlink denetimi
     await expect(hataPaketiYolunuDenetle(dizin, test.id)).rejects.toBeInstanceOf(UnsafeBundlePath);
   });
 
-  it('pakete kopyalanan metin kanıtlarını maskeler; PNG ve trace.zip bayt bayt aynı kalır', async () => {
+  it('pakete kopyalanan metin kanıtlarını maskeler; PNG bayt bayt aynı kalır; trace.zip pakete girmez', async () => {
     const envDegeri = 'kobay-env-gizli-9f8e7d6c';
     vi.stubEnv('KOBAY_KANIT_TEST_TOKEN', envDegeri);
     try {
@@ -600,7 +602,9 @@ describe.skipIf(process.platform === 'win32')('hata paketi yolu symlink denetimi
       }
       expect(await readFile(join(paketDizini, 'step-1.html'), 'utf8')).toContain('<h1>Yeni ürün</h1>');
       expect((await readFile(join(paketDizini, 'step-1.png'))).equals(png)).toBe(true);
-      expect((await readFile(join(paketDizini, 'trace.zip'))).equals(trace)).toBe(true);
+      // Spec 2026-11-06 Ş-C: trace.zip oturum çerezini açık taşır; pakete kopyalanmaz, koşu dizininde yerinde kalır.
+      await expect(access(join(paketDizini, 'trace.zip'))).rejects.toThrow();
+      expect((await readFile(join(kosuDizini, 'trace.zip'))).equals(trace)).toBe(true);
       // Koşu dizinindeki özgün kanıt değişmez.
       await expect(readFile(join(kosuDizini, 'console.json'), 'utf8')).resolves.toBe(hamKonsol);
       await expect(readFile(join(kosuDizini, 'step-1.html'), 'utf8')).resolves.toBe(hamDom);

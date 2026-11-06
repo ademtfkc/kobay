@@ -1,8 +1,10 @@
 import { stat } from 'node:fs/promises';
 import { hedefAyaktaMi } from '../../kos/index.js';
+import { CIKIS } from '../cikis.js';
 import { basariliMetin, type KomutSonucu } from '../komut.js';
 import { chromiumVarMi, komutVarMi } from './setup.js';
 import { KobayDizini, adresKimligiGizle } from '../../depo/index.js';
+import { adresKimlikliMi } from './ortak.js';
 
 /** Doctor satırı: `oneri` yalnız `ok: false` iken bulunur. */
 export interface Kontrol {
@@ -95,10 +97,25 @@ export async function doctor(a: {
   ]);
   let hedef = false;
   let baseUrl: string | undefined;
+  // Kimlikli kayıtlı adres yoklanmaz (parola hedefe gitmez); satır düzeltme komutunu söyler.
+  let kimlikliAdresNotu: string | undefined;
   if (dizin !== null) {
     try {
-      baseUrl = (await dizin.configOku()).baseUrl;
-      hedef = await hedefAyaktaMi(baseUrl);
+      const config = await dizin.configOku();
+      baseUrl = config.baseUrl;
+      if (adresKimlikliMi(baseUrl) && config.loginUrl !== undefined && adresKimlikliMi(config.loginUrl)) {
+        // İki adres de kimlikli: tek bayrak kısır döngü açar, `kayitliAdresleriDenetle` ile aynı birleşik öneri.
+        kimlikliAdresNotu = `${adresKimligiGizle(baseUrl)} and login URL ${adresKimligiGizle(config.loginUrl)} contain a username or password;`
+          + ' fix both in one command: `kobay project update --base-url <URL> --login-url <URL>`';
+      } else if (adresKimlikliMi(baseUrl)) {
+        kimlikliAdresNotu = `${adresKimligiGizle(baseUrl)} contains a username or password;`
+          + ' fix it with `kobay project update --base-url <URL>`';
+      } else if (config.loginUrl !== undefined && adresKimlikliMi(config.loginUrl)) {
+        kimlikliAdresNotu = `login URL ${adresKimligiGizle(config.loginUrl)} contains a username or password;`
+          + ' fix it with `kobay project update --login-url <URL>`';
+      } else {
+        hedef = await hedefAyaktaMi(baseUrl);
+      }
     } catch {
       hedef = false;
     }
@@ -132,7 +149,7 @@ export async function doctor(a: {
       ok: hedef,
       oneri: dizin === null
         ? 'no project; run `kobay project create --url <URL>` first'
-        : `${baseUrl === undefined ? 'target' : adresKimligiGizle(baseUrl)} is not reachable; start the app or fix the address with \`kobay project update --base-url <URL>\``,
+        : kimlikliAdresNotu ?? `${baseUrl === undefined ? 'target' : adresKimligiGizle(baseUrl)} is not reachable; start the app or fix the address with \`kobay project update --base-url <URL>\``,
     },
   ];
   const metin = ham
@@ -141,5 +158,15 @@ export async function doctor(a: {
   // `oneri` yalnız düşen kontrolde yazılır: ok:true satırda öneri bırakmak
   // ajanı yanıltıyordu (hedef ayaktayken "ayakta değil" önerisi gibi).
   const kontroller: Kontrol[] = ham.map(({ ad, ok, oneri }) => ({ name: ad, ok, ...(ok ? {} : { hint: oneri }) }));
+  // Proje bulunamadıysa satırlar yine basılır ama bu bir kullanım hatasıdır (exit 2, ok:false).
+  // Proje varken düşen satırlar exit 0 kalır: doctor orada bir rapordur.
+  if (dizin === null) {
+    return {
+      exitCode: CIKIS.KULLANIM,
+      json: kontroller,
+      metin,
+      hata: { code: 'UsageError', message: 'Not a kobay project; run `kobay project create --url <URL>`' },
+    };
+  }
   return basariliMetin(kontroller, metin);
 }

@@ -311,7 +311,7 @@ export function programOlustur(
 
   program.command('explore')
     .description('browses the target app and refreshes the exploration map (.kobay/map.json)')
-    .option('--seed <url>', 'extra start URL on the project origin; repeatable', biriktir)
+    .option('--seed <url>', 'extra start URL on the project origin; repeatable; a path like /records is resolved against the origin of the target URL, not its subpath', biriktir)
     .option('--no-sitemap', 'do not read /sitemap.xml (read by default when present on the project origin)')
     .option('--max-pages <n>', 'maximum pages in the map, login-required entries included (default: 40)', pozitifTamsayi)
     .option('--depth <n>', 'maximum link depth from the start URLs (default: 3)', negatifOlmayanTamsayi)
@@ -332,7 +332,7 @@ export function programOlustur(
     })));
 
   program.command('prune')
-    .description('removes old runs, brain logs, and legacy artifacts without deleting protected evidence')
+    .description('removes old runs, brain logs, legacy artifacts and leftover trace.zip files (failure bundles, passed runs) without deleting protected evidence')
     .option('--dry-run', 'shows what would be removed without changing files')
     .option('--max-mb <mb>', 'maximum total size of run directories', pozitifOndalik)
     .option('--older-than-days <days>', 'age threshold for brain logs and runs of deleted tests', pozitifOndalik)
@@ -434,10 +434,13 @@ export function programOlustur(
     })));
   const failure = test.command('failure').description('get the evidence bundle for a failed run');
   failure.command('get <id>')
-    .description('copies the failure bundle with root cause, evidence files, and trace into a directory')
+    .description('copies the failure bundle with root cause and evidence files into a directory; the trace stays in .kobay/runs/<run-id>/trace.zip unless --include-trace')
     .option('--out <dir>', 'destination directory for the bundle (default: .kobay/failure-out/<id>, refreshed in place)')
-    .action(async (id: string, secenekler: { out?: string }) => calistir(failureGet({
-      cwd: cwd(), id, ...(secenekler.out === undefined ? {} : { out: secenekler.out }),
+    .option('--include-trace', 'also copy the Playwright trace.zip (it contains session cookies in plain text)')
+    .action(async (id: string, secenekler: { out?: string; includeTrace?: boolean }) => calistir(failureGet({
+      cwd: cwd(), id,
+      ...(secenekler.out === undefined ? {} : { out: secenekler.out }),
+      ...(secenekler.includeTrace === true ? { includeTrace: true } : {}),
     })));
 
   const agent = program.command('agent').description('install the kobay skill for coding agents');

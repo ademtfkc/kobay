@@ -137,7 +137,7 @@ describe('MCP isError yalnız gerçek araç hatalarında', () => {
     }
   });
 
-  it('hata zarfında adres kimliği maskelenir, başarı gövdesinde baseUrl ham kalır', async () => {
+  it('hata zarfında ve project_get gövdesinde adres kimliği maskelenir', async () => {
     const cwd = await geciciDizinAc('kobay-mcp-kimlik-');
     const kimlikli = 'http://admin:Hunter2Pass@localhost:3000';
     await KobayDizini.ac(cwd, { baseUrl: kimlikli, beyin: { adaptor: 'sahte' } });
@@ -153,7 +153,16 @@ describe('MCP isError yalnız gerçek araç hatalarında', () => {
 
       const basari = await baglanti.istemci.callTool({ name: 'project_get', arguments: {} });
       expect(basari.isError).toBeUndefined();
-      expect(govde(basari)).toMatchObject({ config: { baseUrl: kimlikli } });
+      expect(govde(basari)).toMatchObject({ config: { baseUrl: 'http://[redacted]@localhost:3000' } });
+      expect(JSON.stringify(basari)).not.toContain('Hunter2Pass');
+
+      // Kimlikli kayıtlı adresle yalnız adresi düzelten güncelleme geçer.
+      const guncelle = await baglanti.istemci.callTool({ name: 'project_update', arguments: { brain: 'codex' } });
+      expect(guncelle.isError).toBe(true);
+      expect(JSON.stringify(guncelle)).toContain('kobay project update --base-url <URL>');
+      expect(JSON.stringify(guncelle)).not.toContain('Hunter2Pass');
+      const duzelt = await baglanti.istemci.callTool({ name: 'project_update', arguments: { baseUrl: 'http://localhost:3000' } });
+      expect(duzelt.isError).not.toBe(true);
     } finally {
       await baglanti.kapat();
     }

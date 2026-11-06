@@ -123,7 +123,7 @@ function dosyaVarMi(yol: string): Promise<boolean> {
 
 type EkDosya = { kaynak: string; hedefAd: string; icerik?: string };
 
-/** Maskelenemeyen ikili kanıtlar (ekran görüntüsü, trace arşivi); bunlar olduğu gibi kopyalanır. */
+/** Maskelenemeyen ikili kanıtlar (ekran görüntüsü, video); bunlar olduğu gibi kopyalanır. */
 const IKILI_KANIT_DESENI = /\.(?:png|jpe?g|webp|gif|zip|webm)$/i;
 
 /**
@@ -548,8 +548,9 @@ export async function hataAnalizEt(
     }
     kanitlar.push(aday.kanit);
   }
-  const traceYolu = join(kosuDizini, 'trace.zip');
-  if (await dosyaVarMi(traceYolu)) ekDosyalar.push(await ekDosyasiHazirla(traceYolu, 'trace.zip'));
+  // trace.zip pakete girmez (spec 2026-11-06 Ş-C): oturum çerezini açık taşır ve beyin onu okumaz.
+  // `runs/<runId>/trace.zip`'te kalır; budama paketin gösterdiği koşuyu korur, kopyalayan isterse
+  // (`--include-trace`) oradan alır.
 
   const failure = kodDuzeltmeIpucuEkle(yerelHaritaEmniyeti(
     { ...beyinYaniti.json, evidence: kanitlar },

@@ -38,7 +38,7 @@ is scoped).
 | Re-run existing code | `test_rerun` | `kobay test rerun <ID> --output json` |
 | Adapt to a changed UI | `test_refresh` | `kobay test refresh <ID> --output json` |
 | Last result | `test_result` | `kobay test result <ID> --output json` |
-| Failure bundle | `failure_get` (`id`, `out`) | `kobay test failure get <ID> --out <DIR> --output json` |
+| Failure bundle (no trace) | `failure_get` (`id`, `out`) | `kobay test failure get <ID> --out <DIR> --output json` |
 | Generated code | `code_get` | `kobay test code get <ID> --output json` |
 | HTML run report for a human (latest run per test) | `test_report` (`ids` or `all: true`, `out`, `summary`, `maxPrompts`) | `kobay test report <ID...> --output json` / `kobay test report --all --output json` |
 | Delete a test | `test_delete` | `kobay test delete <ID> --output json` |
@@ -49,6 +49,7 @@ Rules for reading results:
 - CLI: always pass `--output json`. The output is one envelope:
   `{"ok": bool, "exitCode": n, "data": ...}` or, on errors,
   `{"ok": false, "exitCode": n, "error": {"code": ..., "message": ...}}`.
+  `doctor` outside a project returns both `error` and `data`.
   Decide from `ok` and `exitCode` in the JSON. Do not pipe kobay into another
   command and read `$?`; that is the last command's exit code, not kobay's.
 - MCP: the tool result text is the `data` part as JSON. Decide pass or fail
@@ -98,7 +99,7 @@ Rules for reading results:
 
 2. **Make sure the app is up.** Run `doctor` and check the row with
    `"name": "target"`: it must have `"ok": true`. `doctor` itself exits `0`
-   even when a check fails, so read the rows. `hint` only appears on rows with
+   even when a check fails inside a project (outside one it exits `2` with `UsageError`), so read the rows. `hint` only appears on rows with
    `ok: false`. If the target is down, start the dev server (or ask the user
    how) and wait until the base URL answers.
 
@@ -178,6 +179,8 @@ Rules for reading results:
 - Read, print or copy `.kobay/credentials.json`, `.kobay/storageState.json` or
   `trace.zip` contents into chat, logs or commits. They contain the password and
   session cookies. Do not attach failure bundles to issues or PRs.
+- Pass `includeTrace: true` / `--include-trace` to `failure_get` unless the user
+  asked for the trace: the bundle does not need it, and it carries the session.
 - Edit files under `.kobay/` other than `.kobay/tests/<ID>.spec.ts` for a
   `test_bug`.
 - Make a test pass by deleting or loosening assertions, skipping steps or adding

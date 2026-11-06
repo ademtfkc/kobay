@@ -25,8 +25,8 @@ Point kobay at a web app running on your machine. It explores the app in a
 headless Chromium, asks an LLM to propose user flows, turns the ones you accept
 into Playwright tests, runs them, and — when one fails — hands back an evidence
 bundle your agent can act on: a root-cause hypothesis, a `failureKind`
-classification, a recommended fix target, the failing step's screenshot and
-DOM, and a Playwright trace.
+classification, a recommended fix target, and the failing step's screenshot and
+DOM. A failed run also keeps a Playwright trace.
 
 <p align="center">
   <img alt="kobay HTML report: 2 of 4 tests failed, a fix-all prompt for a coding agent, and the first failed test card" src="https://raw.githubusercontent.com/ademtfkc/kobay/main/assets/readme/report-overview.png" width="820">
@@ -42,8 +42,8 @@ DOM, and a Playwright trace.
   [Cost and data](#cost-and-data).
 - **An evidence bundle, not just "failed".** Every failure comes with a
   root-cause hypothesis, a recommended fix target, the failing step's
-  screenshot and DOM, console and network errors when they matter, and a
-  Playwright trace.
+  screenshot and DOM, and console and network errors when they matter. The
+  failed run's Playwright trace stays next to it.
 - **`failureKind` keeps your agent from fixing the wrong thing.** A test that
   only says "failed" makes an agent guess. A bundle that says
   `product_changed` or `test_bug` instead of `product_bug` stops the agent from
@@ -314,7 +314,7 @@ Source: [`src/mcp/index.ts`](src/mcp/index.ts) and
    result per test, including `verdict`, `runId`, and `failureKind` when it
    fails.
 5. For a failed test, call `failure_get` with `id` (optional `out`) → the
-   evidence bundle. Read its `failureKind`: after a product fix call
+   evidence bundle, without the trace (`includeTrace: true` adds it). Read its `failureKind`: after a product fix call
    `test_rerun` with `id`; for `product_changed` call `test_refresh` with `id`
    (optional `run`); for a test problem call `code_get` with `id` before editing
    the generated code.
@@ -412,14 +412,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.6.0
+      - uses: ademtfkc/kobay@v0.7.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.6.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.7.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -508,14 +508,18 @@ GitHub. Set `upload-report: false` if that matters.
 
 ```sh
 ls .kobay/failure-out/t_ak8j9xqh
-#> code.ts  console.json  failure.json  meta.json  network.json  step-3.html  step-3.png  steps.json  trace.zip
+#> code.ts  console.json  failure.json  meta.json  network.json  step-3.html  step-3.png  steps.json
 ```
 
 `failure.json` carries the analysis (`failureKind`, `rootCauseHypothesis`,
 `recommendedFixTarget`, `evidence`), the full run result, the step list and the
 generated code. Each evidence entry points at a file in the same folder;
 `console.json` and `network.json` join the bundle only when the analysis cites
-them. Open the trace with `npx playwright show-trace trace.zip`. Details in
+them. The Playwright trace is not in the bundle: it carries session cookies in
+plain text. It stays in the failed run's folder,
+`.kobay/runs/<run-id>/trace.zip`, and `test failure get` prints that path. Add
+`--include-trace` (MCP: `includeTrace: true`) to copy it into the bundle. Open
+it with `npx playwright show-trace <path>/trace.zip`. Details in
 [Quick start in detail](#quick-start-in-detail).
 
 **An HTML report** of every test's latest run, with a **Fix with your coding
@@ -568,17 +572,16 @@ note; a test whose run folder is gone shows as `not run`.
 
 ## Status and limits
 
-**0.6.0.** Usable, not yet smooth. New in 0.6.0: `kobay explore` reads
-fields outside forms, `select` options, `aria-label` buttons and
-`details`/`summary` texts, and skips hidden fields; a page that sends a visitor
-to the login page is kept in the map as `requiresLogin`, and without a saved
-login the plan proposes only redirect checks there; `--seed`, `/sitemap.xml`
-(`--no-sitemap`), `--max-pages` and `--depth` widen the crawl;
-`--session-file` imports a logged-in Playwright `storageState` for apps whose
-login kobay cannot complete (CAPTCHA, 2FA; see
-[Imported session](#imported-session-captcha-2fa)), with a stricter network
-guard; and the brain cost caps no longer start a call that does not fit under
-`KOBAY_MAX_TOTAL_COST_USD`. The full list is in [CHANGELOG.md](CHANGELOG.md).
+**0.7.0.** Usable, not yet smooth. New in 0.7.0: a passing test no longer
+keeps a Playwright trace, and the failure bundle leaves `trace.zip` (it holds
+session cookies) out unless you pass `--include-trace` (both are breaking;
+run `kobay prune` once after upgrading); a hand-written plan and `test refresh`
+now refuse a step that types the real password in a project with an imported
+session too; on Windows, `localhost` and `*.localhost` targets are no longer
+reported unreachable; an address with a username or password in it is refused.
+0.6.0 brought deeper exploration (fields outside forms, `select` options,
+`requiresLogin` pages, `--seed`, sitemap, `--session-file`). The full list is
+in [CHANGELOG.md](CHANGELOG.md).
 
 What has and has not been exercised, so you can decide before installing:
 
@@ -607,7 +610,8 @@ What has and has not been exercised, so you can decide before installing:
   still win the race. On Windows, junctions and other reparse points are only
   partly covered by the symlink checks.
 - **Browser tests only.** No API or backend tests.
-- **Always headless.** No visible browser window; use `trace.zip` instead.
+- **Always headless.** No visible browser window; use a failed run's `trace.zip`
+  instead. A passing test keeps no trace.
 - **Simple login only.** A username/password HTML form. A form on a separate
   auth site works only if you list its origin with `--auth-origin` (see
   [Separate login site (SSO)](#separate-login-site-sso)); OAuth consent screens,
@@ -617,6 +621,14 @@ What has and has not been exercised, so you can decide before installing:
   the credentials. A
   JavaScript-driven login is covered only by the network guard, not by the
   form-origin check.
+- **The plan's credential filter errs on the safe side.** With a login
+  configured, it can drop a useful invalid-login proposal whose fake value looks
+  real to it: `Enter 'wrong_password_qa' in the Password field` is dropped as
+  needing the real credentials. It does not let a real credential step through.
+  This is a permanent limit: more rounds of rule changes kept breaking other
+  cases, so the filter will not be tuned further. `kobay test create --plan`
+  and `kobay test refresh` apply the same filter while a login is saved or a
+  session is imported, so they are no way around this.
 - **Exploration is shallow by design:** `<a href>` links, the sitemap and your
   `--seed` URLs only; no form submits or button clicks. It stops at 40 pages
   unless you pass `--max-pages`, and at depth 3 unless you pass `--depth`.
@@ -657,8 +669,9 @@ Read this before pointing kobay at anything that matters. In short:
   data.
 - **Credentials are origin-locked** and stay on the app's site (plus any auth
   origin you list); a login that tries to send them elsewhere is refused.
-- **Traces carry session cookies, and screenshots and videos are not redacted.** Treat a
-  failure bundle or report like a password.
+- **Traces carry session cookies, and screenshots and videos are not redacted.** Only a
+  failed test keeps a trace, and the failure bundle leaves it out unless you ask
+  with `--include-trace`. Treat a failure bundle or report like a password.
 - **File arguments stay inside the project.**
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
@@ -771,14 +784,22 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   WebSocket opened from a Web Worker is not intercepted; WebTransport and
   WebRTC are not checked; DNS prefetch has not been tested as a way out. When login is
   refused for any of these reasons, `explore` and `test refresh` exit `5`.
-- **Traces contain session cookies.** `trace.zip` in `runs/`, `failure/` and any
-  `failure-out/` copy includes the browser session. Treat a bundle like a
-  password — do not attach it to public issues. `.kobay/failure-out/<id>/` is
-  git-ignored; if you copy one elsewhere with `--out`, git-ignore that folder.
-  Text evidence (`console.json`, `network.json`, `step-*.html`) is secret-masked
-  when copied into the bundle, but screenshots and `trace.zip` cannot be: they
-  may contain secrets visible on screen or in network traces, so treat the whole
-  bundle as sensitive (`.kobay/failure-out/` is git-ignored).
+- **Traces contain session cookies.** A trace records the browser session
+  (cookies and storage) in plain text. kobay keeps one only for a failed test,
+  at `.kobay/runs/<run-id>/trace.zip`; a passing test keeps none. The failure
+  bundle (`failure/`, `failure-out/`, any `--out` copy) leaves it out unless you
+  pass `--include-trace` (MCP: `includeTrace: true`); then the copy holds the
+  session too. Treat a bundle like a password — do not attach it to public
+  issues. `.kobay/failure-out/<id>/` is git-ignored; if you copy one elsewhere
+  with `--out`, git-ignore that folder. Text evidence (`console.json`,
+  `network.json`, `step-*.html`) is secret-masked when copied into the bundle,
+  but screenshots cannot be: they may show secrets visible on screen, so treat
+  the whole bundle as sensitive. A bundle written by kobay 0.6.0 or older may
+  still hold a `trace.zip`; `test failure get` skips it unless you pass
+  `--include-trace`. After upgrading, run `kobay prune` once: it removes those
+  traces from `.kobay/failure/` and the traces of passed runs. It does not
+  touch an old copy in `.kobay/failure-out/<id>/`; the next `test failure get`
+  for that test replaces it without the trace.
 - **HTML report screenshots and videos are not redacted.** `test report` masks
   and escapes every text it writes, but copies step screenshots and failed-run
   videos as they are. Do not publish a report before looking at them. `.kobay/report/` is git-ignored; if you write
@@ -940,11 +961,11 @@ directory unless you pass `--cwd`), as `--plan` is.
 - MCP tools cannot import a session file: an agent cannot point kobay at an
   arbitrary file. Over MCP, `explore` uses a session imported earlier on the
   CLI.
-- Treat the file like a password: it is one. A test run's `trace.zip` (in
-  `runs/`, `failure/` and the `failure-out/` bundle) records the session
-  cookies and storage in clear, exactly as with a `--login` session, and step
-  screenshots, videos and `step-*.html` show whatever the page displays.
-  **Remove `trace.zip` from a failed test's bundle before you share it.**
+- Treat the file like a password: it is one. A failed run's `trace.zip` (in
+  `.kobay/runs/<run-id>/`, and in a bundle copied with `--include-trace`)
+  records the session cookies and storage in clear, exactly as with a `--login`
+  session, and step screenshots, videos and `step-*.html` show whatever the
+  page displays. **Do not share a bundle copied with `--include-trace`.**
 
 ## Reference
 
@@ -1014,8 +1035,12 @@ were seen working only on a Windows 11 machine that had Git Bash. Please report
 Windows issues.
 
 `doctor` checks Node, the brain CLIs, Chromium, the current project and whether
-the target answers. It always exits `0`, so read the rows. Before a project
-exists the last two fail, as expected. On Windows it adds a seventh row,
+the target answers. Inside a project it exits `0` even when a row fails, so read the rows.
+Outside a project the last two rows fail and `doctor` exits `2` with
+`ok: false` (run `kobay project create --url <URL>`). With `--output json` that
+envelope carries both an `error` (`UsageError`, "Not a kobay project") and the rows
+in `data`; in text mode the rows go to stderr, so `kobay doctor | grep` sees nothing
+there. On Windows it adds a seventh row,
 `Git Bash`: Git for Windows is optional (without it the `claude` CLI uses
 PowerShell for its shell tool), but the row fails, with an "optional" hint,
 when none is found. It checks `CLAUDE_CODE_GIT_BASH_PATH`; if that value is
@@ -1091,7 +1116,7 @@ and the step filter still drops real-credential steps when the flag says
 `false`. Without a saved login, a proposal on a `requiresLogin` page is kept
 only when the brain marks it `loginRedirectCheck: true` (it only checks that the
 page sends you to the login page); the others are dropped, and the output
-(`nextStep` in JSON) says to save a login with `kobay project create --login`. Generated code may not silently `test.skip`, and a step that would need
+(`nextStep` in JSON) says to save a login with `kobay project create --login`; this hint appears only when a proposal was dropped because its page requires a login that is not saved, and it is shown once. Generated code may not silently `test.skip`, and a step that would need
 the real credentials throws instead of being rewritten. The text output is the
 summary line plus the same JSON body `--output json` returns. In the demo run
 (with `--hint` asking for the login-page check "Verify that a 'Username' text
@@ -1165,22 +1190,24 @@ generated code. The part an agent acts on is `failure`; for the empty-name test:
 
 Each evidence entry points at a file in the same folder (`step-<step>.png` for
 the screenshot, `step-<step>.html` for the DOM). `console.json` and
-`network.json` join the bundle only when the analysis cites them. Open the trace
-with `npx playwright show-trace trace.zip`.
+`network.json` join the bundle only when the analysis cites them. The trace is
+not in the bundle (it carries session cookies); `test failure get` prints its
+path in the run folder, and `--include-trace` copies it. Open it with
+`npx playwright show-trace .kobay/runs/<run-id>/trace.zip`.
 
 **Fix the app, then `kobay test rerun <id>`** — runs the existing code again
 without regenerating it.
 
 ### Commands
 
-The flags below match `kobay --help` and every subcommand's `--help` in 0.6.0.
+The flags below match `kobay --help` and every subcommand's `--help` in 0.7.0.
 
 | Command | What it does |
 | --- | --- |
 | `setup [--brain <b>] [--model <m>] [--effort <e>]` | Writes the default brain to `~/.kobay/config.json` (`claude`, `codex`, `openrouter`). |
 | `install-browser [--with-deps]` | Installs the matching Chromium; `--with-deps` adds Linux system libraries. |
 | `demo [--port <port>]` | Starts the bundled demo app. Default port 3000; `0` picks a free one. |
-| `doctor` | Checks Node, brain CLIs, Chromium, project and target (and Git Bash on Windows). Always exits `0`. |
+| `doctor` | Checks Node, brain CLIs, Chromium, project and target (and Git Bash on Windows). Exits `0` inside a project even when a row fails; exits `2` when no project is found. |
 | `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Creates `.kobay/` here. `--url` must be an `http://` or `https://` address. `--force` rewrites only an existing project's config, keeping its brain and limits unless you pass new ones. `--session-file` imports a logged-in Playwright `storageState` file (see [Imported session](#imported-session-captcha-2fa)); `--auth-origin` requires `--login` or `--session-file`. |
 | `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Changes only the fields you pass; `--base-url` and `--login-url` must be `http://` or `https://`. `--login` re-enters the credentials; `--auth-origin` replaces the whole auth origin list and, like `--clear-auth-origins`, requires `--login`. |
 | `project get` | Settings, test count, whether a map exists. |
@@ -1196,16 +1223,18 @@ The flags below match `kobay --help` and every subcommand's `--help` in 0.6.0.
 | `test rerun <id>` | Runs existing code without regenerating it. |
 | `test refresh <id> [--no-run]` | For `product_changed`: re-explore, adapt the plan, regenerate and run. |
 | `test result <id> [--history]` | Last run result, or every run still on disk. |
-| `test failure get <id> [--out <dir>]` | Copies the failure bundle. Default `.kobay/failure-out/<id>/`, refreshed in place. |
+| `test failure get <id> [--out <dir>] [--include-trace]` | Copies the failure bundle. Default `.kobay/failure-out/<id>/`, refreshed in place. The trace stays out (it carries session cookies) unless `--include-trace`; the output gives its path. JSON `data`: `id`, `destination`, `trace: { included, path }` (`path` is `null` when the run has no trace). |
 | `test report [ids...] [--all] [--out <dir>] [--summary <path>] [--max-prompts <n>]` | Writes a static HTML report of each selected test's latest run (steps, screenshots, failed-run video, error, failure analysis, generated code). Reads only what is on disk; runs nothing. Default `.kobay/report/`, replaced as a whole each time. Exits `0` even when tests failed. `--summary` also writes a Markdown summary for a pull request comment (text only, at most `--max-prompts` fix prompts, default 5). |
-| `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Removes old runs, brain logs, stale failure bundles and known leftovers from older versions. Unknown `failure-out/` files are skipped. Never removes the last failed run or a current failure bundle. The CLI deletes by default; `--dry-run` only previews. `--max-mb` caps `runs/` (default 500), and `--older-than-days` sets the age threshold (default 7). |
+| `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Removes old runs, brain logs, stale failure bundles known leftovers from older versions, and `trace.zip` left in failure bundles or passed runs. Unknown `failure-out/` files are skipped. A failure bundle folder that is a symlink stops prune with exit 2. Never removes the last failed run or a current failure bundle. The CLI deletes by default; `--dry-run` only previews. `--max-mb` caps `runs/` (default 500), and `--older-than-days` sets the age threshold (default 7). |
 | `agent install --target <claude\|codex\|cursor>` | Installs the agent skill here; for `claude` also registers the MCP server in `.mcp.json`. |
 | `mcp` | Starts the stdio MCP server. |
 
 `explore` flags (new in 0.6.0):
 
 - `--seed <url>`: extra start URL on the project origin; repeatable. A URL on
-  another origin exits `2`.
+  another origin exits `2`. A path such as `/records` is resolved against the
+  origin of the target URL, not its subpath (`http://h/app` + `/records` is
+  `http://h/records`).
 - `--no-sitemap`: do not read `/sitemap.xml` (read by default when present on
   the project origin). A sitemap index is followed. Limits: 1 MB per file, 500
   URLs in total, 20 child sitemaps and one 15-second budget for all of it; only
@@ -1254,8 +1283,10 @@ and 1–200 `planSteps`, each `action` or `assertion` with a `description`:
 
 A `url` on another origin is rejected with exit `2`. The `url` is resolved
 against `baseUrl` and stored in that normalised form. In a project with stored
-credentials, a plan whose steps enter the real password or another secret is
-rejected with exit `2`; kobay's own login step already signs the test in. Without `url`, failure
+credentials or an imported session (`--session-file`), a plan whose steps enter
+the real password or another secret is rejected with exit `2`; the test is
+already signed in. A hand-written plan is checked for its origin and for
+real-credential steps, but not against the exploration map. Without `url`, failure
 analysis skips the map comparison and prints a warning saying so
 (`Test has no URL (<id>); map comparison skipped.`).
 
@@ -1394,7 +1425,7 @@ All project state lives in `.kobay/` at your app's root:
 | `map.json` | The map: `pages` with `title`, `headings`, `links`, `forms`, `buttons`, `menu`. |
 | `plan/proposals.json` | Proposals from the brain. |
 | `tests/` | Test records (`t_*.json`), generated code (`t_*.spec.ts`), `_fixture.ts`. |
-| `runs/r_*/` | One folder per run: `result.json`, step `.png`/`.html`, `console.json`, `network.json`, `trace.zip`. |
+| `runs/r_*/` | One folder per run: `result.json`, step `.png`/`.html`, `console.json`, `network.json`; a failed run also has `trace.zip` and `video.webm`. |
 | `failure/<testId>/` | Latest failure bundle per test, written atomically. |
 | `failure-out/<testId>/` | Default destination of `test failure get`, refreshed in place (git-ignored). |
 | `report/` | Latest HTML report from `test report`: `index.html`, `kobay-report.json`, `assets/<runId>/step-<n>.png` and `assets/<runId>/video.webm` (git-ignored). |

@@ -1,9 +1,12 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
-import { testCreate } from '../../src/cli/komutlar/index.js';
+import { projectCreate, testCreate } from '../../src/cli/komutlar/index.js';
 import { planUrlDogrula } from '../../src/cli/komutlar/test.js';
 import { KobayDizini, type TestKaydi } from '../../src/depo/index.js';
+import { mcpSunucusuOlustur } from '../../src/mcp/index.js';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 async function proje(plan: Record<string, unknown>): Promise<{ cwd: string; dizin: KobayDizini }> {
@@ -105,5 +108,57 @@ describe('test create: elle yazılan plan dosyası', () => {
     expect((await testCreate({ cwd: sahte.cwd, planPath: 'plan.json' })).exitCode).toBe(0);
     const kimliksiz = await proje(adimlar('Enter the account secret'));
     expect((await testCreate({ cwd: kimliksiz.cwd, planPath: 'plan.json' })).exitCode).toBe(0);
+  });
+
+  it('içe alınan oturumda (--session-file, credentials.json yok) gerçek kimlik isteyen plan exit 2, test yazılmaz', async () => {
+    const cwd = await geciciDizinAc('kobay-test-create-oturum-');
+    await writeFile(join(cwd, 'state.json'), JSON.stringify({
+      cookies: [{ name: 'sid', value: 'OTURUM-9f2c', domain: 'uygulama.test', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' }],
+      origins: [],
+    }));
+    const kurulum = await projectCreate({ cwd, url: 'http://uygulama.test', beyin: { adaptor: 'sahte' }, oturumDosyasi: 'state.json' });
+    expect(kurulum.exitCode).toBe(0);
+    const dizin = await KobayDizini.bul(cwd);
+    if (dizin === null) throw new Error('proje kurulmadı');
+    await expect(dizin.kimlikOku()).resolves.toBeNull();
+    await writeFile(join(cwd, 'plan.json'), JSON.stringify({
+      type: 'frontend',
+      name: 'Sign in as admin',
+      planSteps: [
+        { type: 'action', description: 'Enter the account secret' },
+        { type: 'assertion', description: 'Verify the admin panel is visible' },
+      ],
+    }));
+
+    const sonuc = await testCreate({ cwd, planPath: 'plan.json' });
+
+    expect(sonuc.exitCode).toBe(2);
+    expect(JSON.stringify(sonuc.json)).toContain('needs the real credentials');
+    expect(JSON.stringify(sonuc.json)).toContain('Enter the account secret');
+    await expect(dizin.testListele()).resolves.toEqual([]);
+
+    // MCP test_create aynı kapıdan geçer.
+    const sunucu = mcpSunucusuOlustur({ cwd });
+    const istemci = new Client({ name: 'kobay-test', version: '0.1.0' });
+    const [sunucuTasima, istemciTasima] = InMemoryTransport.createLinkedPair();
+    await Promise.all([sunucu.connect(sunucuTasima), istemci.connect(istemciTasima)]);
+    try {
+      const mcp = await istemci.callTool({ name: 'test_create', arguments: { planPath: 'plan.json' } });
+      expect(mcp.isError).toBe(true);
+      expect((mcp.content as [{ text: string }])[0].text).toContain('needs the real credentials');
+    } finally {
+      await istemci.close();
+      await sunucu.close();
+    }
+    await expect(dizin.testListele()).resolves.toEqual([]);
+  });
+
+  it('kimliksiz keşfin yazdığı (işaretsiz) storageState giriş sayılmaz: aynı plan kabul edilir', async () => {
+    const { cwd, dizin } = await proje({ planSteps: [
+      { type: 'action', description: 'Enter the account secret' },
+      { type: 'assertion', description: 'Verify the admin panel is visible' },
+    ] });
+    await dizin.storageStateYaz(JSON.stringify({ cookies: [], origins: [] }));
+    expect((await testCreate({ cwd, planPath: 'plan.json' })).exitCode).toBe(0);
   });
 });

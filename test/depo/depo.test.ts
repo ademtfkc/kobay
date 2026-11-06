@@ -787,6 +787,115 @@ describe('KobayDizini', () => {
     expect(await artiklar(dizin.yol('failure-out'))).toEqual([]);
   });
 
+  // Spec 2026-11-06 Ş-C: trace.zip oturum çerezini açık taşır. Kopya varsayılan olarak onu içermez;
+  // açık seçenekle koşu dizinindeki (ya da eski paketteki) trace kopyalanır.
+  describe('hata paketi kopyası ve trace.zip', () => {
+    const IZ = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0x80, 0x00, 0x01]);
+    async function izliKosu(dizin: KobayDizini): Promise<string> {
+      const kosu = await dizin.kosuDizini(paket().runId);
+      await writeFile(join(kosu, 'trace.zip'), IZ);
+      return join(kosu, 'trace.zip');
+    }
+
+    it.each(['out', 'failure-out'] as const)('%s: varsayılan kopya trace.zip içermez, koşudaki trace yolunu bildirir', async (tur) => {
+      const kok = await geciciDizin();
+      const dizin = await KobayDizini.ac(kok, config);
+      const iz = await izliKosu(dizin);
+      await dizin.hataPaketiYaz(paket(), []);
+      const hedef = tur === 'out' ? join(kok, 'paket') : hataPaketiCikisYolu(kok, 't_abc12345');
+
+      const sonuc = await dizin.hataPaketiKopyala('t_abc12345', hedef);
+
+      expect(sonuc).toEqual({ traceDahil: false, traceYolu: iz });
+      await expect(access(join(hedef, 'failure.json'))).resolves.toBeUndefined();
+      await expect(access(join(hedef, 'trace.zip'))).rejects.toThrow();
+    });
+
+    it.each(['out', 'failure-out'] as const)('%s: traceDahil ile koşudaki trace.zip bayt bayt kopyalanır', async (tur) => {
+      const kok = await geciciDizin();
+      const dizin = await KobayDizini.ac(kok, config);
+      await izliKosu(dizin);
+      await dizin.hataPaketiYaz(paket(), []);
+      const hedef = tur === 'out' ? join(kok, 'paket') : hataPaketiCikisYolu(kok, 't_abc12345');
+
+      const sonuc = await dizin.hataPaketiKopyala('t_abc12345', hedef, { traceDahil: true });
+
+      expect(sonuc).toEqual({ traceDahil: true, traceYolu: join(hedef, 'trace.zip') });
+      expect((await readFile(join(hedef, 'trace.zip'))).equals(IZ)).toBe(true);
+    });
+
+    it('koşuda trace yoksa (geçen koşu, eski koşu) traceDahil sessizce trace\'siz kopyalar', async () => {
+      const kok = await geciciDizin();
+      const dizin = await KobayDizini.ac(kok, config);
+      await dizin.hataPaketiYaz(paket(), []);
+      const hedef = join(kok, 'paket');
+
+      const sonuc = await dizin.hataPaketiKopyala('t_abc12345', hedef, { traceDahil: true });
+
+      expect(sonuc).toEqual({ traceDahil: false, traceYolu: null });
+      await expect(access(join(hedef, 'failure.json'))).resolves.toBeUndefined();
+      await expect(access(join(hedef, 'trace.zip'))).rejects.toThrow();
+    });
+
+    it('eski sürümün paketindeki trace.zip varsayılan kopyaya girmez; traceDahil ile girer', async () => {
+      const kok = await geciciDizin();
+      const dizin = await KobayDizini.ac(kok, config);
+      // Eski paket: trace paketin içinde (0.6.0 ve öncesi); koşu dizini artık yok.
+      await dizin.hataPaketiYaz(paket(), []);
+      await writeFile(dizin.yol('failure', 't_abc12345', 'trace.zip'), 'eski-iz');
+
+      const varsayilan = await dizin.hataPaketiKopyala('t_abc12345', join(kok, 'a'));
+      expect(varsayilan).toEqual({ traceDahil: false, traceYolu: dizin.yol('failure', 't_abc12345', 'trace.zip') });
+      await expect(access(join(kok, 'a', 'trace.zip'))).rejects.toThrow();
+
+      const dahil = await dizin.hataPaketiKopyala('t_abc12345', join(kok, 'b'), { traceDahil: true });
+      expect(dahil).toEqual({ traceDahil: true, traceYolu: join(kok, 'b', 'trace.zip') });
+      await expect(readFile(join(kok, 'b', 'trace.zip'), 'utf8')).resolves.toBe('eski-iz');
+    });
+
+    it('paket yeniden yazılınca içinde trace.zip kalmaz; ek dosya olarak verilse de yazılmaz', async () => {
+      const kok = await geciciDizin();
+      const dizin = await KobayDizini.ac(kok, config);
+      await dizin.hataPaketiYaz(paket(), []);
+      await writeFile(dizin.yol('failure', 't_abc12345', 'trace.zip'), 'eski-iz');
+
+      await dizin.hataPaketiYaz(paket(), [{ kaynak: '', hedefAd: 'trace.zip', icerik: 'yeni-iz' }]);
+
+      await expect(access(dizin.yol('failure', 't_abc12345', 'trace.zip'))).rejects.toThrow();
+      await expect(access(dizin.yol('failure', 't_abc12345', 'failure.json'))).resolves.toBeUndefined();
+    });
+
+    it('failure-out yenilenince önceki çağrının kopyaladığı trace.zip kalmaz', async () => {
+      const kok = await geciciDizin();
+      const dizin = await KobayDizini.ac(kok, config);
+      await izliKosu(dizin);
+      await dizin.hataPaketiYaz(paket(), []);
+      const hedef = hataPaketiCikisYolu(kok, 't_abc12345');
+      await dizin.hataPaketiKopyala('t_abc12345', hedef, { traceDahil: true });
+      await access(join(hedef, 'trace.zip'));
+
+      await dizin.hataPaketiKopyala('t_abc12345', hedef);
+
+      await expect(access(join(hedef, 'trace.zip'))).rejects.toThrow();
+      await expect(access(join(hedef, 'failure.json'))).resolves.toBeUndefined();
+    });
+
+    it.skipIf(process.platform === 'win32')('koşudaki trace.zip symlink ise izlenmez, kopyalanmaz', async () => {
+      const kok = await geciciDizin();
+      const dizin = await KobayDizini.ac(kok, config);
+      const dis = join(await geciciDizin(), 'gizli.txt');
+      await writeFile(dis, 'dokunma');
+      const kosu = await dizin.kosuDizini(paket().runId);
+      await symlink(dis, join(kosu, 'trace.zip'));
+      await dizin.hataPaketiYaz(paket(), []);
+
+      const sonuc = await dizin.hataPaketiKopyala('t_abc12345', join(kok, 'paket'), { traceDahil: true });
+
+      expect(sonuc).toEqual({ traceDahil: false, traceYolu: null });
+      await expect(access(join(kok, 'paket', 'trace.zip'))).rejects.toThrow();
+    });
+  });
+
   it.skipIf(process.platform === 'win32')('hata paketi yazımı .kobay/failure symlink ise hiç başlamaz', async () => {
     const dizin = await KobayDizini.ac(await geciciDizin(), config);
     const dis = await geciciDizin();

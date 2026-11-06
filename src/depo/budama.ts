@@ -1,7 +1,7 @@
 import {
   lstat, readdir, readFile, realpath, rm, unlink,
 } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import * as v from 'valibot';
 import { KosuSonucuSemasi } from './semalar.js';
 import type { KosuSonucu } from './tipler.js';
@@ -20,6 +20,7 @@ const ESKI_HATA_PAKETI = /^t_[a-z0-9]{8}-\d+$/;
  * `<ms>` kenara alınma anıdır; yoksa (0.2.0 biçimi) yaş dizinin mtime'ından okunur.
  */
 const ESKI_HATA_ARTIGI = /^\.stale-t_[a-z0-9]{8}-(?:(\d{1,15})-)?[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const TRACE_ADI = 'trace.zip';
 const BEYIN_GUNLUGU = /^(?:brain|beyin)-.+\.log$/;
 const ESKI_KOK_DOSYASI = /^(?:adim-\d+\.(?:html|png)|console\.json|code\.ts|failure\.json|meta\.json|network\.json|pw-rapor\.json|result\.json|steps\.json|trace\.zip)$/;
 const BILINEN_HATA_DOSYASI = /^(?:(?:step|adim)-\d+\.(?:html|png)|console\.json|code\.ts|failure\.json|meta\.json|network\.json|pw-(?:report|rapor)\.json|result\.json|steps\.json|trace\.zip)$/;
@@ -43,13 +44,15 @@ export type BudamaOgesiTuru =
   | 'stale-failure-bundle'
   | 'legacy-failure-bundle'
   | 'legacy-failure-file'
-  | 'legacy-root-file';
+  | 'legacy-root-file'
+  | 'failure-bundle-trace'
+  | 'passed-run-trace';
 
 export interface BudamaOgesi {
   path: string;
   kind: BudamaOgesiTuru;
   bytes: number;
-  reason: 'retention' | 'age' | 'size-limit' | 'legacy';
+  reason: 'retention' | 'age' | 'size-limit' | 'legacy' | 'trace-retention';
 }
 
 export interface AtlananBudamaOgesi {
@@ -382,6 +385,92 @@ async function dosyaAdaylari(
   return { adaylar, skipped };
 }
 
+/** `yol` yoksa null; varsa symlink olup olmadığı ve dizin olup olmadığı. */
+async function izDurumu(yol: string): Promise<{ link: boolean; dizin: boolean; boyut: number } | null> {
+  try {
+    const bilgi = await lstat(yol);
+    return { link: bilgi.isSymbolicLink(), dizin: bilgi.isDirectory(), boyut: bilgi.size };
+  } catch (hata: unknown) {
+    if (hataKodu(hata) === 'ENOENT') return null;
+    throw hata;
+  }
+}
+
+/**
+ * trace.zip oturum çerezini açık taşır (spec 2026-11-06 Ş-C): yalnız başarısız
+ * koşuda kalır, `failure/<testId>/` içinde hiç durmaz. 0.6.0 ve öncesinden kalan
+ * iki yer budanır: paketin içindeki kopya ve sonucu `passed` olan koşunun trace'i.
+ * result.json okunamayan ya da sonucu passed olmayan koşunun trace'i korunur.
+ * Paket dizini symlink ise budama reddedilir; trace.zip'in kendisi symlink ise
+ * hedefi izlenmeden bağlantı kaldırılır; trace.zip adlı dizine dokunulmaz.
+ */
+async function izAdaylari(
+  dizin: KobayDizini,
+  kokler: Awaited<ReturnType<typeof kokleriDogrula>>,
+  kosular: KosuKaydi[],
+  silinecekKosular: Set<string>,
+): Promise<Aday[]> {
+  const adaylar: Aday[] = [];
+  const paketler = (await readdir(kokler.failure.yol, { withFileTypes: true }))
+    .filter((girdi) => TEST_KIMLIGI.test(girdi.name))
+    .sort((a, b) => metinSirala(a.name, b.name));
+  for (const girdi of paketler) {
+    const paketDizini = join(kokler.failure.yol, girdi.name);
+    await izKlasoruDogrula(paketDizini, kokler.failure);
+    if (!girdi.isDirectory()) continue;
+    const yol = join(paketDizini, TRACE_ADI);
+    const durum = await izDurumu(yol);
+    if (durum === null || (durum.dizin && !durum.link)) continue;
+    adaylar.push({
+      yol,
+      kok: kokler.failure,
+      hedef: durum.link ? 'link' : 'file',
+      path: genelYol(dizin.projeKoku, yol),
+      kind: 'failure-bundle-trace',
+      bytes: durum.boyut,
+      reason: 'trace-retention',
+    });
+  }
+
+  for (const kosu of kosular) {
+    if (kosu.sonuc.verdict !== 'passed' || silinecekKosular.has(kosu.yol)) continue;
+    if (await paketKosusu(kokler.failure, kosu.sonuc.testId) === kosu.sonuc.runId) continue;
+    const yol = join(kosu.yol, TRACE_ADI);
+    const durum = await izDurumu(yol);
+    if (durum === null || (durum.dizin && !durum.link)) continue;
+    adaylar.push({
+      yol,
+      kok: kokler.runs,
+      hedef: durum.link ? 'link' : 'file',
+      path: genelYol(dizin.projeKoku, yol),
+      kind: 'passed-run-trace',
+      bytes: durum.boyut,
+      reason: 'trace-retention',
+    });
+  }
+  return adaylar;
+}
+
+/** trace'i taşıyan klasör gerçek bir dizin olmalı ve yönetilen kökün içinde çözülmeli. */
+async function izKlasoruDogrula(klasor: string, kok: GuvenliKok): Promise<void> {
+  const bilgi = await lstat(klasor);
+  if (bilgi.isSymbolicLink()) throw new UnsafePrunePath(klasor, 'it is a symlink');
+  if (!bilgi.isDirectory()) return;
+  if (!kokIcindeMi(kok.gercek, await realpath(klasor))) {
+    throw new UnsafePrunePath(klasor, `its real path is outside ${kok.yol}`);
+  }
+}
+
+/** Silmeden hemen önce: trace'in koşusu hâlâ passed mı, klasörü hâlâ güvenli mi. */
+async function izHalaSilinebilirMi(aday: Aday, failure: GuvenliKok): Promise<boolean> {
+  const klasor = dirname(aday.yol);
+  await izKlasoruDogrula(klasor, aday.kok);
+  if (aday.kind === 'failure-bundle-trace') return true;
+  const guncel = await kosuSonucuOku(klasor);
+  if (guncel?.verdict !== 'passed' || guncel.runId !== basename(klasor)) return false;
+  return await paketKosusu(failure, guncel.testId) !== guncel.runId;
+}
+
 async function kosuHalaKorunuyorMu(
   aday: KosuKaydi,
   kokler: Awaited<ReturnType<typeof kokleriDogrula>>,
@@ -478,11 +567,15 @@ export async function depoyuBuda(
 
   const dosyalar = await dosyaAdaylari(dizin, kokler, esik);
   for (const aday of dosyalar.adaylar) adayHaritasi.set(aday.yol, aday);
+  const silinecekKosular = new Set([...adayHaritasi.values()].filter((aday) => aday.kind === 'run').map((aday) => aday.yol));
+  for (const aday of await izAdaylari(dizin, kokler, kosular, silinecekKosular)) adayHaritasi.set(aday.yol, aday);
   const adaylar = [...adayHaritasi.values()].sort((a, b) => metinSirala(a.path, b.path));
   const uygulanan: BudamaOgesi[] = [];
   let silinenRunBytes = 0;
   for (const aday of adaylar) {
     if (aday.run !== undefined && await kosuHalaKorunuyorMu(aday.run, kokler, Date.now())) continue;
+    if ((aday.kind === 'failure-bundle-trace' || aday.kind === 'passed-run-trace')
+      && !await izHalaSilinebilirMi(aday, kokler.failure)) continue;
     if (aday.kind === 'brain-log' || aday.kind === 'stale-failure-bundle' || aday.kind === 'legacy-failure-file') {
       const ad = basename(aday.yol);
       const halaEski = await lstat(aday.yol).then(
@@ -496,7 +589,7 @@ export async function depoyuBuda(
     const { path, kind, reason } = aday;
     const bytes = silinenBytes;
     uygulanan.push({ path, kind, bytes, reason });
-    if (kind === 'run') silinenRunBytes += bytes;
+    if (kind === 'run' || kind === 'passed-run-trace') silinenRunBytes += bytes;
   }
 
   const toplam = uygulanan.reduce((sonuc, aday) => sonuc + aday.bytes, 0);

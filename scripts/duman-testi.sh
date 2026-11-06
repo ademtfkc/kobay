@@ -206,7 +206,17 @@ console.log("Chromium: " + yol);
 ' ) || hata "kurulu paketin Playwright'ı Chromium bulamadı"
 
 adim "kobay doctor"
-DOKTOR="$( cd "$KURULUM" && "${KOBAY_NPX[@]}" doctor )" || hata "doctor sıfırdan farklı kodla döndü"
+# Kurulum klasöründe proje yok: doctor satırları basar ve TAM OLARAK 2 (kullanım hatası) döner; 0 gerilemedir.
+# İstisna: kurulum klasörünün üstünde (geçici dizin ağacında) bir `.kobay` varsa doctor onu bulur ve 0 döner.
+# Bunu varsayma, `project get` ile sor: 0 = proje var, 2 = proje yok, başka kod arıza.
+( cd "$KURULUM" && "${KOBAY_NPX[@]}" project get ) >/dev/null 2>&1 && PROJE_KOD=0 || PROJE_KOD=$?
+case "$PROJE_KOD" in
+  0) BEKLENEN_DOKTOR=0 ;;
+  2) BEKLENEN_DOKTOR=2 ;;
+  *) hata "project get beklenmeyen kodla döndü: $PROJE_KOD" ;;
+esac
+DOKTOR="$( cd "$KURULUM" && "${KOBAY_NPX[@]}" doctor 2>&1 )" && DOKTOR_KOD=0 || DOKTOR_KOD=$?
+[ "$DOKTOR_KOD" = "$BEKLENEN_DOKTOR" ] || hata "doctor $BEKLENEN_DOKTOR dönmeliydi, $DOKTOR_KOD döndü"
 printf '%s\n' "$DOKTOR"
 printf '%s' "$DOKTOR" | grep -q '✓ Node' || hata "doctor Node kontrolünü geçmedi"
 printf '%s' "$DOKTOR" | grep -q '✓ Chromium' || hata "doctor Chromium bulamadı"

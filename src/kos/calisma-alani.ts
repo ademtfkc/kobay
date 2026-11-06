@@ -33,6 +33,10 @@ export function eylemZamanAsimiCoz(deger: unknown): number {
 export const EYLEM_ZAMAN_ASIMI_IFADESI = '(() => { const n = Number(process.env.KOBAY_ACTION_TIMEOUT_MS);'
   + ` return Number.isSafeInteger(n) && n > 0 ? n : ${String(VARSAYILAN_EYLEM_ZAMAN_ASIMI_MS)}; })()`;
 
+/**
+ * Trace oturum çerezini açık taşır: `retain-on-failure` ile yalnız düşen testte
+ * kalır, geçen testte Playwright onu siler (spec 2026-11-06 Ş-C).
+ */
 export function kaliciConfigMetni(): string {
   return [
     'export default {',
@@ -41,7 +45,7 @@ export function kaliciConfigMetni(): string {
     '  workers: 1,',
     '  retries: 0,',
     "  reporter: [['json', { outputFile: process.env.KOBAY_REPORT_FILE }]],",
-    `  use: { baseURL: process.env.KOBAY_BASE_URL, trace: 'on', actionTimeout: ${EYLEM_ZAMAN_ASIMI_IFADESI}, screenshot: 'only-on-failure', video: 'off' },`,
+    `  use: { baseURL: process.env.KOBAY_BASE_URL, trace: 'retain-on-failure', actionTimeout: ${EYLEM_ZAMAN_ASIMI_IFADESI}, screenshot: 'only-on-failure', video: 'off' },`,
     "  outputDir: `${process.env.KOBAY_RUN_DIR}/pw`,",
     '};',
     '',

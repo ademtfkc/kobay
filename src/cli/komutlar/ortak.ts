@@ -231,6 +231,68 @@ export async function testOku(dizin: KobayDizini, id: string): Promise<TestKaydi
   }
 }
 
+/** Adres kullanıcı adı ya da parola taşıyor mu; ayrıştırılamayan adres taşımıyor sayılır. */
+export function adresKimlikliMi(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.username !== '' || u.password !== '';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * JSON çıktısındaki config: hedef ve giriş adresinin yalnız kullanıcı bilgisi maskelenir
+ * (yol, sorgu, port aynen kalır). Kimlikli adres artık geçersiz girdi; eski config'te kalmış
+ * olabilir ve makine çıktısına da düz metin parola yazılmaz.
+ */
+export function configKimligiGizle(config: KobayConfig): KobayConfig {
+  return {
+    ...config,
+    baseUrl: adresKimligiGizle(config.baseUrl),
+    ...(config.loginUrl === undefined ? {} : { loginUrl: adresKimligiGizle(config.loginUrl) }),
+  };
+}
+
+/**
+ * Hedef ve giriş adresi kullanıcı bilgisi (kullanıcı adı ya da parola) taşıyamaz: adres config'e,
+ * haritaya ve JSON çıktısına aynen yazılır, parola düz metin kalırdı. Giriş bilgisi `--login` ile
+ * ayrı saklanır. Ayrıştırılamayan adres burada geçer; onu şema denetimi reddeder.
+ */
+export function kimlikliAdresReddet(url: string, oneri = 'and save the login with `--login`'): void {
+  if (!adresKimlikliMi(url)) return;
+  throw new UsageError(
+    `The address must not contain a username or password: ${adresKimligiGizle(url)}. Remove the username and password from the address ${oneri}`,
+  );
+}
+
+/**
+ * Önceden (bu denetimden önce) kaydedilmiş kimlikli adresle tarayıcı açılmaz. Hedefe giden her
+ * komut (keşif, sayfa yenileme, test koşusu) config'i okuduktan hemen sonra bunu çağırır. Şema
+ * düzeyinde reddedilmez: `project update` kimlikli config'i okuyup düzeltebilmeli.
+ */
+export function kayitliAdresleriDenetle(config: KobayConfig, birlikteDuzelt = false): void {
+  const kimlikli: Array<{ ad: string; url: string }> = [];
+  if (adresKimlikliMi(config.baseUrl)) kimlikli.push({ ad: 'base URL', url: config.baseUrl });
+  if (config.loginUrl !== undefined && adresKimlikliMi(config.loginUrl)) kimlikli.push({ ad: 'login URL', url: config.loginUrl });
+  if (kimlikli.length === 0) return;
+  if (kimlikli.length === 1 && !birlikteDuzelt) {
+    // Tek adres kimlikli: tek bayrak yeter, mesaj o bayrağı söyler.
+    if (kimlikli[0]?.ad === 'base URL') {
+      kimlikliAdresReddet(config.baseUrl, 'and fix it with `kobay project update --base-url <URL>`; save the login with `--login`');
+    }
+    kimlikliAdresReddet(config.loginUrl ?? '', 'and fix it with `kobay project update --login-url <URL>`; save the login with `--login`');
+    return;
+  }
+  // Birden çok adres (ya da ikisi birlikte kimlikliydi): tek bayrakla kısmi düzeltme kısır döngü açar,
+  // bu yüzden hepsi tek mesajda sayılır ve iki bayrak birlikte önerilir.
+  throw new UsageError(
+    `The saved addresses must not contain a username or password: ${kimlikli.map((k) => `${k.ad} ${adresKimligiGizle(k.url)}`).join('; ')}.`
+    + ' Remove the username and password from both addresses; fix both in one command: `kobay project update --base-url <URL> --login-url <URL>`'
+    + ' (save the login with `--login`)',
+  );
+}
+
 /** Tarayıcı açmadan hedefi yoklar; ayakta değilse exit 3 ile net mesaj verir. */
 async function hedefiDogrula(baseUrl: string): Promise<void> {
   if (await hedefAyaktaMi(baseUrl)) return;
@@ -331,13 +393,33 @@ export const OTURUM_VE_KIMLIK_HATASI = 'This project has saved login credentials
   + ' with them and would replace an imported session. Use one or the other: re-create the project with'
   + ' `kobay project create --url <URL> --session-file <file> --force` (this removes the saved credentials).';
 
+const TOHUM_ORNEGI = 'Seed must be a valid http(s) URL, e.g. https://app.example/records or /records';
+
+/**
+ * `/` ile başlayan göreli tohum projenin baseUrl'ine göre çözülür; çözülen adres yine köken/şema
+ * denetimine girer (`//baska.example` başka köken olarak reddedilir). Kimlik taşıyan ya da
+ * ayrıştırılamayan tohum kullanım hatasıdır.
+ */
+export function tohumuCoz(baseUrl: string, tohum: string): string {
+  let adres: URL;
+  try {
+    adres = tohum.startsWith('/') ? new URL(tohum, baseUrl) : new URL(tohum);
+  } catch {
+    throw new UsageError(TOHUM_ORNEGI);
+  }
+  if (adres.protocol !== 'http:' && adres.protocol !== 'https:') throw new UsageError(TOHUM_ORNEGI);
+  kimlikliAdresReddet(adres.href);
+  return adres.href;
+}
+
 export async function kesfiYenile(dizin: KobayDizini, ayar: KesifAyari = {}, oturumDosyasi?: string): Promise<Harita> {
   const [config, kimlik] = await Promise.all([dizin.configOku(), dizin.kimlikOku()]);
+  kayitliAdresleriDenetle(config);
   if (kimlik !== null) kimlikHedefeUyar(kimlik, config);
   // Kullanım hatası ağdan önce: başka kökenli tohum hedefe hiç istek atmadan exit 2.
   let tohumlar: string[];
   try {
-    tohumlar = tohumlariDogrula(config.baseUrl, ayar.tohumlar ?? []);
+    tohumlar = tohumlariDogrula(config.baseUrl, (ayar.tohumlar ?? []).map((tohum) => tohumuCoz(config.baseUrl, tohum)));
   } catch (hata: unknown) {
     if (hata instanceof SeedUrlError) throw new UsageError(hata.message);
     throw hata;
@@ -388,8 +470,41 @@ export async function kesfiYenile(dizin: KobayDizini, ayar: KesifAyari = {}, otu
   return harita;
 }
 
+/**
+ * 0.6.0 ve öncesinde kimlikli adresle yapılan keşif parolayı haritaya yazdı; config düzeltilse de
+ * harita kalır ve beyne (dış servise) giderdi. Haritayı okuyup hedefe ya da beyne giden her
+ * komut bunu çağırır; `explore` haritayı baştan yazdığı için muaftır.
+ * Denetlenen alanlar: `baseUrl`, `seeds[]`, `sitemap.url`, `pages[].url`, `pages[].redirectedTo`,
+ * `pages[].links[]`, `pages[].forms[].action`.
+ */
+export function kayitliHaritayiDenetle(harita: Harita | null): void {
+  if (harita === null) return;
+  const adresler = [
+    harita.baseUrl,
+    ...(harita.seeds ?? []),
+    ...(harita.sitemap === undefined ? [] : [harita.sitemap.url]),
+    ...harita.pages.flatMap((sayfa) => [
+      sayfa.url,
+      ...(sayfa.redirectedTo === undefined ? [] : [sayfa.redirectedTo]),
+      ...sayfa.links,
+      ...sayfa.forms.flatMap((form) => (form.action === undefined ? [] : [form.action])),
+    ]),
+  ];
+  const kimlikli = adresler.find((adres) => adresKimlikliMi(adres));
+  if (kimlikli === undefined) return;
+  throw new UsageError(
+    `The saved map was built with an address that contains a username or password (${adresKimligiGizle(kimlikli)});`
+    + ' run `kobay explore` to rebuild it',
+  );
+}
+
 export async function haritaSagla(dizin: KobayDizini): Promise<Harita> {
-  return (await dizin.haritaOku()) ?? kesfiYenile(dizin);
+  // Kayıtlı harita eski kimlikli adresle üretilmiş olabilir: harita okuyan her komut da denetlenir.
+  kayitliAdresleriDenetle(await dizin.configOku());
+  const harita = await dizin.haritaOku();
+  if (harita === null) return kesfiYenile(dizin);
+  kayitliHaritayiDenetle(harita);
+  return harita;
 }
 
 /**
@@ -405,7 +520,9 @@ export async function sayfaKesfiniYenile(
     dizin.kimlikOku(),
     dizin.haritaOku(),
   ]);
+  kayitliAdresleriDenetle(config);
   if (harita === null) throw new UsageError('No exploration map; run `kobay explore` first');
+  kayitliHaritayiDenetle(harita);
   if (haritadaSayfaBul(harita, testUrl) === null) {
     throw new UsageError(`Test page is not in the exploration map: ${testUrl}; run \`kobay explore\` first`);
   }

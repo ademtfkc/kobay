@@ -302,7 +302,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
   }, async ({ projectDir }) => aracCalistir(async () => projectGet({ cwd: await projeSec(projectDir) })));
 
   sunucu.registerTool('prune', {
-    description: 'Previews removal of old runs, brain logs, and legacy artifacts by default. Pass confirm: true to delete; dryRun: true always forces a preview, even with confirmation.',
+    description: 'Previews removal of old runs, brain logs, legacy artifacts, and trace.zip files of passed runs and failure bundles by default. Pass confirm: true to delete; dryRun: true always forces a preview, even with confirmation.',
     annotations: YIKICI,
     inputSchema: z.strictObject({
       ...PROJE_DIZINI_SEMASI,
@@ -319,7 +319,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
   })));
 
   sunucu.registerTool('explore', {
-    description: 'Explores the target app and updates the page map. Pages that redirect to a login form are recorded with requiresLogin and redirectedTo. seeds: extra start URLs on the project origin. sitemap: read /sitemap.xml (default true). maxPages: map size limit (default 40). depth: link depth (default 3).',
+    description: 'Explores the target app and updates the page map. Pages that redirect to a login form are recorded with requiresLogin and redirectedTo. seeds: extra start URLs on the project origin; a path like /records is resolved against the origin of the target URL, not its subpath (http://h/app + /records = http://h/records). sitemap: read /sitemap.xml (default true). maxPages: map size limit (default 40). depth: link depth (default 3).',
     annotations: YAZAR,
     inputSchema: {
       ...PROJE_DIZINI_SEMASI,
@@ -465,16 +465,17 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
   })));
 
   sunucu.registerTool('failure_get', {
-    description: 'Copies the failure bundle of a test into the given directory; without out, .kobay/failure-out/<id> (a fixed path per test, refreshed in place).',
+    description: 'Copies the failure bundle of a test into the given directory; without out, .kobay/failure-out/<id> (a fixed path per test, refreshed in place).'
+      + ' The Playwright trace.zip contains session cookies in plain text, so it is not copied unless includeTrace is true; the result gives its path.',
     annotations: YAZAR,
-    inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string(), out: z.string().optional() },
-  }, async ({ projectDir, id, out }) => aracCalistir(async () => {
+    inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string(), out: z.string().optional(), includeTrace: z.boolean().optional() },
+  }, async ({ projectDir, id, out, includeTrace }) => aracCalistir(async () => {
     const cwd = await projeSec(projectDir);
     const istenen = out ?? await hataPaketiVarsayilanYol(cwd, id);
     const hedef = await projeIciYol(cwd, istenen, 'out');
     // Yazma hedefi: .git/, .claude/, .kobay/ gizli; tek istisna .kobay/failure-out/ (git'e girmez).
     await hataPaketiYoluDenetle(cwd, hedef, 'out');
-    return failureGet({ cwd, id, out: hedef });
+    return failureGet({ cwd, id, out: hedef, ...(includeTrace === true ? { includeTrace: true } : {}) });
   }));
 
   sunucu.registerTool('doctor', {

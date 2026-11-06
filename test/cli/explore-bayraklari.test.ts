@@ -84,6 +84,26 @@ describe('kobay explore bayrakları', () => {
     expect(hedefAyaktaMi).not.toHaveBeenCalled();
   });
 
+  it('göreli --seed projenin baseUrl\'ine göre çözülür', async () => {
+    const cwd = await proje();
+    const sonuc = await kobay(cwd, 'explore', '--seed', '/records', '--seed', '/a/b?x=1#y');
+    expect(sonuc.kod).toBe(0);
+    expect(kesfetAyrintili).toHaveBeenCalledWith(expect.objectContaining({ tohumlar: [`${APP}/records`, `${APP}/a/b`] }));
+  });
+
+  it('göreli seed başka köken (//baska.example), kimlikli adres ve geçersiz metin exit 2; mesaj örnek verir', async () => {
+    const cwd = await proje();
+    for (const tohum of ['//baska.example/x', 'http://kullanici:parola@127.0.0.1:3000/x', 'records', 'http://']) {
+      const sonuc = await kobay(cwd, 'explore', '--seed', tohum);
+      expect(sonuc.kod).toBe(2);
+      expect(sonuc.hata).toMatch(/same origin|username or password|e\.g\. https:\/\/app\.example\/records or \/records/);
+      expect(sonuc.hata).not.toContain('parola');
+    }
+    const gecersiz = await kobay(cwd, 'explore', '--seed', 'records');
+    expect(gecersiz.hata).toContain('e.g. https://app.example/records or /records');
+    expect(kesfetAyrintili).not.toHaveBeenCalled();
+  });
+
   it.each([['--max-pages', '0'], ['--max-pages', '-1'], ['--depth', 'x'], ['--max-pages', '1.5']])(
     'geçersiz %s %s exit 2',
     async (bayrak, deger) => {
@@ -152,6 +172,10 @@ describe('MCP explore girdileri', () => {
       expect(kesfetAyrintili).toHaveBeenCalledWith(expect.objectContaining({
         tohumlar: [`${APP}/a`], siteHaritasi: false, maxSayfa: 10, derinlik: 1,
       }));
+      vi.mocked(kesfetAyrintili).mockClear();
+      const goreli = await baglanti.istemci.callTool({ name: 'explore', arguments: { seeds: ['/records'] } });
+      expect(goreli.isError).not.toBe(true);
+      expect(kesfetAyrintili).toHaveBeenCalledWith(expect.objectContaining({ tohumlar: [`${APP}/records`] }));
       vi.mocked(kesfetAyrintili).mockClear();
       const kotu = await baglanti.istemci.callTool({ name: 'explore', arguments: { seeds: ['https://baska.example/'] } });
       expect(kotu.isError).toBe(true);

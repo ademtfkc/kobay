@@ -26,7 +26,7 @@ function hataMi(veri: unknown): veri is { error: { code: string; message: string
 export function ciktiZarfi(sonuc: KomutSonucu): CiktiZarfi {
   if (sonuc.exitCode !== 0) {
     if (hataMi(sonuc.json)) return { ok: false, exitCode: sonuc.exitCode, error: sonuc.json.error };
-    return { ok: false, exitCode: sonuc.exitCode, data: sonuc.json };
+    return { ok: false, exitCode: sonuc.exitCode, ...(sonuc.hata === undefined ? {} : { error: sonuc.hata }), data: sonuc.json };
   }
   return { ok: true, exitCode: sonuc.exitCode, data: sonuc.json };
 }

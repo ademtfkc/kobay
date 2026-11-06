@@ -41,6 +41,17 @@ export const GIRIS_DONUS_BEKLEME_MS = 10_000;
 export const GIRIS_TIKLAMA_BEKLEME_MS = 15_000;
 
 /**
+ * Ret yolunda (URL değişmedi) ana çerçevenin `load` olayı için beklenen en uzun süre; giriş
+ * penceresi açıkken, ağ durulmasından sonra. Aynı adrese dönen ret yanıtının gövdesi geç
+ * tamamlanırsa (yavaş sunucu, yavaş makine) uyarı okuması belge yüklenmeden yapılır ve boş ya
+ * da eksik gelir; okuma `GIRIS_SAYFA_ICI_MS` içinde biter ama gerekçe kaybolur (ölçüm: 6 sn
+ * geç biten gövdede bekleme yokken giriş ~4,2 sn'de mesajsız döndü). Uyarıyı dolduran satır
+ * içi script'ler `load`'dan önce çalışır. Belge zaten yüklüyse (JavaScript ile ret, donan ama
+ * yüklenmiş sayfa) hemen döner; hiç bitmeyen yanıtta ret yoluna en çok bu kadar ekler.
+ */
+export const GIRIS_RET_YUKLEME_MS = 5_000;
+
+/**
  * Kullanıcı adı ve parola alanını doldurmanın en uzun süresi: Playwright'ın varsayılanıyla aynı
  * 30 sn, açıkça yazılı. Alanları geç açılan sağlıklı giriş sayfaları bunu kullanır; donmuş
  * sayfada doldurma bu süre sonunda ham Playwright hatasıyla biter (bilinen sınır, backlog A3 (h)).
@@ -305,6 +316,10 @@ async function girisiGonderIc(
   // Yeni sayfanın açılışta attığı istekler de denetlensin diye ağın durulması beklenir;
   // ağ hiç durulmayan uygulamada en fazla iki saniye. Sonraki istekleri koruma yine keser.
   await sayfa.waitForLoadState('networkidle', { timeout: 2_000 }).catch(() => undefined);
+  // URL değişmediyse (ret) aynı adrese dönen ret belgesi yüklensin: ağ durulmasının 2 sn tavanı
+  // `load`'dan önce dolabilir. Giriş penceresi açıkken beklenir ki belgenin geç yüklenen
+  // kısmının yaptığı her şey (ör. yabancıya 302 olan gezinme) pencere kuralıyla denetlensin.
+  if (!urlDegisti) await sayfa.waitForLoadState('load', { timeout: GIRIS_RET_YUKLEME_MS }).catch(() => undefined);
   // Giriş, uygulamanın origin'ine dönünce tamamlanmış sayılır (ayrı giriş sitesi olsun olmasın;
   // liste boşken yabancı origin'e inen giriş de tamamlanmamıştır). Dönüş beklenirken giriş
   // penceresi açık kalır (sıkı kural sürer).

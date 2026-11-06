@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 import { PassThrough } from 'node:stream';
@@ -41,7 +42,10 @@ vi.mock('../../src/kos/index.js', () => ({
 
 import { ciktiYaz } from '../../src/cli/cikti.js';
 import { testRefresh } from '../../src/cli/komutlar/index.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { KobayDizini, yazAtomik, type TestKaydi } from '../../src/depo/index.js';
+import { mcpSunucusuOlustur } from '../../src/mcp/index.js';
 
 function metinTopla(akis: PassThrough): { oku: () => string } {
   let metin = '';
@@ -247,5 +251,82 @@ describe('test refresh', () => {
 
     expect(sonuc.exitCode).toBe(2);
     expect(sonuc.mesaj).toMatch(/No exploration map/);
+  });
+
+  describe('gerçek kimlik süzgeci (giriş yapılandırılmış projede)', () => {
+    const IHLAL = 'Enter the account secret on the login form';
+
+    async function girisliProje(tur: 'kimlik' | 'oturum'): Promise<{ cwd: string; dizin: KobayDizini }> {
+      const kurulan = await proje();
+      if (tur === 'kimlik') {
+        await kurulan.dizin.kimlikYaz({ username: 'u', password: 'p', origin: 'http://uygulama.test' });
+      } else {
+        // `project create --session-file` ile aynı biçim: içe alındı işareti taşıyan storageState, credentials.json yok.
+        await kurulan.dizin.storageStateYaz(JSON.stringify({
+          cookies: [{ name: 'sid', value: 'OTURUM-9f2c', domain: 'uygulama.test', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' }],
+          origins: [],
+          kobay: { sessionSource: 'imported' },
+        }));
+      }
+      return kurulan;
+    }
+
+    async function beyinYaniti(adimlar: string[]): Promise<void> {
+      await yazAtomik(join(process.env.KOBAY_SAHTE_YANIT_DIZINI ?? '', `plan-refresh-${TEST_ID}.json`), JSON.stringify({
+        name: 'Müşteriler listesini görüntüle',
+        steps: [
+          { type: 'action', description: adimlar[0] },
+          { type: 'assertion', description: adimlar[1] },
+        ],
+      }));
+    }
+
+    for (const tur of ['kimlik', 'oturum'] as const) {
+      it(`beyin gerçek kimlik adımı döndürürse test dosyası bayt bayt aynı kalır, exit 4, mesajda adım (${tur})`, async () => {
+        const { cwd, dizin } = await girisliProje(tur);
+        await beyinYaniti([IHLAL, 'Müşteriler başlığını gör']);
+        const testDosyasi = dizin.yol('tests', `${TEST_ID}.json`);
+        const once = await readFile(testDosyasi);
+
+        // kimlik: --no-run (bugünkü kodda exit 0 verirdi); oturum: koşu yolu açık (kod üretimine geçilmemeli).
+        const sonuc = await testRefresh({ cwd, id: TEST_ID, ...(tur === 'kimlik' ? { run: false } : {}) });
+
+        expect(sonuc.exitCode).toBe(4);
+        expect(sonuc.mesaj).toContain('needs the real credentials');
+        expect(sonuc.mesaj).toContain(IHLAL);
+        expect(sonuc.mesaj).toContain('The test was not changed');
+        expect((await readFile(testDosyasi)).equals(once)).toBe(true);
+        // Koşu yoluna da girilmez: kod üretilmez, koşu yok.
+        await expect(dizin.kodOku(TEST_ID)).resolves.toBe('// eski kod: Cariler');
+        await expect(dizin.kosuListele(TEST_ID)).resolves.toEqual([]);
+      });
+    }
+
+    it('temiz adımlar giriş yapılandırılmış projede de bugünkü gibi yazılır', async () => {
+      const { cwd, dizin } = await girisliProje('oturum');
+      const sonuc = await testRefresh({ cwd, id: TEST_ID, run: false });
+      expect(sonuc.exitCode).toBe(0);
+      expect((await dizin.testOku(TEST_ID)).planSteps[0]?.description).toBe('Müşteriler sayfasını aç');
+    });
+
+    it('MCP test_refresh aynı ihlali reddeder, test dosyası değişmez', async () => {
+      const { cwd, dizin } = await girisliProje('oturum');
+      await beyinYaniti([IHLAL, 'Müşteriler başlığını gör']);
+      const testDosyasi = dizin.yol('tests', `${TEST_ID}.json`);
+      const once = await readFile(testDosyasi);
+      const sunucu = mcpSunucusuOlustur({ cwd });
+      const istemci = new Client({ name: 'kobay-test', version: '0.1.0' });
+      const [sunucuTasima, istemciTasima] = InMemoryTransport.createLinkedPair();
+      await Promise.all([sunucu.connect(sunucuTasima), istemci.connect(istemciTasima)]);
+      try {
+        const sonuc = await istemci.callTool({ name: 'test_refresh', arguments: { id: TEST_ID, run: false } });
+        expect(sonuc.isError).toBe(true);
+        expect((sonuc.content as [{ text: string }])[0].text).toContain(IHLAL);
+      } finally {
+        await istemci.close();
+        await sunucu.close();
+      }
+      expect((await readFile(testDosyasi)).equals(once)).toBe(true);
+    });
   });
 });

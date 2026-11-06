@@ -26,8 +26,8 @@ kobay'ı kendi makinende çalışan bir web uygulamasına yönelt. Uygulamayı g
 kabul ettiklerini Playwright testine çevirir, koşturur ve bir test düştüğünde
 ajanının üzerinde iş yapabileceği bir kanıt paketi (evidence bundle) geri verir:
 kök neden tahmini, bir `failureKind` (hata türü) sınıfı, önerilen düzeltme
-hedefi, düşen adımın ekran görüntüsü ve DOM'u, bir de Playwright trace'i
-(adım adım kayıt).
+hedefi, düşen adımın ekran görüntüsü ve DOM'u. Düşen koşu ayrıca bir Playwright
+trace'i (adım adım kayıt) saklar.
 
 <p align="center">
   <img alt="kobay HTML report: 2 of 4 tests failed, a fix-all prompt for a coding agent, and the first failed test card" src="https://raw.githubusercontent.com/ademtfkc/kobay/main/assets/readme/report-overview.png" width="820">
@@ -43,7 +43,7 @@ hedefi, düşen adımın ekran görüntüsü ve DOM'u, bir de Playwright trace'i
   [Maliyet ve veri](#maliyet-ve-veri).
 - **Sadece "düştü" değil, kanıt paketi.** Her hata; kök neden tahmini, önerilen
   düzeltme hedefi, düşen adımın ekran görüntüsü ve DOM'u, önemliyse konsol ve ağ
-  hataları ve bir Playwright trace'i ile gelir.
+  hataları ile gelir. Düşen koşunun Playwright trace'i yanında durur.
 - **`failureKind`, ajanının yanlış şeyi düzeltmesini önler.** Yalnızca "düştü"
   diyen bir test ajanı tahmine iter. `product_bug` yerine `product_changed` ya
   da `test_bug` diyen bir paket ise ajanı hiç bozulmamış bir uygulamayı
@@ -311,8 +311,8 @@ Kaynak: [`src/mcp/index.ts`](src/mcp/index.ts) ve
 4. `ids: string[]` ya da `all: true` ile `test_run` çağır (isteğe bağlı
    `rerun`) → test başına bir sonuç; `verdict`, `runId` ve düşerse
    `failureKind` dahil.
-5. Düşen test için `id` ile `failure_get` çağır (isteğe bağlı `out`) → kanıt
-   paketi. `failureKind`'ı oku: ürün düzeltmesinden sonra `id` ile `test_rerun`
+5. Düşen test için `id` ile `failure_get` çağır (isteğe bağlı `out`) → trace'siz
+   kanıt paketi (`includeTrace: true` trace'i ekler). `failureKind`'ı oku: ürün düzeltmesinden sonra `id` ile `test_rerun`
    çağır; `product_changed` için `id` ile `test_refresh` (isteğe bağlı `run`);
    test sorunu için üretilen kodu değiştirmeden önce `id` ile `code_get` çağır.
 6. Döngü bitince `prune` çağır (isteğe bağlı `confirm`, `dryRun`, `maxMb`,
@@ -410,14 +410,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.6.0
+      - uses: ademtfkc/kobay@v0.7.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.6.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.7.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -504,14 +504,17 @@ ile `.kobay/failure-out/<id>/` altına kopyalanır:
 
 ```sh
 ls .kobay/failure-out/t_v5hpedx1
-#> code.ts  console.json  failure.json  meta.json  network.json  step-4.html  step-4.png  steps.json  trace.zip
+#> code.ts  console.json  failure.json  meta.json  network.json  step-4.html  step-4.png  steps.json
 ```
 
 `failure.json` analizi (`failureKind`, `rootCauseHypothesis`,
 `recommendedFixTarget`, `evidence`), tam koşu sonucunu, adım listesini ve üretilen
 kodu taşır. Her kanıt kaydı aynı klasördeki bir dosyayı işaret eder; `console.json`
-ve `network.json` pakete yalnız analiz onlara atıf yaparsa girer. Trace'i
-`npx playwright show-trace trace.zip` ile aç. Ayrıntılar
+ve `network.json` pakete yalnız analiz onlara atıf yaparsa girer. Playwright
+trace'i pakette yoktur: oturum çerezlerini açık taşır. Düşen koşunun klasöründe,
+`.kobay/runs/<run-id>/trace.zip` yolunda kalır; `test failure get` bu yolu
+yazar. Pakete kopyalamak için `--include-trace` ekle (MCP: `includeTrace: true`).
+`npx playwright show-trace <yol>/trace.zip` ile aç. Ayrıntılar
 [Ayrıntılı hızlı başlangıç](#ayrıntılı-hızlı-başlangıç) bölümünde.
 
 **Bir HTML rapor:** her testin son koşusu için; dikkat isteyen her testte bir
@@ -568,17 +571,15 @@ test `not run` görünür.
 
 ## Durum ve sınırlar
 
-**0.6.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.6.0'da yeni olanlar:
-`kobay explore` form dışı alanları, `select` seçeneklerini, `aria-label`
-düğmeleri ve `details`/`summary` metinlerini okur, gizli alanları atlar;
-ziyaretçiyi giriş sayfasına gönderen sayfa haritada `requiresLogin` olarak
-kalır ve kayıtlı giriş yokken plan orada yalnız yönlendirme denetimi önerir;
-`--seed`, `/sitemap.xml` (`--no-sitemap`), `--max-pages` ve `--depth` taramayı
-genişletir; `--session-file`, girişini kobay'ın tamamlayamadığı uygulamalar
-(CAPTCHA, 2FA; bkz. [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa)) için
-giriş yapılmış bir Playwright `storageState` dosyasını daha sıkı bir ağ
-korumasıyla içe alır; beyin maliyet tavanları artık
-`KOBAY_MAX_TOTAL_COST_USD` altına sığmayan çağrıyı başlatmaz. Tam liste
+**0.7.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.7.0'da yeni olanlar:
+geçen test artık Playwright trace'i bırakmaz, hata paketi de `trace.zip`'i
+(oturum çerezlerini taşır) `--include-trace` verilmedikçe almaz (ikisi de
+kırıcı; yükseltmeden sonra bir kez `kobay prune` çalıştır); elle yazılan plan ve
+`test refresh`, içe alınan oturumlu projede de gerçek parolayı yazan adımı
+reddeder; Windows'ta `localhost` ve `*.localhost` hedefleri artık ulaşılamaz
+sayılmaz; kullanıcı adı ya da parola içeren adres reddedilir. 0.6.0 daha derin
+keşif getirmişti (form dışı alanlar, `select` seçenekleri, `requiresLogin`
+sayfaları, `--seed`, sitemap, `--session-file`). Tam liste
 [CHANGELOG.md](CHANGELOG.md) içinde.
 
 Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
@@ -607,8 +608,8 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
   bu yarışı yine kazanabilir. Windows'ta junction'lar ve diğer yeniden ayrıştırma
   noktaları symlink denetimiyle yalnız kısmen kapsanır.
 - **Yalnız tarayıcı testleri.** API ya da backend testi yok.
-- **Hep görünmez (headless).** Görünür tarayıcı penceresi yok; onun yerine
-  `trace.zip` kullan.
+- **Hep görünmez (headless).** Görünür tarayıcı penceresi yok; onun yerine düşen
+  koşunun `trace.zip`'ini kullan. Geçen test trace saklamaz.
 - **Yalnız basit giriş.** Kullanıcı adı/parola HTML formu. Ayrı bir kimlik
   sitesindeki form, yalnız origin'ini `--auth-origin` ile listelersen çalışır
   (bkz. [Ayrı giriş sitesi (SSO)](#ayrı-giriş-sitesi-sso)); OAuth onay ekranları,
@@ -617,6 +618,14 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
   [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa)); uygulamanın kendi sitesindeki alt alanlar kimlik
   bilgisini alabilir. JavaScript ile yapılan bir giriş yalnız ağ koruması
   kapsamındadır, form-origin denetimi kapsamında değil.
+- **Planın kimlik süzgeci güvenli yönde hata yapar.** Giriş tanımlıysa, sahte
+  değeri ona gerçek görünen yararlı bir yanlış-giriş önerisini düşürebilir:
+  `Enter 'wrong_password_qa' in the Password field` gerçek kimlik istiyor diye
+  düşer. Gerçek kimlik giren bir adımı geçirmez. Bu kalıcı bir sınırdır: kural
+  değiştiren her yeni tur başka durumları bozdu, süzgeç daha fazla
+  ayarlanmayacak. Giriş kayıtlıyken ya da oturum içe alınmışken
+  `kobay test create --plan` ve `kobay test refresh` de aynı süzgeci uygular,
+  yani bu sınırı aşmanın yolu değildir.
 - **Keşif tasarım gereği sığdır:** yalnız `<a href>` bağlantıları, sitemap ve
   verdiğin `--seed` URL'leri; form göndermek ya da düğmeye basmak yok.
   `--max-pages` vermezsen 40 sayfada, `--depth` vermezsen 3 derinlikte durur.
@@ -657,8 +666,9 @@ kobay'ı önemli bir şeye yöneltmeden önce bunu oku. Kısaca:
 - **Kimlik bilgileri origin'e kilitlidir** ve uygulamanın sitesinde (artı
   listelediğin auth origin'lerde) kalır; onları başka yere göndermeye çalışan bir
   giriş reddedilir.
-- **Trace'ler oturum çerezi taşır; ekran görüntüleri ve videolar maskelenmez.** Bir hata
-  paketine ya da rapora parola gibi davran.
+- **Trace'ler oturum çerezi taşır; ekran görüntüleri ve videolar maskelenmez.** Trace
+  yalnız düşen testte kalır; hata paketi onu `--include-trace` istenmedikçe
+  almaz. Bir hata paketine ya da rapora parola gibi davran.
 - **Dosya argümanları proje içinde kalır.**
 
 Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
@@ -768,15 +778,23 @@ Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
   WebSocket kesilmez; WebTransport ve WebRTC denetlenmez; DNS ön çözümleme
   çıkış yolu olarak denenmedi. Giriş bu nedenlerden biriyle reddedildiğinde `explore` ve
   `test refresh` `5` ile çıkar.
-- **Trace'ler oturum çerezleri içerir.** `runs/`, `failure/` ve herhangi bir
-  `failure-out/` kopyasındaki `trace.zip` tarayıcı oturumunu içerir. Bir pakete
-  parola gibi davran — herkese açık issue'lara ekleme.
-  `.kobay/failure-out/<id>/` git dışıdır; birini `--out` ile başka yere
-  kopyalarsan o klasörü git dışı bırak. Metin kanıtları (`console.json`,
-  `network.json`, `step-*.html`) pakete kopyalanırken sır maskelemesinden geçer,
-  ama ekran görüntüleri ve `trace.zip` geçemez: ekranda ya da ağ izlerinde
-  görünen sırları içerebilirler, bu yüzden paketin tamamını hassas say
-  (`.kobay/failure-out/` git dışıdır).
+- **Trace'ler oturum çerezleri içerir.** Trace tarayıcı oturumunu (çerezler ve
+  depolama) açık kaydeder. kobay onu yalnız düşen testte,
+  `.kobay/runs/<run-id>/trace.zip` yolunda saklar; geçen test trace bırakmaz.
+  Hata paketi (`failure/`, `failure-out/`, her `--out` kopyası) onu
+  `--include-trace` (MCP: `includeTrace: true`) verilmedikçe almaz; verilirse
+  kopya da oturumu taşır. Bir pakete parola gibi davran — herkese açık
+  issue'lara ekleme. `.kobay/failure-out/<id>/` git dışıdır; birini `--out` ile
+  başka yere kopyalarsan o klasörü git dışı bırak. Metin kanıtları
+  (`console.json`, `network.json`, `step-*.html`) pakete kopyalanırken sır
+  maskelemesinden geçer, ama ekran görüntüleri geçemez: ekranda görünen sırları
+  içerebilirler, bu yüzden paketin tamamını hassas say. kobay 0.6.0 ya da daha
+  eskisinin yazdığı bir pakette `trace.zip` kalmış olabilir; `test failure get`
+  onu `--include-trace` verilmedikçe atlar. Yükseltmeden sonra bir kez
+  `kobay prune` çalıştır: `.kobay/failure/` içindeki bu trace'leri ve geçen
+  koşuların trace'lerini kaldırır. `.kobay/failure-out/<id>/` içindeki eski
+  kopyaya dokunmaz; o testin bir sonraki `test failure get` çağrısı kopyayı
+  trace'siz yeniler.
 - **HTML rapordaki ekran görüntüleri ve videolar maskelenmez.** `test report`
   yazdığı her metni maskeler ve kaçışlar, ama adım ekran görüntülerini ve düşen
   koşu videolarını olduğu gibi kopyalar.
@@ -935,11 +953,11 @@ vermezsen kabuğun bulunduğun dizin).
 - MCP araçları oturum dosyası içe alamaz: ajan kobay'a keyfi bir dosya
   gösteremez. MCP üzerinden `explore`, daha önce CLI'dan içe alınmış oturumu
   kullanır.
-- Dosyaya parola gibi davran: odur. Bir test koşusunun `trace.zip`'i (`runs/`,
-  `failure/` ve `failure-out/` paketi) oturum çerezlerini ve depolamayı açık
-  kaydeder, `--login` oturumunda olduğu gibi; adım ekran görüntüleri, videolar ve
-  `step-*.html` sayfanın gösterdiği her şeyi taşır. **Düşen bir testin paketini
-  paylaşmadan önce içinden `trace.zip`'i çıkar.**
+- Dosyaya parola gibi davran: odur. Düşen bir koşunun `trace.zip`'i
+  (`.kobay/runs/<run-id>/` içinde ve `--include-trace` ile kopyalanan pakette)
+  oturum çerezlerini ve depolamayı açık kaydeder, `--login` oturumunda olduğu
+  gibi; adım ekran görüntüleri, videolar ve `step-*.html` sayfanın gösterdiği
+  her şeyi taşır. **`--include-trace` ile kopyalanmış bir paketi paylaşma.**
 
 ## Başvuru
 
@@ -1010,8 +1028,12 @@ PowerShell kullanır ([Claude Code kurulum rehberi](https://code.claude.com/docs
 görüldü. Windows sorunlarını lütfen bildir.
 
 `doctor` Node'u, beyin CLI'larını, Chromium'u, mevcut projeyi ve hedefin cevap
-verip vermediğini denetler. Her zaman `0` ile çıkar, yani satırları oku. Bir
-proje yokken son ikisi, beklendiği gibi, düşer. Windows'ta yedinci bir satır,
+verip vermediğini denetler. Proje içindeyken bir satır düşse bile `0` ile çıkar, yani satırları oku.
+Proje yokken son ikisi düşer ve `doctor` `ok: false` ile `2` çıkar
+(`kobay project create --url <URL>` çalıştır). `--output json` ile bu zarf hem
+`error` (`UsageError`, "Not a kobay project") hem de `data` içinde satırları taşır;
+metin modunda satırlar stderr'e gider, yani `kobay doctor | grep` orada boş kalır.
+Windows'ta yedinci bir satır,
 `Git Bash`, eklenir: Git for Windows isteğe bağlıdır (yoksa `claude` CLI kabuk
 aracı için PowerShell kullanır), ama bulunamazsa satır "isteğe bağlı" ipucuyla düşer.
 `CLAUDE_CODE_GIT_BASH_PATH`'e bakar; değer geçersizse yok sayılır ve Git for
@@ -1089,7 +1111,7 @@ yine düşürür. Kayıtlı giriş yokken `requiresLogin` sayfaya yazılan öner
 beyin onu `loginRedirectCheck: true` diye işaretlediyse (yalnız sayfanın giriş
 sayfasına yolladığını doğruluyorsa) tutulur; diğerleri
 düşürülür ve çıktı (JSON'da `nextStep`) `kobay project create --login` ile giriş
-kaydetmeyi söyler.
+kaydetmeyi söyler; bu ipucu yalnız bir öneri, sayfası kayıtlı olmayan bir giriş gerektirdiği için düşürüldüğünde, bir kez gösterilir.
 Üretilen kod sessizce `test.skip` kullanamaz ve gerçek kimlik
 gerektirecek bir adım yeniden yazılmak yerine hata fırlatır. Metin çıktısı özet
 satırı artı `--output json`'ın döndürdüğü aynı JSON gövdesidir. Demo koşusunda iki
@@ -1159,15 +1181,17 @@ kısım `failure`'dır; boş isim testi için:
 
 Her kanıt kaydı aynı klasördeki bir dosyayı işaret eder (ekran görüntüsü için
 `step-<adım>.png`, DOM için `step-<adım>.html`). `console.json` ve `network.json`
-pakete yalnız analiz onlara atıf yaparsa girer. Trace'i
-`npx playwright show-trace trace.zip` ile aç.
+pakete yalnız analiz onlara atıf yaparsa girer. Trace pakette yoktur (oturum
+çerezlerini taşır); `test failure get` koşu klasöründeki yolunu yazar,
+`--include-trace` onu kopyalar.
+`npx playwright show-trace .kobay/runs/<run-id>/trace.zip` ile aç.
 
 **Uygulamayı düzelt, sonra `kobay test rerun <id>`** — mevcut kodu yeniden
 üretmeden tekrar koşturur.
 
 ### Komutlar
 
-Aşağıdaki bayraklar 0.6.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
+Aşağıdaki bayraklar 0.7.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
 örtüşür.
 
 | Komut | Ne yapar |
@@ -1175,7 +1199,7 @@ Aşağıdaki bayraklar 0.6.0'da `kobay --help` ve her alt komutun `--help` çık
 | `setup [--brain <b>] [--model <m>] [--effort <e>]` | Varsayılan beyni `~/.kobay/config.json`'a yazar (`claude`, `codex`, `openrouter`). |
 | `install-browser [--with-deps]` | Uyan Chromium'u kurar; `--with-deps` Linux sistem kütüphanelerini ekler. |
 | `demo [--port <port>]` | Paketteki demo uygulamayı başlatır. Varsayılan port 3000; `0` boş birini seçer. |
-| `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi (Windows'ta ayrıca Git Bash'i) denetler. Her zaman `0` ile çıkar. |
+| `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi (Windows'ta ayrıca Git Bash'i) denetler. Proje içindeyken `0` ile çıkar (satır düşse bile); proje bulunamazsa `2` ile çıkar. |
 | `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Burada `.kobay/` oluşturur. `--url` bir `http://` ya da `https://` adresi olmalıdır. `--force` var olan bir projenin yalnız config'ini yeniden yazar; yenilerini vermedikçe beynini ve limitlerini korur. `--session-file` girişli bir Playwright `storageState` dosyasını içe alır (bkz. [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa)); `--auth-origin` `--login` ya da `--session-file` ister. |
 | `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Yalnız verdiğin alanları değiştirir; `--base-url` ve `--login-url` `http://` ya da `https://` olmalıdır. `--login` kimlik bilgilerini yeniden girer; `--auth-origin` auth origin listesinin tamamını değiştirir ve `--clear-auth-origins` gibi `--login` ister. |
 | `project get` | Ayarlar, test sayısı, bir harita olup olmadığı. |
@@ -1191,16 +1215,18 @@ Aşağıdaki bayraklar 0.6.0'da `kobay --help` ve her alt komutun `--help` çık
 | `test rerun <id>` | Var olan kodu yeniden üretmeden koşturur. |
 | `test refresh <id> [--no-run]` | `product_changed` için: yeniden keşfet, planı uyarla, yeniden üret ve koştur. |
 | `test result <id> [--history]` | Son koşu sonucu, ya da hâlâ diskte olan her koşu. |
-| `test failure get <id> [--out <dir>]` | Hata paketini kopyalar. Varsayılan `.kobay/failure-out/<id>/`, yerinde yenilenir. |
+| `test failure get <id> [--out <dir>] [--include-trace]` | Hata paketini kopyalar. Varsayılan `.kobay/failure-out/<id>/`, yerinde yenilenir. Trace (oturum çerezlerini taşır) `--include-trace` verilmedikçe dışarıda kalır; çıktı yolunu verir. JSON `data`: `id`, `destination`, `trace: { included, path }` (koşuda trace yoksa `path` `null`). |
 | `test report [ids...] [--all] [--out <dir>] [--summary <path>] [--max-prompts <n>]` | Seçilen her testin son koşusunun (adımlar, ekran görüntüleri, düşen koşu videosu, hata, hata analizi, üretilen kod) statik bir HTML raporunu yazar. Yalnız diskte olanı okur; hiçbir şey koşturmaz. Varsayılan `.kobay/report/`, her seferinde bütünüyle değiştirilir. Testler düşmüş olsa da `0` ile çıkar. `--summary` ayrıca bir pull request yorumu için Markdown özet yazar (yalnız metin, en çok `--max-prompts` düzeltme istemi, varsayılan 5). |
-| `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Eski koşuları, beyin günlüklerini, bayat hata paketlerini ve eski sürümlerden kalan bilinen artıkları kaldırır. Bilinmeyen `failure-out/` dosyaları atlanır. Son düşen koşuyu ya da güncel bir hata paketini asla kaldırmaz. CLI varsayılan olarak siler; `--dry-run` yalnız önizler. `--max-mb` `runs/` için tavandır (varsayılan 500), `--older-than-days` yaş eşiğidir (varsayılan 7). |
+| `prune [--dry-run] [--max-mb <mb>] [--older-than-days <days>]` | Eski koşuları, beyin günlüklerini, bayat hata paketlerini eski sürümlerden kalan bilinen artıkları ve hata paketlerinde ya da geçen koşularda kalan `trace.zip` dosyalarını kaldırır. Bilinmeyen `failure-out/` dosyaları atlanır. Symlink olan bir hata paketi klasörü prune'u exit 2 ile durdurur. Son düşen koşuyu ya da güncel bir hata paketini asla kaldırmaz. CLI varsayılan olarak siler; `--dry-run` yalnız önizler. `--max-mb` `runs/` için tavandır (varsayılan 500), `--older-than-days` yaş eşiğidir (varsayılan 7). |
 | `agent install --target <claude\|codex\|cursor>` | Ajan becerisini buraya kurar; `claude` için ayrıca MCP sunucusunu `.mcp.json`'a kaydeder. |
 | `mcp` | stdio MCP sunucusunu başlatır. |
 
 `explore` bayrakları (0.6.0'da yeni; `--help` metni İngilizcedir):
 
 - `--seed <url>`: proje origin'inde ek başlangıç URL'si; tekrarlanabilir. Başka
-  origin'deki URL exit `2` verir.
+  origin'deki URL exit `2` verir. `/records` gibi bir yol hedef URL'nin origin'ine
+  göre çözülür, alt yoluna göre değil (`http://h/app` + `/records` =
+  `http://h/records`).
 - `--no-sitemap`: `/sitemap.xml`'i okuma (proje origin'inde varsa varsayılan
   olarak okunur). Sitemap index izlenir. Sınırlar: dosya başına 1 MB, toplam 500
   URL, 20 alt sitemap ve hepsi için tek 15 saniyelik süre; yalnız `200` yanıtı
@@ -1248,9 +1274,11 @@ türünde 1–200 `planSteps` içerir:
 ```
 
 Başka bir origin'deki `url` `2` çıkış koduyla reddedilir. `url`, `baseUrl`'e göre
-çözülür ve bu normalleştirilmiş biçimiyle saklanır. Kayıtlı kimlik bilgisi olan
-bir projede, adımları gerçek parolayı ya da başka bir sırrı yazan plan `2`
-çıkış koduyla reddedilir; kobay'ın kendi giriş adımı testi zaten oturumlu açar.
+çözülür ve bu normalleştirilmiş biçimiyle saklanır. Kayıtlı kimlik bilgisi ya da
+içe alınmış oturumu (`--session-file`) olan bir projede, adımları gerçek parolayı
+ya da başka bir sırrı yazan plan `2` çıkış koduyla reddedilir; test zaten
+oturumlu açılır. Elle yazılan plan origin'e ve gerçek kimlik adımlarına göre
+denetlenir, keşif haritasına göre denetlenmez.
 `url` yoksa hata analizi harita karşılaştırmasını atlar ve bunu söyleyen bir
 uyarı basar (`Test has no URL (<id>); map comparison skipped.`).
 
@@ -1393,7 +1421,7 @@ Projenin bütün durumu uygulamanın kökündeki `.kobay/` altında yaşar:
 | `map.json` | Harita: `title`, `headings`, `links`, `forms`, `buttons`, `menu` içeren `pages`. |
 | `plan/proposals.json` | Beynin önerileri. |
 | `tests/` | Test kayıtları (`t_*.json`), üretilen kod (`t_*.spec.ts`), `_fixture.ts`. |
-| `runs/r_*/` | Koşu başına bir klasör: `result.json`, adım `.png`/`.html`, `console.json`, `network.json`, `trace.zip`. |
+| `runs/r_*/` | Koşu başına bir klasör: `result.json`, adım `.png`/`.html`, `console.json`, `network.json`; düşen koşuda ayrıca `trace.zip` ve `video.webm`. |
 | `failure/<testId>/` | Test başına son hata paketi, atomik yazılır. |
 | `failure-out/<testId>/` | `test failure get`'in varsayılan hedefi, yerinde yenilenir (git dışı). |
 | `report/` | `test report`'un son HTML raporu: `index.html`, `kobay-report.json`, `assets/<runId>/step-<n>.png` ve `assets/<runId>/video.webm` (git dışı). |

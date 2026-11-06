@@ -17,6 +17,8 @@ export interface KomutSonucu {
   mesaj?: string;
   /** İnsan modunda stdout'a yazılan tek çıktı; verilmişse json dökümü basılmaz. */
   metin?: string;
+  /** JSON zarfında `data` ile birlikte taşınan hata (gövde bir hata nesnesi değil, satır dizisi olduğunda). */
+  hata?: { code: string; message: string };
 }
 
 export class UsageError extends Error {

@@ -144,6 +144,31 @@ describe('MCP sunucusu', () => {
     }
   });
 
+  it('prune preview lists upgraded-project traces and confirm removes them', async () => {
+    const cwd = await geciciDizinAc('kobay-mcp-prune-trace-');
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://localhost:3000', brain: { adaptor: 'sahte' } });
+    await mkdir(dizin.yol('failure', 't_abc12345'), { recursive: true });
+    await writeFile(dizin.yol('failure', 't_abc12345', 'trace.zip'), 'eski-iz');
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const onizleme = await baglanti.istemci.callTool({ name: 'prune', arguments: {} });
+      expect(JSON.parse((onizleme.content[0] as { text: string }).text)).toMatchObject({
+        dryRun: true,
+        wouldDelete: [{ path: '.kobay/failure/t_abc12345/trace.zip', kind: 'failure-bundle-trace', reason: 'trace-retention' }],
+      });
+      await expect(access(dizin.yol('failure', 't_abc12345', 'trace.zip'))).resolves.toBeUndefined();
+
+      const sil = await baglanti.istemci.callTool({ name: 'prune', arguments: { confirm: true } });
+      expect(JSON.parse((sil.content[0] as { text: string }).text)).toMatchObject({
+        dryRun: false,
+        deleted: [{ path: '.kobay/failure/t_abc12345/trace.zip', kind: 'failure-bundle-trace' }],
+      });
+      await expect(access(dizin.yol('failure', 't_abc12345', 'trace.zip'))).rejects.toThrow();
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
   it('package.json sürümünü ve kısa İngilizce kullanım talimatını bildirir', async () => {
     const baglanti = await bagliMcp(await geciciDizinAc('kobay-mcp-'));
     try {
@@ -217,6 +242,30 @@ describe('MCP sunucusu', () => {
       await baglanti.kapat();
     }
   });
+  it('project_create/project_update kullanıcı bilgili adresi reddeder, parola yanıtta yok', async () => {
+    const cwd = await geciciDizinAc('kobay-mcp-');
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const olustur = await baglanti.istemci.callTool({
+        name: 'project_create', arguments: { url: 'http://admin:Hunter2Pass@localhost:3000' },
+      });
+      expect(olustur.isError).toBe(true);
+      expect(JSON.stringify(olustur)).not.toContain('Hunter2Pass');
+      expect(JSON.stringify(olustur)).toContain('must not contain a username or password');
+      await expect(access(join(cwd, '.kobay'))).rejects.toThrow();
+
+      await baglanti.istemci.callTool({ name: 'project_create', arguments: { url: 'http://localhost:3000' } });
+      for (const alan of [{ baseUrl: 'http://admin:Hunter2Pass@localhost:3000' }, { loginUrl: 'http://admin:Hunter2Pass@localhost:3000/giris' }]) {
+        const guncelle = await baglanti.istemci.callTool({ name: 'project_update', arguments: alan });
+        expect(guncelle.isError).toBe(true);
+        expect(JSON.stringify(guncelle)).not.toContain('Hunter2Pass');
+      }
+      expect(await readFile(join(cwd, '.kobay', 'config.json'), 'utf8')).not.toContain('Hunter2Pass');
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
   it('project_update yalnız verilen alanı değiştirir, proje yoksa hata döner', async () => {
     const cwd = await geciciDizinAc('kobay-mcp-');
     const baglanti = await bagliMcp(cwd);
@@ -763,11 +812,36 @@ describe('MCP sunucusu', () => {
         expect(JSON.parse((sonuc.content[0] as { text: string }).text) as { hedef: string }).toEqual({
           id: 't_abc12345',
           destination: join(cikisKoku, 't_abc12345'),
+          trace: { included: false, path: null },
         });
         await access(join(cikisKoku, 't_abc12345', 'failure.json'));
       }
       // İkinci çağrı aynı klasörü yeniler; -1/-2 gibi kopyalar ya da geçici artık kalmaz.
       expect(await readdir(cikisKoku)).toEqual(['t_abc12345']);
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
+  // Spec 2026-11-06 Ş-C: trace.zip yalnız includeTrace: true ile kopyalanır.
+  it('failure_get trace.zip\'yi varsayılan kopyalamaz; includeTrace: true ile kopyalar', async () => {
+    const cwd = await realpath(await geciciDizinAc('kobay-mcp-iz-'));
+    const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://proje.test', beyin: { adaptor: 'sahte' } });
+    const paket = hataPaketi();
+    const kosuIzi = join(await dizin.kosuDizini(paket.runId), 'trace.zip');
+    await writeFile(kosuIzi, 'iz');
+    await dizin.hataPaketiYaz(paket, []);
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const varsayilan = await baglanti.istemci.callTool({ name: 'failure_get', arguments: { id: 't_abc12345', out: 'a' } });
+      expect(varsayilan.isError).toBeUndefined();
+      expect(JSON.parse((varsayilan.content[0] as { text: string }).text)).toMatchObject({ trace: { included: false, path: kosuIzi } });
+      await expect(access(join(cwd, 'a', 'trace.zip'))).rejects.toThrow();
+
+      const dahil = await baglanti.istemci.callTool({ name: 'failure_get', arguments: { id: 't_abc12345', out: 'b', includeTrace: true } });
+      expect(dahil.isError).toBeUndefined();
+      expect(JSON.parse((dahil.content[0] as { text: string }).text)).toMatchObject({ trace: { included: true, path: join(cwd, 'b', 'trace.zip') } });
+      await expect(readFile(join(cwd, 'b', 'trace.zip'), 'utf8')).resolves.toBe('iz');
     } finally {
       await baglanti.kapat();
     }

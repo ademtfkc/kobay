@@ -417,8 +417,8 @@ const GERCEK_DEGER_ISARETI = /\b(?:valid|real|actual|genuine|configured)\s+(?:(?
 export const BEYAN_SEBEBI = 'The proposal declares requiresRealCredentials: true, but the session is already '
   + "authenticated via kobay's login step and generated tests cannot type credentials";
 
-export const GERCEK_KIMLIK_SEBEBI = 'A step needs the real credentials, but the session is already authenticated via '
-  + "kobay's login step and generated tests cannot type credentials";
+export const GERCEK_KIMLIK_SEBEBI = 'A step needs the real credentials, but the session is already authenticated (by '
+  + "kobay's login step or an imported session) and generated tests cannot type credentials";
 
 /** Adım gerçek kimlik (parola, gizli anahtar, PIN...) girmeyi gerektiriyor mu? */
 export function adimGercekKimlikIsterMi(aciklama: string): boolean {
