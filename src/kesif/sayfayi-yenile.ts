@@ -1,6 +1,7 @@
 import { access } from 'node:fs/promises';
 import { chromium, type BrowserContext, type Page } from '@playwright/test';
 import { authOriginleriDogrula, type Harita, type Kimlik, type OturumDurumu, type Sayfa } from '../depo/index.js';
+import { DURULMA, istekIzle, sayfaDurulsun, sinirli } from './gezgin.js';
 import { girisFormuBul } from './giris.js';
 import {
   girisKorumasiBul,
@@ -105,18 +106,40 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
     throw hata;
   }
   let giris: GirisSonucu | undefined;
+  const izleyici = istekIzle(sayfa);
+  // Keşifle aynı tavanlı durulma (bkz. `DURULMA`); yalnız hedef kökenindeki belgede beklenir.
+  const durulsun = async (): Promise<void> => {
+    await sayfaDurulsun(sayfa, izleyici, DURULMA.sayfaTavaniMs, hedefOrigin);
+  };
+
+  // Giriş yalnız yönlendirme olduğunda denenir; hedef sayfadaki bir parola
+  // alanı (örn. "şifre değiştir" formu) giriş sanılmasın.
+  // Ayrı giriş sitesine (SSO) yönlendirmede yol aynı olsa da origin farklıdır; o da yönlendirmedir.
+  const yerindeMi = (): boolean => {
+    const adres = new URL(sayfa.url());
+    return adres.origin === hedefOrigin && adres.pathname === beklenenYol;
+  };
+  /** Son `goto(hedef)` sunucu yönlendirmesiyle başka yola vardıysa true (0.7.0'daki gibi reddedilir). */
+  let sunucuYonlendirdi = false;
+  const hedefeGit = async (): Promise<void> => {
+    await sayfa.goto(hedef, { waitUntil: 'domcontentloaded', timeout: sayfaZamanAsimiMs });
+    sunucuYonlendirdi = !yerindeMi();
+    // SPA'nın istemci yönlendirmesi (ör. girişe) ancak çizimden sonra görünür.
+    await durulsun();
+  };
 
   try {
-    await sayfa.goto(hedef, { waitUntil: 'domcontentloaded', timeout: sayfaZamanAsimiMs });
+    await hedefeGit();
 
-    // Giriş yalnız yönlendirme olduğunda denenir; hedef sayfadaki bir parola
-    // alanı (örn. "şifre değiştir" formu) giriş sanılmasın.
-    // Ayrı giriş sitesine (SSO) yönlendirmede yol aynı olsa da origin farklıdır; o da yönlendirmedir.
-    const yerindeMi = (): boolean => {
-      const adres = new URL(sayfa.url());
-      return adres.origin === hedefOrigin && adres.pathname === beklenenYol;
+    // Aynı kökende ve YALNIZ çizimden sonra (istemci tarafında) başka yola yönlenme, varılan sayfada
+    // giriş formu yoksa uygulama içidir (SPA rotası `/projects/2` → `/projects/2/9`); keşif de böyle
+    // kaydeder, kabul edilir. Sunucu yönlendirmesi (yol jeton taşıyabilir) ve giriş formu reddedilir.
+    const kabulEdilir = async (): Promise<boolean> => {
+      if (yerindeMi()) return true;
+      if (sunucuYonlendirdi || new URL(sayfa.url()).origin !== hedefOrigin) return false;
+      return await sinirli(girisFormuBul(sayfa), sayfaZamanAsimiMs, 'login form check') === null;
     };
-    if (secenekler.kimlik !== undefined && !yerindeMi()) {
+    if (secenekler.kimlik !== undefined && !(await kabulEdilir())) {
       if (secenekler.loginUrl !== undefined) {
         await sayfa.goto(secenekler.loginUrl, { waitUntil: 'domcontentloaded', timeout: sayfaZamanAsimiMs });
       }
@@ -127,20 +150,25 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
         // Reddedildiyse önceki (bayat) oturum dosyası da kaldırılır.
         if (giris.basarili) await oturumDurumunuYaz(context, secenekler.storageStateYolu);
         else await oturumDurumunuSil(secenekler.storageStateYolu);
-        await sayfa.goto(hedef, { waitUntil: 'domcontentloaded', timeout: sayfaZamanAsimiMs });
+        await hedefeGit();
       }
     }
 
-    const gelenYol = new URL(sayfa.url()).pathname;
-    if (!yerindeMi()) {
+    const varilan = new URL(sayfa.url());
+    if (!(await kabulEdilir())) {
+      // Başka kökene yönlenmede oturum suçlanmaz; varılan adres (jeton taşıyabilir) yazılmaz.
+      if (varilan.origin !== hedefOrigin) {
+        throw new Error(`Page could not be refreshed: asked for ${beklenenYol}, the page moved to another origin`);
+      }
       // Yeniden giriş reddedildiyse sayfanın gösterdiği uyarı (maskeli, etiketli) mesaja eklenir.
       const not = giris?.basarili === false ? girisSayfaMesajiNotu(giris.sayfaMesaji) : '';
       throw new Error(
-        `Page could not be refreshed: asked for ${beklenenYol}, got ${gelenYol} (the session may have expired)${not === '' ? '' : `.${not}`}`,
+        `Page could not be refreshed: asked for ${beklenenYol}, got ${varilan.pathname} (the session may have expired)${not === '' ? '' : `.${not}`}`,
       );
     }
     const maske = haritaMaskesi(oturum === undefined ? [] : oturumDegerleri(oturum), secenekler.kimlik?.password);
-    const hamOzet = await sayfaOzeti(sayfa, hedefOrigin);
+    // Ana iş parçacığı kilitlenen sayfa yenilemeyi asılı bırakmaz.
+    const hamOzet = await sinirli(sayfaOzeti(sayfa, hedefOrigin), sayfaZamanAsimiMs, 'page summary');
     const ozet = maske.bos ? hamOzet : sayfaMetinleriniGizle(hamOzet, maske);
     await girisKorumasiSonDenetim(context);
     return ozet;
@@ -153,6 +181,7 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
     }
     throw hata;
   } finally {
+    izleyici.birak();
     await context.close();
     await tarayici.close();
   }

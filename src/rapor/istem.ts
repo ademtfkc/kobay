@@ -337,6 +337,10 @@ function incelemeCumlesi(test: RaporTesti): string {
   const id = test.id;
   const rerun = `\`kobay test rerun ${id} --output json\``;
   if (kodsuzEngelMi(test)) return `it has no up-to-date generated code; run \`kobay test run ${id} --output json\` locally to generate and run it.`;
+  const hedefYazisi = test.failure?.recommendedFixTarget.reference ?? '';
+  if (test.failureKind === 'env' && hedefYazisi.includes('kobay explore --seed')) {
+    return `the page is missing from the map: follow the recommended fix target (\`${ayrintiKomutu(test)}\`), then \`kobay test refresh ${id} --output json\`. Do not change code.`;
+  }
   if (test.verdict === 'blocked' || test.failureKind === 'env') {
     return `bring the environment up and check it with \`kobay doctor --output json\`, then run ${rerun}. Do not change code.`;
   }

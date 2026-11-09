@@ -11,6 +11,7 @@ const sahteler = vi.hoisted(() => ({
   loggedIn: false,
   hedefAyakta: true,
   girisSayfaMesaji: undefined as { tur: 'alinti'; metin: string } | { tur: 'gizlendi' } | undefined,
+  girisHizSiniri: undefined as { retryAfterSn?: number } | undefined,
 }));
 
 const dosyaDurumu = vi.hoisted(() => ({
@@ -50,14 +51,16 @@ vi.mock('../../src/kesif/index.js', async (asilModul) => {
       forms: [], buttons: [], menu: [],
     }],
   }));
-  const { girisSayfaMesajiNotu } = await asilModul<typeof import('../../src/kesif/index.js')>();
+  const { girisSayfaMesajiNotu, hizSiniriOnerisi } = await asilModul<typeof import('../../src/kesif/index.js')>();
   return {
     girisSayfaMesajiNotu,
+    hizSiniriOnerisi,
     kesfet,
     // CLI ayrıntılı keşfi kullanır; sahte keşif `kesfet` sahtesinden geçer (çağrı sayımı ortak kalır).
     kesfetAyrintili: vi.fn(async (secenekler: { baseUrl: string }) => ({
       harita: await kesfet(secenekler),
       ...(sahteler.girisSayfaMesaji === undefined ? {} : { girisSayfaMesaji: sahteler.girisSayfaMesaji }),
+      ...(sahteler.girisHizSiniri === undefined ? {} : { girisHizSiniri: sahteler.girisHizSiniri }),
     })),
   };
 });
@@ -198,6 +201,7 @@ afterEach(() => {
   sahteler.errorMessage = undefined;
   sahteler.loggedIn = false;
   sahteler.girisSayfaMesaji = undefined;
+  sahteler.girisHizSiniri = undefined;
   sahteler.hedefAyakta = true;
   dosyaDurumu.rmKosulu = undefined;
   dosyaDurumu.renameKosulu = undefined;
@@ -451,6 +455,26 @@ describe('CLI komut fonksiyonları', () => {
       }),
     });
     await expect(access(join(cwd, '.kobay', 'map.json'))).rejects.toThrow();
+  });
+
+  it('P2-3: hız sınırıyla (HTTP 429) reddedilen giriş kimlik hatası gibi bildirilmez; bekle + yeniden explore', async () => {
+    const cwd = await geciciDizin();
+    await projectCreate({
+      cwd,
+      url: 'http://uygulama.test',
+      login: { username: 'dogru', password: 'dogru-parola' },
+      beyin: { adaptor: 'sahte' },
+    });
+    sahteler.girisHizSiniri = { retryAfterSn: 20 };
+    sahteler.girisSayfaMesaji = { tur: 'alinti', metin: 'Too Many Requests' };
+
+    const sonuc = await explore({ cwd });
+    expect(sonuc.exitCode).toBe(5);
+    const metin = JSON.stringify(sonuc.json);
+    expect(metin).toContain('Login was refused by the app\'s rate limit (HTTP 429 Too Many Requests)');
+    expect(metin).toContain('Wait about 20 s (the app\'s Retry-After), then run `kobay explore` again.');
+    expect(metin).not.toContain('check the username');
+    expect(metin).not.toContain('kobay project update --login');
   });
 
   it('A6: uyarı gizlendiyse yalnız "withheld" notu eklenir', async () => {

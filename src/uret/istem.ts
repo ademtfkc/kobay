@@ -20,7 +20,9 @@ export function sistemIstemi(): string {
     "Do not reinterpret a step. If a step needs the real credentials (for example \"Enter the password\" or \"Log in with valid credentials\"), do not type anything and do not replace it with another check; make that step's body exactly throw new Error('kobay: this step needs the real credentials; the session is already authenticated'); so the test fails visibly.",
     'Prefer getByRole in selectors; then getByLabel, getByPlaceholder, getByText, and CSS last.',
     "Use { exact: true } in a getByRole name for an exact match; one text may be a substring of another element (for example 'Customers' inside 'Dormant customers'), and a loose match raises a strict mode violation. An element's accessible name also covers nested elements (for example <h2>Invoice list<span>4 records</span></h2>): for such headings give name a regular expression (name: /^Invoice list/) and verify the content with toContainText. In getByText prefer a narrow regular expression over exact; do not write exact: true when you do not know the exact text in the DOM.",
-    'Do not use page.waitForTimeout. page.goto may only visit one of the URL paths given in the map.',
+    'Do not use page.waitForTimeout. page.goto may only visit one of the URL paths given in the map, or a path that matches a path pattern of those pages (a numeric or UUID-like segment may differ: /tasks/999999 matches /tasks/36).',
+    "If a step needs a page whose path is neither in the map nor matches one of its patterns, do not guess a URL; make that step's body exactly throw new Error('kobay: the path <path> is not in the map; add it to the map with: kobay explore --seed <path>'); with the real path in both places, so the test fails visibly.",
+    'A button listed under disabledButtons for a page is disabled on that page in its initial state: assert it with expect(...).toBeDisabled() instead of clicking it and waiting for a message.',
     'The code deny list is only a speed bump, not a security boundary; do not try to reach Node process, file system or network APIs.',
   ].join('\n');
 }
@@ -32,6 +34,7 @@ export function kullaniciIstemi(test: TestKaydi, harita: Harita, oncekiHata?: st
     headings: sayfa.headings,
     forms: sayfa.forms,
     buttons: sayfa.buttons,
+    ...(sayfa.disabledButtons === undefined ? {} : { disabledButtons: sayfa.disabledButtons }),
     links: sayfa.links,
   }));
   const geriBildirim = oncekiHata === undefined

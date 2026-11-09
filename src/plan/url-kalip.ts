@@ -94,3 +94,24 @@ export function oneriUrlKarari(
   if (kalip !== null && kaliplar.includes(kalip)) return { kabul: true, tur: 'kalip', kalip };
   return { kabul: false, tur: 'yok', kalip };
 }
+
+/** Komuta yazılabilen yol biçimi: kabuk karakteri, boşluk, satır sonu yok. */
+export const GUVENLI_YOL_DESENI = /^\/[A-Za-z0-9._~%/:@+,=-]*$/;
+
+/** `kobay explore --seed <yol>`; yol güvenli biçimde değilse yer tutucu `<path>` yazılır (komut hiçbir zaman ham yol taşımaz). */
+export function seedKomutu(yol: string): string {
+  return `kobay explore --seed ${GUVENLI_YOL_DESENI.test(yol) ? yol : '<path>'}`;
+}
+
+/**
+ * Haritada olmayan bir adresi haritaya katan komut (`kobay explore --seed <yol>`); plan kapısı,
+ * kod üretim kapısı ve üretilen testin kendi hata mesajı aynı cümleyi kullanır. Yol çıkarılamayan
+ * adres (`mailto:` gibi) ve başka kökenin adresi için null.
+ */
+export function haritayaEkleKomutu(url: string, baseUrl: string): string | null {
+  const yol = yoluNormallestir(url, baseUrl);
+  if (yol === null) return null;
+  // Başka kökenin yolu için komut önerilmez: `--seed` yolu proje kökenine göre çözer.
+  if (new URL(url, baseUrl).origin !== new URL(baseUrl).origin) return null;
+  return seedKomutu(yol);
+}

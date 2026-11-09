@@ -8,6 +8,7 @@ import type { Harita, TestKaydi } from '../depo/index.js';
 import { yazAtomik } from '../depo/index.js';
 import { fixtureYenidenAktarimMetni } from '../kos/calisma-alani.js';
 import { testSureciOrtami } from '../kos/ortam.js';
+import { haritaYolKaliplari, haritayaEkleKomutu, oneriUrlKarari } from '../plan/url-kalip.js';
 import { kullaniciIstemi, sistemIstemi } from './istem.js';
 import { KodYanitiSemasi } from './sema.js';
 
@@ -470,7 +471,8 @@ export function statikHata(kod: string, test: TestKaydi, harita: Harita): string
 
   if (/\bpage\.waitForTimeout\s*\(/.test(kod)) return 'page.waitForTimeout is not allowed.';
 
-  const haritaYollari = new Set(harita.pages.map((sayfa) => new URL(sayfa.url).pathname));
+  // Plan kapısıyla aynı kural: haritadaki yol ya da haritadan çıkan yol kalıbı (/tasks/:id → /tasks/999999).
+  const kaliplar = haritaYolKaliplari(harita);
   const gotoCagrilari = [...kod.matchAll(/\bpage\.goto\(\s*(['"])(.*?)\1/g)];
   const tumGotoCagrilari = kod.match(/\bpage\.goto\s*\(/g) ?? [];
   if (gotoCagrilari.length !== tumGotoCagrilari.length) {
@@ -485,8 +487,13 @@ export function statikHata(kod: string, test: TestKaydi, harita: Harita): string
     } catch {
       return `page.goto must receive a valid URL: ${hedef}`;
     }
-    if (url.origin !== new URL(harita.baseUrl).origin || !haritaYollari.has(url.pathname)) {
-      return `page.goto navigates to a path that is not in the map: ${hedef}`;
+    // Köken denetimi gevşemez: yol kalıbı eşleşse de başka kökene gidiş reddedilir.
+    if (url.origin !== new URL(harita.baseUrl).origin) {
+      return `page.goto navigates to another origin than the project: ${hedef}`;
+    }
+    if (!oneriUrlKarari(url.pathname, harita, kaliplar).kabul) {
+      const komut = haritayaEkleKomutu(url.pathname, harita.baseUrl);
+      return `page.goto navigates to a path that is not in the map: ${hedef}${komut === null ? '' : `; add it to the map with: ${komut}`}`;
     }
   }
   return null;

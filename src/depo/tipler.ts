@@ -27,6 +27,8 @@ export interface Sayfa {
   links: string[];
   forms: Form[];
   buttons: string[];
+  /** Keşif anında devre dışı olan düğme adları; `buttons`'un alt kümesi, boşsa alan yok. */
+  disabledButtons?: string[];
   menu: string[];
   disclosures?: string[];
   requiresLogin?: true;

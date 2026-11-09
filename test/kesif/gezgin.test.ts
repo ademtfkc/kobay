@@ -61,7 +61,7 @@ describe('URL kalıbı kotası', () => {
     }));
 
     await gez(sayfa, {
-      baseUrl: 'https://uygulama.test/', maxSayfa: 20, derinlik: 1, sayfaZamanAsimiMs: 1,
+      baseUrl: 'https://uygulama.test/', maxSayfa: 20, derinlik: 1, sayfaZamanAsimiMs: 1, toplamDurulmaTavaniMs: 0,
     });
 
     expect(gezilen.filter((url) => url.startsWith('https://uygulama.test/x/'))).toHaveLength(2);
@@ -151,7 +151,7 @@ describe('slug kalıbı', () => {
       url: etkinUrl, title: '', headings: [], links: [], forms: [], buttons: [], menu: [],
     }));
 
-    await gez(sayfa, { baseUrl: `${T}/`, maxSayfa: 7, derinlik: 1, sayfaZamanAsimiMs: 1 });
+    await gez(sayfa, { baseUrl: `${T}/`, maxSayfa: 7, derinlik: 1, sayfaZamanAsimiMs: 1, toplamDurulmaTavaniMs: 0 });
 
     expect(gezilen.filter((url) => url.startsWith(`${T}/sehir/`))).toHaveLength(2);
     for (const yol of ['/iletisim', '/hizli-teklif', '/giris', '/hakkimizda']) {
@@ -175,7 +175,7 @@ async function gezSahte(site: Record<string, string[]>, maxSayfa: number, derinl
   sayfaOzetiSahte.mockImplementation(async () => ({
     url: etkinUrl, title: '', headings: [], links: [], forms: [], buttons: [], menu: [],
   }));
-  await gez(sayfa, { baseUrl: `${T}/`, maxSayfa, derinlik, sayfaZamanAsimiMs: 1 });
+  await gez(sayfa, { baseUrl: `${T}/`, maxSayfa, derinlik, sayfaZamanAsimiMs: 1, toplamDurulmaTavaniMs: 0 });
   return gezilen.map((url) => new URL(url).pathname);
 }
 
@@ -274,7 +274,7 @@ describe('ilk sayfalar ve sondaki eğik çizgi', () => {
     const ilk = ['a', 'b', 'c', 'd', 'e'].map((h) => ({
       url: `${T}/sehir/${h}`, title: '', headings: [], links: [], forms: [], buttons: [], menu: [],
     }));
-    await gez(sayfa, { baseUrl: `${T}/`, maxSayfa: 7, derinlik: 1, sayfaZamanAsimiMs: 1, ilkSayfalar: ilk });
+    await gez(sayfa, { baseUrl: `${T}/`, maxSayfa: 7, derinlik: 1, sayfaZamanAsimiMs: 1, toplamDurulmaTavaniMs: 0, ilkSayfalar: ilk });
     const sehirGezilen = gezilen.filter((url) => url.includes('/sehir/'));
     expect(sehirGezilen).toHaveLength(0);
     expect(gezilen).toContain(`${T}/iletisim`);
@@ -301,7 +301,7 @@ async function gezSahteTam(site: Record<string, string[]>, maxSayfa: number): Pr
   sayfaOzetiSahte.mockImplementation(async () => ({
     url: etkinUrl, title: '', headings: [], links: [], forms: [], buttons: [], menu: [],
   }));
-  await gez(sayfa, { baseUrl: `${T}/`, maxSayfa, derinlik: 1, sayfaZamanAsimiMs: 1 });
+  await gez(sayfa, { baseUrl: `${T}/`, maxSayfa, derinlik: 1, sayfaZamanAsimiMs: 1, toplamDurulmaTavaniMs: 0 });
   return gezilen;
 }
 
@@ -322,7 +322,7 @@ describe('tohum ve sitemap adresleri', () => {
       url: etkinUrl, title: '', headings: [], links: [], forms: [], buttons: [], menu: [],
     }));
     await gez(sayfa, {
-      baseUrl: `${T}/`, maxSayfa: 20, derinlik: 1, sayfaZamanAsimiMs: 1,
+      baseUrl: `${T}/`, maxSayfa: 20, derinlik: 1, sayfaZamanAsimiMs: 1, toplamDurulmaTavaniMs: 0,
       tohumlar: [`${T}/tohum`, 'https://baska.test/x'],
       siteHaritasiAdresleri: [`${T}/harita`, `${T}/tohum`],
     });

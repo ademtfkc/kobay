@@ -14,6 +14,8 @@ export const PLAN_SISTEM_ISTEMI = `You are a QA planner. Act like an experienced
 
 Produce 8-25 proposals. Every proposal must be a real user flow: bind it through url to a real page in the map; steps must have 2-15 steps, mix action and assertion, and contain at least one assertion. In the priority spread use p0 for critical flows (login, the main transaction), p1 for important, p2 for secondary and p3 for cosmetic ones. category is a category such as login, form, navigation, data, permission or error-case; feature is a short name.
 
+A button listed under "disabled buttons" cannot be clicked in the page's initial state: do not propose a flow that clicks it and then expects a message; propose an assertion that it is disabled instead.
+
 Record URLs that match a path pattern in the map but do not exist (for example /customers/999999 when the map contains /customers/36) may be proposed as error-case tests; those are accepted.
 
 When the map says "Logged in: yes", the session is already authenticated through kobay's login step and the generated tests cannot type the real credentials. Do not propose tests that log in with the real credentials (for example "Log in with valid credentials"). Tests that only check that the login page renders, or that invalid or empty credentials show an error, are fine because they do not need the real credentials. When the map says "Logged in: no", there is no such restriction.
@@ -76,6 +78,9 @@ function sayfaOzeti(sayfa: Sayfa): string {
     `h1-h3: ${listeOzeti(sayfa.headings)}`,
     `form fields: ${sayfa.forms.slice(0, 8).map(formOzeti).join(' | ')}`,
     `buttons: ${listeOzeti(sayfa.buttons)}`,
+    ...(sayfa.disabledButtons !== undefined && sayfa.disabledButtons.length > 0
+      ? [`disabled buttons (not clickable in the initial state): ${listeOzeti(sayfa.disabledButtons)}`]
+      : []),
     `menu: ${listeOzeti(sayfa.menu)}`,
     ...(sayfa.disclosures !== undefined && sayfa.disclosures.length > 0
       ? [`disclosures: ${listeOzeti(sayfa.disclosures)}`]

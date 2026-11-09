@@ -28,6 +28,64 @@ describe('yerelOnSiniflama (denetim N7)', () => {
   });
 });
 
+describe('yerelOnSiniflama: harita kapısı gerçek test kimliğini yazar (0.8.0 P3-2)', () => {
+  const HATA = 'kobay: the path /user/settings/general is not in the map; add it to the map with: kobay explore --seed /user/settings/general';
+  it('kimlik verilince refresh komutunda yer tutucu kalmaz; verilmezse <id> kalır', () => {
+    expect(yerelOnSiniflama(HATA, 0, 't_9jboue0w')?.recommendedFixTarget.rationale).toContain('`kobay test refresh t_9jboue0w`');
+    expect(yerelOnSiniflama(HATA, 0)?.recommendedFixTarget.rationale).toContain('`kobay test refresh <id>`');
+  });
+});
+
+describe('hataAnalizEt: 401 yalnızken env düşer, gerçek ortam kanıtında env kalır (0.8.0 P1-1)', () => {
+  async function kos(hata: string, ag: unknown[] | null) {
+    const runId = 'r_20260928010101_wxyz';
+    const test: TestKaydi = {
+      id: 't_oturum40', name: 'Heading', type: 'frontend', createdFrom: 'plan', status: 'failed',
+      planSteps: [{ type: 'action', description: 'Open the page' }], priority: 'p0', url: '/',
+      codeVersion: 1, createdAt: '2026-09-28T00:00:00.000Z', updatedAt: '2026-09-28T00:00:00.000Z',
+    };
+    const sonuc: KosuSonucu = {
+      testId: test.id, runId, status: 'failed', verdict: 'failed', startedAt: test.createdAt,
+      finishedAt: test.updatedAt, codeVersion: 1, failedStepIndex: 0, errorMessage: hata,
+    };
+    const dizin = await KobayDizini.ac(await geciciDizinAc('kobay-401-'), { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
+    const kosuDizini = await dizin.kosuDizini(runId);
+    await Promise.all([
+      dizin.testYaz(test),
+      dizin.kodYaz(test.id, "test('t', async () => {});"),
+      ...(ag === null ? [] : [yazAtomik(join(kosuDizini, 'network.json'), JSON.stringify(ag))]),
+    ]);
+    const beyin: Beyin = {
+      ad: 'sahte401',
+      sor: () => Promise.resolve({
+        json: {
+          rootCauseHypothesis: 'The session expired: token refresh requests were rejected with 401.',
+          failureKind: 'env',
+          recommendedFixTarget: { kind: 'env', reference: 'session', rationale: 'Rerun with `kobay test rerun t_oturum40` to renew the session.' },
+          evidence: [],
+        },
+      }) as never,
+    };
+    const paket = await hataAnalizEt(beyin, dizin, test, sonuc, [
+      { stepIndex: 0, description: 'Open the page', status: 'failed', errorMessage: hata, durationMs: 5 },
+    ]);
+    return paket.failure.failureKind;
+  }
+  const ref401 = [{ url: '/api/v2/user/token/refresh', method: 'POST', status: 401 }];
+  it('yalnız 401 gürültüsü: env -> unknown', async () => {
+    expect(await kos('Error: locator.click: Timeout 5000ms exceeded waiting for getByRole(heading)', ref401)).toBe('unknown');
+  });
+  it('ham hata ERR_CONNECTION_REFUSED: env kalır', async () => {
+    expect(await kos('page.goto: net::ERR_CONNECTION_REFUSED at http://uygulama.test/', ref401)).toBe('env');
+  });
+  it('ağ kaydında 503: env kalır', async () => {
+    expect(await kos('Error: expected heading', [...ref401, { url: '/api/v2/projects', method: 'GET', status: 503 }])).toBe('env');
+  });
+  it('ağ kaydında durumsuz ağ hatası: env kalır', async () => {
+    expect(await kos('Error: expected heading', [{ url: '/api/x', method: 'GET', hata: 'net::ERR_FAILED' }])).toBe('env');
+  });
+});
+
 describe('hataAnalizEt + yerel ön-sınıflama', () => {
   it('kobay: düşüşünde beyin çağrılmaz, paket test_bug taşır', async () => {
     const runId = 'r_20260928010101_abcd';

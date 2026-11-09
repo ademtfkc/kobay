@@ -10,10 +10,15 @@ import {
   girisiGonder,
   girisSayfaMesajiNotu,
   kesfet,
+  kesfetAyrintili,
+  LoginDidNotReturnError,
   sayfayiYenile,
   type GirisSonucu,
 } from '../../src/kesif/index.js';
 import {
+  hizSiniriOnerisi,
+  parolaGovdedeMi,
+  retryAfterCoz,
   SAYFA_MESAJI_PARCA,
   SAYFA_MESAJI_TOPLAM,
   sayfaMesajiniKur,
@@ -204,6 +209,45 @@ beforeAll(async () => {
         if (yol === '/yavas-govde' || yol === '/js-ret' || yol === '/bitmeyen' || yol === '/gec-sekme') {
           yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
           yanit.end(yol === '/js-ret' ? JS_RET_SAYFASI : sayfa(form(yol)));
+          return;
+        }
+        // P2-3: açılır pencere üst sayfanın parolasını gövdesinde taşıyan POST'la 429 alır; asıl giriş
+        // (form POST) ret sayfası döner. Pencerenin isteği giriş isteği sayılmaz.
+        if (yol === '/popup-hiz') {
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.end(sayfa(`${istek.method === 'POST' ? '<div role="alert">Wrong credentials</div>' : ''}${form('/popup-hiz')}`
+            + '<script>document.querySelector(\'form\').addEventListener(\'submit\',()=>{window.open(\'/popup-post\');});</script>'));
+          return;
+        }
+        if (yol === '/popup-post') {
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.end(sayfa('<script>fetch(\'/limit\',{method:\'POST\',body:JSON.stringify({p:opener.document.querySelector('
+            + '\'input[type=password]\').value})});</script>'));
+          return;
+        }
+        if (yol === '/limit') {
+          yanit.writeHead(429, { 'retry-after': '45' });
+          yanit.end();
+          return;
+        }
+        // P2-3 (3): form izinli SSO origin'ine (localhost) POST eder, orada 429 sayfasında kalır.
+        if (yol === '/sso-hiz') {
+          const adres = sunucu?.address();
+          const port = typeof adres === 'object' && adres !== null ? adres.port : 0;
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.end(sayfa(form(`http://localhost:${port}/sso-429`)));
+          return;
+        }
+        if (yol === '/sso-429') {
+          yanit.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '45' });
+          yanit.end(sayfa('<p>Too Many Requests</p>'));
+          return;
+        }
+        // P2-3: giriş POST'u hız sınırıyla (HTTP 429, Retry-After 45) reddedilir; gövde ret sayfası.
+        if (yol === '/hiz') {
+          const kod = istek.method === 'POST' ? 429 : 200;
+          yanit.writeHead(kod, { 'content-type': 'text/html; charset=utf-8', ...(kod === 429 ? { 'retry-after': '45' } : {}) });
+          yanit.end(sayfa(`${kod === 429 ? '<div role="alert">Too Many Requests</div>' : ''}${form('/hiz')}`));
           return;
         }
         if (yol === '/basarili' && istek.method === 'POST') {
@@ -472,6 +516,57 @@ describe('A6: giriş reddinde sayfa uyarısı (gerçek Chromium)', () => {
     await expect(access(storageStateYolu)).rejects.toThrow();
   });
 
+  it('P2-3: giriş POST\'u 429 alırsa sonuç hizSiniri taşır (Retry-After okunur)', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    const sonuc = await girisDene(`${appOrigin}/hiz`);
+    expect(sonuc).toMatchObject({ basarili: false, hizSiniri: { retryAfterSn: 45 } });
+  });
+
+  it('P2-3: açılır pencerenin parolalı POST\'u 429 alsa da giriş isteği sayılmaz', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    // Pencere korumaya takılırsa giriş hata ile biter; iki yolda da 429 hız sınırı sayılmamalı.
+    const sonuc = await girisDene(`${appOrigin}/popup-hiz`).then((giris) => giris, (hata: unknown) => hata);
+    if (sonuc instanceof Error) expect(sonuc.message).not.toContain('429');
+    else expect(sonuc).not.toHaveProperty('hizSiniri');
+  });
+
+  it('P2-3: 429 sonrası giriş başka hatayla biterse (SSO origin\'inde kaldı) hata 429 notunu taşır', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    if (tarayici === undefined) throw new Error('tarayıcı yok');
+    const yabanci = `http://localhost:${new URL(appOrigin).port}`;
+    const baglam = await tarayici.newContext({ serviceWorkers: 'block' });
+    try {
+      const sekme = await baglam.newPage();
+      await sekme.goto(`${appOrigin}/sso-hiz`, { waitUntil: 'domcontentloaded' });
+      const giris = await girisFormuBul(sekme);
+      if (giris === null) throw new Error('form yok');
+      const kimlik: Kimlik = { username: KULLANICI, password: PAROLA, origin: appOrigin, authOrigins: [yabanci] };
+      const hata = await girisiGonder(sekme, giris, kimlik, appOrigin, [yabanci], 1_000, 1_000, 5_000).then(() => null, (e: unknown) => e);
+      expect(hata).toBeInstanceOf(LoginDidNotReturnError);
+      expect((hata as Error).message).toContain('Login did not return to the app origin');
+      expect((hata as Error).message).toContain('HTTP 429');
+      expect((hata as Error).message).not.toContain(PAROLA);
+    } finally {
+      await baglam.close();
+    }
+  });
+
+  it('P2-3: keşifte 429 ile reddedilen giriş önceki oturum dosyasını silmez; yanlış kimlik reddi siler', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    const dizin = await geciciDizinAc('kobay-p23-');
+    const storageStateYolu = `${dizin}/storage.json`;
+    const eski = JSON.stringify({ cookies: [], origins: [] });
+    await writeFile(storageStateYolu, eski);
+    const kimlik = { username: KULLANICI, password: PAROLA, origin: appOrigin };
+    const sonuc = await kesfetAyrintili({ baseUrl: `${appOrigin}/panel`, loginUrl: `${appOrigin}/hiz`, kimlik, storageStateYolu, maxSayfa: 1 });
+    expect(sonuc.harita.loggedIn).toBe(false);
+    expect(sonuc.girisHizSiniri).toEqual({ retryAfterSn: 45 });
+    expect(await readFile(storageStateYolu, 'utf8')).toBe(eski);
+    const ret = await kesfetAyrintili({ baseUrl: `${appOrigin}/panel`, loginUrl: `${appOrigin}/alert`, kimlik, storageStateYolu, maxSayfa: 1 });
+    expect(ret.girisHizSiniri).toBeUndefined();
+    await expect(access(storageStateYolu)).rejects.toThrow();
+  });
+
   it('başarılı girişte sayfaMesaji yok', async (context) => {
     if (!tarayiciMumkun(context)) return;
     expect(await girisDene(`${appOrigin}/basarili`)).toEqual({ basarili: true });
@@ -599,5 +694,36 @@ describe('A6: sayfaMesajiniKur ve çit (birim)', () => {
 
   it('çit OSC dizisini, bidi denetimini ve satır sonlarını temizler', () => {
     expect(sayfaMetniCitle('a\u001b]8;;http://x\u0007link\u001b]8;;\u0007‮ b\r\nc')).toBe('alink b c');
+  });
+});
+
+describe('P2-3: Retry-After çözümü', () => {
+  it('saniye, HTTP tarihi, bozuk ve tavan üstü değer', () => {
+    const simdi = Date.parse('2026-11-08T12:00:00Z');
+    expect(retryAfterCoz('30', simdi)).toBe(30);
+    expect(retryAfterCoz(' 0 ', simdi)).toBe(0);
+    expect(retryAfterCoz('Sun, 08 Nov 2026 12:01:30 GMT', simdi)).toBe(90);
+    expect(retryAfterCoz('Sun, 08 Nov 2026 11:00:00 GMT', simdi)).toBe(0);
+    expect(retryAfterCoz(undefined, simdi)).toBeUndefined();
+    expect(retryAfterCoz('soon', simdi)).toBeUndefined();
+    expect(retryAfterCoz('-5', simdi)).toBeUndefined();
+    expect(retryAfterCoz('1.5', simdi)).toBeUndefined();
+    expect(retryAfterCoz('86401', simdi)).toBeUndefined();
+    expect(hizSiniriOnerisi({ retryAfterSn: 30 }, '`k`')).toBe('Wait about 30 s (the app\'s Retry-After), then run `k`.');
+    expect(hizSiniriOnerisi({ retryAfterSn: 0 }, '`k`')).toBe('The app\'s Retry-After allows a retry now: run `k`.');
+    expect(hizSiniriOnerisi({}, '`k`')).toBe('Wait about a minute, then run `k`.');
+  });
+});
+
+describe('P2-3: giriş isteği parolayı gövdesinde taşır mı', () => {
+  it('ham, form-urlencoded, URL kodlu ve JSON kaçışlı biçim; başka gövde değil', () => {
+    const parola = 'p a+s"s\\w&ç';
+    expect(parolaGovdedeMi(`u=x&p=${new URLSearchParams({ p: parola }).toString().slice(2)}`, parola)).toBe(true);
+    expect(parolaGovdedeMi(JSON.stringify({ u: 'x', p: parola }), parola)).toBe(true);
+    expect(parolaGovdedeMi(`p=${encodeURIComponent(parola)}`, parola)).toBe(true);
+    expect(parolaGovdedeMi(`----x\r\n\r\n${parola}\r\n`, parola)).toBe(true);
+    expect(parolaGovdedeMi('{"x":1}', parola)).toBe(false);
+    expect(parolaGovdedeMi(null, parola)).toBe(false);
+    expect(parolaGovdedeMi('anything', '')).toBe(false);
   });
 });

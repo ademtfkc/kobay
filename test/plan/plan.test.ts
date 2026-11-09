@@ -226,17 +226,48 @@ describe('planUret kalıp eşleşmesi', () => {
     expect(sonuc.dropped).toEqual([
       {
         title: 'Ürün akışı 2',
-        reason: 'URL is not in the map and no path pattern matched: /faturalar (pattern: /faturalar)',
+        reason: 'URL is not in the map and no path pattern matched: /faturalar (pattern: /faturalar); add it to the map with: kobay explore --seed /faturalar',
       },
       {
         title: 'Ürün akışı 3',
-        reason: 'URL is not in the map and no path pattern matched: /cariler/abc (pattern: /cariler/abc)',
+        reason: 'URL is not in the map and no path pattern matched: /cariler/abc (pattern: /cariler/abc); add it to the map with: kobay explore --seed /cariler/abc',
       },
       {
         title: 'Ürün akışı 4',
         reason: 'URL is not in the map and no path pattern matched: mailto:destek@uygulama.test (no pattern could be derived)',
       },
     ]);
+  });
+});
+
+describe('planUret köken ve komut güvenliği', () => {
+  it('kalıba uyan yol başka kökende önerilirse düşer ve komut önermez', async () => {
+    const beyin = await sahteBeyin({ proposals: [
+      taslak(1, '/cariler/999999'),
+      taslak(2, 'https://baska.test/cariler/999999'),
+    ] });
+    const sonuc = await planUret(beyin, kayitHaritasi, undefined);
+    expect(sonuc.proposals).toHaveLength(1);
+    expect(sonuc.dropped).toHaveLength(1);
+    expect(sonuc.dropped[0]?.title).toBe('Ürün akışı 2');
+    expect(sonuc.dropped[0]?.reason).toContain('https://baska.test/cariler/999999');
+    expect(sonuc.dropped[0]?.reason).not.toContain('kobay explore --seed');
+  });
+
+  it('kabuk karakterli yol düşme sebebinde ham komut olarak görünmez', async () => {
+    const beyin = await sahteBeyin({ proposals: [
+      taslak(1, '/cariler/999999'),
+      taslak(2, '/yok$(id)'),
+      taslak(3, '/a;rm -rf x'),
+    ] });
+    const sonuc = await planUret(beyin, kayitHaritasi, undefined);
+    expect(sonuc.dropped).toHaveLength(2);
+    for (const dusen of sonuc.dropped) {
+      expect(dusen.reason).toContain('kobay explore --seed <path>');
+      expect(dusen.reason).not.toMatch(/--seed \/\S*[$;(]/);
+      expect(dusen.reason).not.toContain('--seed /a');
+      expect(dusen.reason).not.toContain('--seed /yok');
+    }
   });
 });
 
@@ -435,7 +466,7 @@ describe('istem: keşif derinliği alanları', () => {
       'No usable proposal was produced; 3 dropped: '
       + 'Ürün akışı 1 (login required, no saved login: http://uygulama.test/panel), '
       + 'Ürün akışı 2 (login required, no saved login: http://uygulama.test/panel), '
-      + `Ürün akışı 3 (URL is not in the map and no path pattern matched: http://uygulama.test/yok (pattern: /yok)). `
+      + `Ürün akışı 3 (URL is not in the map and no path pattern matched: http://uygulama.test/yok (pattern: /yok); add it to the map with: kobay explore --seed /yok). `
       + GIRIS_GEREKLI_SONRAKI_ADIM,
     );
     expect(hata?.message.split('kobay project create --login')).toHaveLength(2);

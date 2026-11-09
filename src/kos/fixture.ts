@@ -108,8 +108,62 @@ export async function contextKapat(
   }
 }
 
+/** Düşen testten sonraki oturum izinin toplam tavanı. */
+export const OTURUM_IZI_TAVANI_MS = 12_000;
+
+/**
+ * `page` fixture'ının kendi zaman aşımı (kurulum + söküm; testin gövdesi buna girmez). Söküm
+ * kanıt (en çok 5 sn), oturum izi (en çok 12 sn) ve video kapanışını içerir; testin kendi süresi
+ * dolmuş olsa da bunlar kesilmez. Playwright söküm süresini söküm başlamadan ayırdığı için süre
+ * sökümde uzatılamaz (`testInfo.setTimeout`); bu yüzden fixture'a ayrı süre verilir.
+ */
+export const SAYFA_FIXTURE_ZAMAN_ASIMI_MS = 30_000;
+
+/**
+ * Düşen testten sonra, sayfa parola alanı gösteriyorsa, testin KENDİ bağlamında (uygulamanın
+ * döndürdüğü son oturumla) `baseUrl` açılır ve giriş ekranı mı diye bakılır; sonuç sır taşımayan
+ * `session-check.json`'a yazılır (`{ "loginPage": true|false }`). Koşucu bunu diskteki oturumun
+ * yoklamasıyla birlikte kullanır: testin bellekteki oturumu canlıysa gerçek hata `env` diye
+ * saklanmaz. En iyi çabadır: hiçbir hata testi ya da sonucunu değiştirmez.
+ * Bu yoklama bilerek korumasızdır: test aynı bağlamda, aynı jetonla zaten korumasız koştu;
+ * uygulama bu ek açılışta testin kendisinde göremeyeceği hiçbir değer görmez.
+ */
+export async function oturumIziniYaz(
+  context: Pick<BrowserContext, 'newPage'>,
+  sayfa: Pick<Page, 'locator'>,
+  dizin: string,
+  baseUrl: string,
+  tavanMs: number = OTURUM_IZI_TAVANI_MS,
+): Promise<void> {
+  const is = async (): Promise<void> => {
+    if (await sayfa.locator('input[type="password"]').count() === 0) return;
+    const yeni = await context.newPage();
+    try {
+      await yeni.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: tavanMs });
+      await yeni.waitForLoadState('networkidle', { timeout: Math.min(5_000, tavanMs) }).catch(() => undefined);
+      const girisEkrani = new URL(yeni.url()).origin !== new URL(baseUrl).origin
+        || await yeni.locator('input[type="password"]').count() > 0;
+      await yazAtomik(join(dizin, 'session-check.json'), `${JSON.stringify({ loginPage: girisEkrani })}\n`);
+    } finally {
+      await yeni.close().catch(() => undefined);
+    }
+  };
+  let zamanlayici: NodeJS.Timeout | undefined;
+  const tavan = new Promise<void>((coz) => { zamanlayici = setTimeout(coz, tavanMs); });
+  try {
+    await Promise.race([is().catch(() => undefined), tavan]);
+  } finally {
+    clearTimeout(zamanlayici);
+  }
+}
+
+function tabanAdres(): string | undefined {
+  const adres = process.env.KOBAY_BASE_URL;
+  return adres === undefined || adres === '' ? undefined : adres;
+}
+
 export const test = temel.extend<{ page: Page }>({
-  page: async ({ browser }, kullan, testBilgisi) => {
+  page: [async ({ browser }, kullan, testBilgisi) => {
     const durum = storageState();
     const dizin = kosuDizini();
     // Config'teki `use.video` bu özel context'e uygulanmaz; kayıt yalnız burada (çift kayıt yok).
@@ -169,6 +223,10 @@ export const test = temel.extend<{ page: Page }>({
     } finally {
       if (dizin !== undefined) test.step = oncekiAdim;
       geriAlKanit?.();
+      const taban = tabanAdres();
+      if (dizin !== undefined && durum !== undefined && taban !== undefined && videoSaklanmali(testBilgisi)) {
+        await oturumIziniYaz(context, page, dizin, taban);
+      }
       try {
         if (dizin !== undefined) {
           await Promise.all([
@@ -193,7 +251,7 @@ export const test = temel.extend<{ page: Page }>({
         }
       }
     }
-  },
+  }, { scope: 'test', timeout: SAYFA_FIXTURE_ZAMAN_ASIMI_MS }],
 });
 
 export { expect };

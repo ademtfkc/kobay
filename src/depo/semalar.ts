@@ -65,6 +65,7 @@ export const SayfaSemasi: v.GenericSchema<unknown, Sayfa> = v.object({
   links: v.array(v.string()),
   forms: v.array(FormSemasi),
   buttons: v.array(v.string()),
+  disabledButtons: v.exactOptional(v.array(v.string())),
   menu: v.array(v.string()),
   disclosures: v.exactOptional(v.array(v.string())),
   requiresLogin: v.exactOptional(v.literal(true)),

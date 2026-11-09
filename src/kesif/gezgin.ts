@@ -1,6 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Page } from '@playwright/test';
+import type { Page, Request } from '@playwright/test';
 import type { Sayfa } from '../depo/index.js';
 import { girisFormuBul } from './giris.js';
 import { sayfaOzeti } from './sayfa-ozeti.js';
@@ -24,6 +25,8 @@ export interface GezginSecenekleri {
    * yönlenirse istenen adres `requiresLogin` kaydıyla haritaya girer. Kimlikli keşifte false.
    */
   girisYonlendirmesiniIsaretle?: boolean;
+  /** Keşif boyunca toplam durulma beklemesi; varsayılan `DURULMA.toplamTavanMs`. 0: bekleme yok. */
+  toplamDurulmaTavaniMs?: number;
 }
 
 // `\b` Türkçe harfleri (ç, ş, ı…) kelime karakteri saymaz; sınır elle yazılır: harf/rakam olmayan her şey.
@@ -204,6 +207,215 @@ function yabanciKoken(sayfa: Page, koken: string): string | null {
   return varilan === koken ? null : varilan;
 }
 
+/**
+ * Sayfa durulma beklemesinin tavanları. Keşif `domcontentloaded` ile kaydeder; tek sayfa
+ * uygulaması (SPA) o anda henüz çizilmemiştir. Bekleme: DOM `sessizMs` boyunca değişmez VE
+ * kısa ömürlü istek kalmaz. `uzunIstekMs`'den eski istek (long-poll, akış) sakinliği engellemez.
+ * Hiç durulmayan sayfa `sayfaTavaniMs`'de bırakılır; keşif boyunca toplam bekleme `toplamTavanMs`'i
+ * aşmaz (aşınca bekleme kapanır, eski davranış). Bekleme yalnız gözlemdir: tıklama, yazma yok.
+ */
+export const DURULMA = {
+  sessizMs: 150,
+  sayfaTavaniMs: 3_000,
+  toplamTavanMs: 30_000,
+  uzunIstekMs: 1_500,
+  yoklamaMs: 25,
+  /** Süre dolunca sayfadaki gözlemciyi söken çağrının tavanı (ana iş parçacığı kilitli olabilir). */
+  iptalTavaniMs: 500,
+} as const;
+
+/**
+ * Sayfaya yapılan bir çağrıyı süreyle sınırlar: süre dolarsa hata fırlatır (çağrı arka planda
+ * kalır, sonucu yok sayılır). Ana iş parçacığı kilitlenen sayfa keşfi/yenilemeyi asılı bırakmaz.
+ */
+export class PageNotRespondingError extends Error {
+  constructor(ms: number, ne: string) {
+    super(`Page did not respond within ${ms} ms (${ne})`);
+    this.name = 'PageNotRespondingError';
+  }
+}
+
+export async function sinirli<T>(is: Promise<T>, ms: number, ne: string): Promise<T> {
+  let zamanlayici: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      is,
+      new Promise<never>((_coz, reddet) => {
+        zamanlayici = setTimeout(() => reddet(new PageNotRespondingError(ms, ne)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(zamanlayici);
+  }
+}
+
+/** Bitmesi beklenmeyen istek türleri: sakinlik hesabına hiç girmez. */
+const SUREKLI_ISTEK_TURLERI = new Set(['eventsource', 'websocket', 'media']);
+
+export interface IstekIzleyici {
+  /** Şu an süren ve `uzunIstekMs`'den genç istek sayısı. */
+  kisaBekleyen(): number;
+  /** Sayılan bir isteğin son başladığı ya da bittiği an (Date.now); hiç yoksa 0. */
+  sonEtkinlik(): number;
+  /** Dinleyicileri kaldırır. */
+  birak(): void;
+}
+
+/** Sayfanın ağ isteklerini sayar (yalnız olay dinler; isteğe dokunmaz). */
+export function istekIzle(sayfa: Page): IstekIzleyici {
+  const bekleyen = new Map<Request, number>();
+  let sonEtkinlik = 0;
+  const basla = (istek: Request): void => {
+    // Ana çerçevede yeni belge gezinmesi başladı: önceki belgenin (asılı ya da yarıda kalan) istekleri
+    // bir daha bitiş olayı vermeyebilir; sayılmaya devam etselerdi sonraki sayfanın beklemesini uzatırlardı.
+    if (istek.isNavigationRequest() && istek.frame() === sayfa.mainFrame()) bekleyen.clear();
+    if (SUREKLI_ISTEK_TURLERI.has(istek.resourceType())) return;
+    sonEtkinlik = Date.now();
+    bekleyen.set(istek, sonEtkinlik);
+  };
+  const bitir = (istek: Request): void => {
+    if (bekleyen.delete(istek)) sonEtkinlik = Date.now();
+  };
+  sayfa.on('request', basla);
+  sayfa.on('requestfinished', bitir);
+  sayfa.on('requestfailed', bitir);
+  return {
+    kisaBekleyen: () => {
+      const simdi = Date.now();
+      let sayi = 0;
+      for (const baslangic of bekleyen.values()) if (simdi - baslangic < DURULMA.uzunIstekMs) sayi++;
+      return sayi;
+    },
+    sonEtkinlik: () => sonEtkinlik,
+    birak: () => {
+      sayfa.off('request', basla);
+      sayfa.off('requestfinished', bitir);
+      sayfa.off('requestfailed', bitir);
+      bekleyen.clear();
+    },
+  };
+}
+
+function bekle(ms: number): Promise<void> {
+  return new Promise((coz) => setTimeout(coz, Math.max(0, ms)));
+}
+
+/**
+ * Tarayıcıda koşar: DOM `sessiz` ms değişmeyince true, `tavan` ms dolunca false döner.
+ * Sayfa `setInterval`/`MutationObserver`'ı bozsa da Node tarafındaki süre sınırı bağlar.
+ */
+export function domSessizlik(
+  { sessiz, tavan, koken, anahtar }: { sessiz: number; tavan: number; koken: string; anahtar: string },
+): Promise<boolean> {
+  // Belge başka kökendeyse (Node denetimiyle evaluate arasında yönlenmiş) hiçbir şey kurulmaz.
+  if (location.origin !== koken) return Promise.resolve(false);
+  return new Promise((coz) => {
+    const bas = performance.now();
+    let son = bas;
+    let bitti = false;
+    // Kapanış işlevi ve kaynak tutucu her şeyden önce tanımlı: sayfa setInterval'i geri çağrıyı
+    // eşzamanlı çalıştıracak biçimde bozsa da (TDZ yok) ya da kurulum yarıda fırlatsa da kapanır.
+    const kaynak: { gozcu?: MutationObserver; zamanlayici?: ReturnType<typeof setInterval> } = {};
+    const bitir = (sonuc: boolean): void => {
+      if (bitti) return;
+      bitti = true;
+      try { if (kaynak.zamanlayici !== undefined) clearInterval(kaynak.zamanlayici); } catch { /* sayfa bozmuş */ }
+      try { kaynak.gozcu?.disconnect(); } catch { /* sayfa bozmuş */ }
+      try { Reflect.deleteProperty(window, anahtar); } catch { /* sayfa bozmuş */ }
+      coz(sonuc);
+    };
+    try {
+      // İptal kaydı gözlemciden ÖNCE: kurulamazsa (sayfa engellediyse) hiçbir gözlemci bağlanmaz.
+      // Node tarafı süre sınırını kazanırsa gözlemciyi bununla söker.
+      Object.defineProperty(window, anahtar, { value: () => bitir(false), configurable: true });
+      kaynak.gozcu = new MutationObserver(() => { son = performance.now(); });
+      kaynak.gozcu.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+      kaynak.zamanlayici = setInterval(() => {
+        const simdi = performance.now();
+        if (simdi - son >= sessiz || simdi - bas >= tavan) bitir(simdi - son >= sessiz);
+      }, 25);
+      // Geri çağrı eşzamanlı çalışıp bitirdiyse, sonradan dönen zamanlayıcı da durur.
+      if (bitti) clearInterval(kaynak.zamanlayici);
+    } catch {
+      bitir(false);
+    }
+  });
+}
+
+/** Tarayıcıda koşar: `domSessizlik`'in bıraktığı iptal işlevini çağırır; yabancı belgede hiçbir şey yapmaz. */
+export function domSessizlikIptal({ anahtar, koken }: { anahtar: string; koken: string }): void {
+  if (location.origin !== koken) return;
+  const iptal: unknown = Reflect.get(window, anahtar);
+  if (typeof iptal === 'function') iptal();
+}
+
+/** Her bekleme turuna özgü iptal anahtarı: sayfa önceden tanımlayıp çakıştıramaz. */
+function iptalAnahtari(): string {
+  return `__kobayDurulma_${randomUUID().replaceAll('-', '')}`;
+}
+
+function kokenIcinde(sayfa: Page, koken: string): boolean {
+  try {
+    return new URL(sayfa.url()).origin === koken;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sayfanın çizilmesini tavanlı bekler (bkz. `DURULMA`). Durulduysa true, tavan dolduysa false.
+ * Hata fırlatmaz: gezinme sırasında bağlam yok olursa döngü yeni belgeyle sürer. Belge `koken`
+ * dışına geçtiyse bekleme hemen biter; yabancı belgede hiçbir kobay kodu çalışmaz.
+ */
+export async function sayfaDurulsun(
+  sayfa: Page, izleyici: IstekIzleyici, tavanMs: number, koken: string,
+): Promise<boolean> {
+  const son = Date.now() + tavanMs;
+  while (Date.now() < son) {
+    if (!kokenIcinde(sayfa, koken)) return false;
+    const kalan = son - Date.now();
+    let domSakin = false;
+    let zamanlayici: NodeJS.Timeout | undefined;
+    let sureDoldu = false;
+    const anahtar = iptalAnahtari();
+    try {
+      domSakin = await Promise.race([
+        sayfa.evaluate(domSessizlik, { sessiz: DURULMA.sessizMs, tavan: kalan, koken, anahtar }),
+        new Promise<boolean>((coz) => {
+          zamanlayici = setTimeout(() => { sureDoldu = true; coz(false); }, kalan + DURULMA.yoklamaMs);
+        }),
+      ]);
+    } catch {
+      // Belge değişti (istemci yönlendirmesi): döngü başındaki köken denetiminden sonra yeniden bekle.
+      await bekle(DURULMA.yoklamaMs);
+      continue;
+    } finally {
+      // Bekleyen zamanlayıcı süreci açık tutmasın (keşif bitince CLI hemen çıksın).
+      clearTimeout(zamanlayici);
+    }
+    if (sureDoldu) {
+      // Sayfadaki gözlemci kendi zamanlayıcısıyla bitmedi: dışarıdan sök. Köken iki kez denetlenir:
+      // burada ve (arada yönlenme olduysa) sayfa içinde, iptal işlevi aranmadan önce.
+      // Çağrı süreyle sınırlı: ana iş parçacığı kilitliyse beklemeden çıkılır.
+      if (kokenIcinde(sayfa, koken)) {
+        await sinirli(sayfa.evaluate(domSessizlikIptal, { anahtar, koken }), DURULMA.iptalTavaniMs, 'cancel')
+          .catch(() => undefined);
+      }
+      return false;
+    }
+    if (!domSakin) return false;
+    // Ağ, DOM sessizlik penceresi boyunca da sakin kalmalı: son istek pencere içinde bittiyse
+    // (çizim ondan sonra gelebilir) sessizlik yeniden ölçülür.
+    if (izleyici.kisaBekleyen() === 0 && Date.now() - izleyici.sonEtkinlik() >= DURULMA.sessizMs) return true;
+    while (izleyici.kisaBekleyen() > 0 && Date.now() < son) {
+      // Belge başka kökene geçtiyse onun isteklerini beklemenin anlamı yok.
+      if (!kokenIcinde(sayfa, koken)) return false;
+      await bekle(DURULMA.yoklamaMs);
+    }
+  }
+  return false;
+}
+
 /** Girişe yönlenen adresin harita kaydı: içerik yok, yalnız istenen adres ve varılan giriş sayfası. */
 function girisGerektirenSayfa(istenen: string, varilan: string): Sayfa {
   return {
@@ -255,6 +467,22 @@ export async function gez(sayfa: Page, secenekler: GezginSecenekleri): Promise<S
 
   if (secenekler.ekranGoruntusuDizini) await mkdir(secenekler.ekranGoruntusuDizini, { recursive: true });
 
+  let kalanDurulmaMs = secenekler.toplamDurulmaTavaniMs ?? DURULMA.toplamTavanMs;
+  /** Sayfadan her okuma (özet, bağlantılar, giriş formu, ekran görüntüsü) bu süreyle sınırlı. */
+  const okumaTavani = secenekler.sayfaZamanAsimiMs;
+  // Bekleme kapalıysa (0) sayfaya dinleyici bile takılmaz.
+  const izleyici = kalanDurulmaMs > 0 ? istekIzle(sayfa) : undefined;
+  /** Varılan belge başka kökendeyse kaydını işler ve true döner (bkz. köken sınırı). */
+  const disKokendeMi = (oge: KuyrukOgesi): boolean => {
+    const disKoken = yabanciKoken(sayfa, koken);
+    if (disKoken === null) return false;
+    gorulen.add(tekilAnahtar(oge.url));
+    if (secenekler.girisYonlendirmesiniIsaretle === true && disKoken !== '') {
+      sayfalar.push(girisGerektirenSayfa(oge.url, disKoken));
+    }
+    return true;
+  };
+
   while ((kuyruk.length > 0 || ertelenenler.length > 0) && sayfalar.length < secenekler.maxSayfa) {
     const ertelenmisMi = kuyruk.length === 0;
     const oge = ertelenmisMi
@@ -279,18 +507,21 @@ export async function gez(sayfa: Page, secenekler: GezginSecenekleri): Promise<S
       // Köken sınırı (tespit): yönlendirmeyi tarayıcı izler; varılan belge başka kökendeyse ondan
       // hiçbir şey okunmaz (özet, ekran görüntüsü, bağlantı yok). Kimliksiz keşifte istenen adres
       // kimlik kapısı sayılır ve yalnız hedef kökeniyle kaydedilir (yol/sorgu jeton taşıyabilir).
-      const disKoken = yabanciKoken(sayfa, koken);
-      if (disKoken !== null) {
-        gorulen.add(tekilAnahtar(oge.url));
-        if (secenekler.girisYonlendirmesiniIsaretle === true && disKoken !== '') {
-          sayfalar.push(girisGerektirenSayfa(oge.url, disKoken));
-        }
-        continue;
+      if (disKokendeMi(oge)) continue;
+      // SPA'nın çizilmesi tavanlı beklenir; yalnız kendi kökenimizdeki belgede. Bekleme sırasında
+      // istemci yönlendirmesi başka kökene geçirdiyse aynı köken sınırı işler.
+      const tavan = Math.min(DURULMA.sayfaTavaniMs, kalanDurulmaMs);
+      if (izleyici !== undefined && tavan > 0) {
+        const bas = Date.now();
+        await sayfaDurulsun(sayfa, izleyici, tavan, koken);
+        kalanDurulmaMs -= Date.now() - bas;
+        if (disKokendeMi(oge)) continue;
       }
       if (secenekler.girisYonlendirmesiniIsaretle === true) {
         // Yol desenine güvenilmez: varılan sayfada parola alanlı giriş formu aranır.
         const varilan = normalUrl(sayfa.url());
-        if (varilan !== null && tekilAnahtar(varilan) !== tekilAnahtar(oge.url) && await girisFormuBul(sayfa) !== null) {
+        if (varilan !== null && tekilAnahtar(varilan) !== tekilAnahtar(oge.url)
+          && await sinirli(girisFormuBul(sayfa), okumaTavani, 'login form check') !== null) {
           // Tekilleştirme istenen adrese göre: aynı giriş sayfasına yönlenen 7 adres 7 kayıt.
           gorulen.add(tekilAnahtar(oge.url));
           sayfalar.push(girisGerektirenSayfa(oge.url, varilan));
@@ -299,24 +530,33 @@ export async function gez(sayfa: Page, secenekler: GezginSecenekleri): Promise<S
           if (sayfalar.length >= secenekler.maxSayfa) continue;
         }
       }
-      const ozet = await sayfaOzeti(sayfa, koken);
+      // Sayfadan okuma süreyle sınırlı (sayfa başına zaman aşımı): ana iş parçacığı kilitlenen sayfa
+      // keşfi asılı bırakmaz; süre dolarsa sayfa ulaşılamayan sayfa gibi atlanır.
+      const ozet = await sinirli(sayfaOzeti(sayfa, koken), okumaTavani, 'page summary');
       // Özet sırasında meta/JS yönlendirmesiyle başka kökene geçildiyse özet atılır.
       if (yabanciKoken(sayfa, koken) !== null) continue;
-      if (gorulen.has(tekilAnahtar(ozet.url))) continue;
+      // İstemci yönlendirmesinde (`/projects/2` → `/projects/2/9`) istenen adres de görüldü sayılır.
+      const zatenGorulen = gorulen.has(tekilAnahtar(ozet.url));
+      gorulen.add(tekilAnahtar(oge.url));
+      if (zatenGorulen) continue;
       gorulen.add(tekilAnahtar(ozet.url));
       sayfalar.push(ozet);
       if (secenekler.ekranGoruntusuDizini) {
-        await sayfa.screenshot({ path: join(secenekler.ekranGoruntusuDizini, `sayfa-${sayfalar.length}.png`) });
+        await sayfa.screenshot({ path: join(secenekler.ekranGoruntusuDizini, `sayfa-${sayfalar.length}.png`), timeout: okumaTavani });
       }
       if (oge.derinlik >= secenekler.derinlik || yabanciKoken(sayfa, koken) !== null) continue;
-      const linkler = await izlenebilirLinkler(sayfa, koken);
+      const linkler = await sinirli(izlenebilirLinkler(sayfa, koken), okumaTavani, 'links');
       // Ziyaret kararından ÖNCE topluca say: ziyaret edilmeyecek bağlantılar da slug kümesini besler.
       for (const url of linkler) bilinenYollar.add(new URL(url).pathname);
       slugOnekleri = slugOnekleriBul(bilinenYollar);
       for (const url of linkler) kuyrugaEkle(url, oge.derinlik + 1);
-    } catch {
+    } catch (hata: unknown) {
+      // Okuma süre sınırını aştıysa sekmenin ana iş parçacığı kilitlidir; kilitli sekme başka adrese de
+      // gidemez (her goto zaman aşımına düşer). Keşif o ana kadar toplananla biter.
+      if (hata instanceof PageNotRespondingError) break;
       // Ulaşılamayan bir sayfa keşfi durdurmaz; diğer kuyruk öğeleri sürer.
     }
   }
+  izleyici?.birak();
   return sayfalar;
 }

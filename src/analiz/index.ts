@@ -14,6 +14,7 @@ import type {
   TestKaydi,
 } from '../depo/index.js';
 import { domHaritaFarkiOlustur } from './harita-farki.js';
+import { seedKomutu } from '../plan/url-kalip.js';
 import { hataPaketiYolunuDenetle } from './paket-yolu.js';
 import { analizKullaniciIstemiOlustur, analizSistemIstemiOlustur } from './istem.js';
 import { BeyindenGelenHataAnaliziSemasi, type BeyindenGelenHataAnalizi } from './sema.js';
@@ -261,15 +262,37 @@ function urunDegisikligiEslesmesi(
  */
 /** Üretim istemi gerçek kimlik isteyen adıma `throw new Error('kobay: ...')` yazdırır; mesaj bu önekle başlar. */
 const KOBAY_BILINCLI_DUSUS_DESENI = /^\s*(?:Error:\s*)?kobay:/;
+/** Üretilen testin haritada olmayan yol için fırlattığı bilinçli düşüş: `kobay: the path <yol> is not in the map; ...`. */
+const HARITA_DISI_DUSUS_DESENI = /^\s*(?:Error:\s*)?kobay:\s*the path (\S+) is not in the map/;
 
 /**
  * Üretilen testin bilinçli düşüşü (`kobay:` önekli fırlatma) yerelde sınıflanır, beyin çağrılmaz.
  * Bu bir ürün hatası değil, planın desteklenmeyen bir adım (gerçek kimlik girişi) içermesidir;
  * modele bırakılırsa `product_bug` çıkabilir ve ajan ürün koduna dokunabilir. Eşleşmezse null.
  */
-export function yerelOnSiniflama(hataMetni: string, stepIndex: number): BeyindenGelenHataAnalizi | null {
+export function yerelOnSiniflama(hataMetni: string, stepIndex: number, testId?: string): BeyindenGelenHataAnalizi | null {
   if (!KOBAY_BILINCLI_DUSUS_DESENI.test(hataMetni)) return null;
   const ilkSatir = hataMetni.trim().split(/\r?\n/)[0]!.slice(0, 300);
+  // Üretilen test haritada olmayan bir yola ihtiyaç duyduğunu söylüyor: sebep kimlik değil, eksik harita
+  // verisi. Düzeltme kod değil; yol güvenli bir yol biçimindeyse tam komut adlandırılır.
+  const haritaDisi = HARITA_DISI_DUSUS_DESENI.exec(hataMetni);
+  if (haritaDisi !== null) {
+    const yol = haritaDisi[1] ?? '';
+    const komut = seedKomutu(yol);
+    return {
+      rootCauseHypothesis: 'The generated test declared a step that needs a page whose path is not in the map and failed '
+        + 'on purpose. The map has no page and no path pattern for it. This is not a product bug and not a '
+        + 'credentials problem.',
+      failureKind: 'env',
+      recommendedFixTarget: {
+        kind: 'env',
+        reference: `kobay map: \`${komut}\` (test plan, step ${stepIndex})`,
+        rationale: `Add the page to the map, then regenerate the test: run \`${komut}\`, then \`kobay test refresh ${testId ?? '<id>'}\` to regenerate this `
+          + 'test. Do not change product code.',
+      },
+      evidence: [],
+    };
+  }
   return {
     rootCauseHypothesis: 'The generated test declared an unsupported step and failed on purpose: the step needs the '
       + 'real credentials, but the session is already authenticated and generated tests cannot type them. '
@@ -282,6 +305,114 @@ export function yerelOnSiniflama(hataMetni: string, stepIndex: number): Beyinden
         + 'rewrite this step so it does not type the real credentials.',
     },
     evidence: [],
+  };
+}
+
+/**
+ * Ortak kobay fixture'ını anan öneri; kobay onu her koşudan önce yeniden yazar. Yalnız tam
+ * belirteçler: `_fixture`, `./_fixture`, `_fixture.ts`, `.kobay/tests/_fixture.ts` (ürünün
+ * `src/fixtures/_fixture.ts`, `e2e/_fixture.ts`, `_fixture.tsx`, `_fixture.json` dosyaları değil).
+ */
+const ORTAK_FIXTURE_DESENI = /(?:^|[\s'"`([])(?:\.kobay[/\\]tests[/\\]_fixture\.ts|\.[/\\]_fixture|_fixture\.ts|_fixture)(?=$|[\s'"`)\],;:!?]|\.(?:\s|$))/i;
+/** Oturum düşüşünün izleri (giriş ekranı, jeton yenileme 401'i, çerez). */
+const OTURUM_IZI_DESENI = /session|log ?-?in|sign ?-?in|auth|token|\b401\b|cookie|storage ?state/i;
+
+/** Anmanın hemen öncesinde yasaklayıcı ifade varsa ("Do not edit _fixture.ts") bu bir öneri değil, uyarıdır. */
+// Olumsuzluk düzenleme eylemine bağlı olmalı: "Do not delay editing _fixture.ts" gerçek öneridir.
+const DUZENLEME_EYLEMI = '(?:edit|change|modify|touch|alter|rewrite|update|patch)';
+const YASAKLAYICI_ONEK_DESENI = new RegExp(
+  `\\b(?:do not|don'?t|never|avoid|must not|should not|shouldn'?t)\\s+${DUZENLEME_EYLEMI}\\b`
+  + `(?:[\\s,/]+(?:or|and|the|shared|kobay|any|other|files?|in|${DUZENLEME_EYLEMI})\\b)*[\\s,]*$`,
+  'i',
+);
+
+function fixtureDuzenlemeOnerisiVarMi(oneri: string): boolean {
+  const desen = new RegExp(ORTAK_FIXTURE_DESENI.source, 'gi');
+  for (const eslesme of oneri.matchAll(desen)) {
+    const once = oneri.slice(Math.max(0, eslesme.index - 60), eslesme.index);
+    // Yasaklayıcı önek aynı cümlede olmalı.
+    const parca = once.slice(Math.max(once.lastIndexOf('. '), once.lastIndexOf('\n')) + 1);
+    // Eşleşme önündeki boşluğu da taşıyabilir; sondaki boşluk tek tipe indirilir.
+    if (!YASAKLAYICI_ONEK_DESENI.test(`${parca.trimEnd()} `)) return true;
+  }
+  return false;
+}
+
+const OTURUM_401_DESENI = /\b401\b|token[ -]?refresh|refresh[ -]?token|refresh requests?/i;
+const GIRIS_EKRANI_IZI = /type=["']?password|\b(?:log ?-?in|sign ?-?in|giriş|oturum aç)\b/i;
+const BASKA_ORTAM_IZI = /\b5\d\d\b|timed? ?out|timeout|network|ECONN|ERR_|unreachable/i;
+
+/**
+ * Beyin 401 gürültüsüne bakıp "oturum düştü" derse (0.8.0 P1-1) ama sayfada giriş ekranı yoksa:
+ * kobay koşu sonrası oturumu kendisi yoklar ve düşmüşse beyni hiç çağırmaz. Beyne ulaşan koşuda
+ * oturum canlıdır; yalnız 401 izine dayanan `env` sınıfı ve "rerun" önerisi yanlıştır.
+ */
+// Gerçek ortam kanıtı: ham hata mesajında bağlantı/gezinme hatası (locator zaman aşımı DEĞİL; o test_bug olabilir).
+const HAM_HATA_ORTAM_DESENI = /ERR_[A-Z_]+|net::|ECONN\w*|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|page\.goto: Timeout|\b50[0-4]\b/;
+function gercekOrtamKanitiVarMi(hamHata: string, agHatalari: readonly AgKaydi[]): boolean {
+  if (HAM_HATA_ORTAM_DESENI.test(hamHata)) return true;
+  return agHatalari.some((kayit) => (kayit.status !== undefined && kayit.status >= 500)
+    || (kayit.status === undefined && kayit.hata !== undefined && kayit.hata !== ''));
+}
+
+export function oturumKanitsizEnvDuzelt(
+  analiz: HataAnalizi,
+  dom: string | null,
+  hamHata = '',
+  agHatalari: readonly AgKaydi[] = [],
+): HataAnalizi {
+  if (analiz.failureKind !== 'env') return analiz;
+  if (gercekOrtamKanitiVarMi(hamHata, agHatalari)) return analiz;
+  const metin = `${analiz.rootCauseHypothesis} ${analiz.recommendedFixTarget.reference} ${analiz.recommendedFixTarget.rationale}`;
+  if (!OTURUM_IZI_DESENI.test(metin) || !OTURUM_401_DESENI.test(metin) || BASKA_ORTAM_IZI.test(metin)) return analiz;
+  if (dom !== null && GIRIS_EKRANI_IZI.test(dom)) return analiz;
+  return {
+    ...analiz,
+    failureKind: 'unknown',
+    rootCauseHypothesis: `${analiz.rootCauseHypothesis} (Kobay note: the saved session is alive and the page is not the login page; `
+      + 'rejected token refresh requests (401) alone do not show a lost session, so this is not classified as env.)',
+    recommendedFixTarget: {
+      kind: 'unknown',
+      reference: analiz.recommendedFixTarget.reference,
+      rationale: 'Look at the failing step and its error message; the 401 on token refresh also appears in healthy runs. '
+        + 'Do not rerun just to renew the session: kobay already checked it.',
+    },
+  };
+}
+
+/**
+ * Beyin ortak fixture'ı düzenlemeyi önerirse (0.8.0 P2-4: "make the fixture re-authenticate";
+ * P2-5: hangi sınıf olursa olsun) öneri değiştirilir: o dosya her koşuda yeniden yazılır ve beceri
+ * onu düzenlemeyi yasaklar. `env` + oturum izi varsa doğru oturum komutları yazılır; diğer
+ * durumlarda hedef testin kendi spec dosyasına çevrilir (env'de hedef korunur) ve yasak not olarak eklenir.
+ */
+export function ortakFixtureOnerisiniDuzelt(analiz: HataAnalizi, testId: string): HataAnalizi {
+  const oneri = `${analiz.recommendedFixTarget.reference} ${analiz.recommendedFixTarget.rationale}`;
+  if (!fixtureDuzenlemeOnerisiVarMi(oneri)) return analiz;
+  const yasak = 'Do not edit .kobay/tests/_fixture.ts or other kobay files: kobay rewrites the fixture before every run.';
+  const ortam = analiz.failureKind === 'env' || analiz.recommendedFixTarget.kind === 'env';
+  if (ortam && OTURUM_IZI_DESENI.test(`${oneri} ${analiz.rootCauseHypothesis}`)) {
+    return {
+      ...analiz,
+      failureKind: 'env',
+      recommendedFixTarget: {
+        kind: 'env',
+        reference: `kobay session: \`kobay explore --session-file <file>\` (imported session) or \`kobay test rerun ${testId}\``
+          + ' (saved credentials)',
+        rationale: 'The test session is no longer authenticated. Renew the session, not the code: import a fresh'
+          + ' session with `kobay explore --session-file <file>`, or, with saved credentials, rerun the test (kobay'
+          + ` logs in again before each run). ${yasak}`,
+      },
+    };
+  }
+  return {
+    ...analiz,
+    recommendedFixTarget: {
+      ...analiz.recommendedFixTarget,
+      reference: ortam ? analiz.recommendedFixTarget.reference : `.kobay/tests/${testId}.spec.ts`,
+      rationale: `${analiz.recommendedFixTarget.rationale}\n\nKobay note: ${yasak}`
+        + (ortam ? '' : ` Make the change in the test's own file, .kobay/tests/${testId}.spec.ts.`),
+    },
   };
 }
 
@@ -505,7 +636,7 @@ export async function hataAnalizEt(
   const haritaFarki = await haritaFarkiHazirla(dizin, test, maskeliDom);
 
   // `kobay:` önekli bilinçli düşüş yerelde sınıflanır; beyin çağrılmaz (maliyet yok).
-  const yerelSiniflama = yerelOnSiniflama(maskeliHataMetni, maskeliDusenAdim.stepIndex);
+  const yerelSiniflama = yerelOnSiniflama(maskeliHataMetni, maskeliDusenAdim.stepIndex, test.id);
   // Beyin yoksa (`--no-analysis`) analiz alanları sabit metinle doldurulur; çağrı yapılmaz.
   const beyinYaniti = yerelSiniflama !== null
     ? { json: yerelSiniflama }
@@ -552,13 +683,13 @@ export async function hataAnalizEt(
   // `runs/<runId>/trace.zip`'te kalır; budama paketin gösterdiği koşuyu korur, kopyalayan isterse
   // (`--include-trace`) oradan alır.
 
-  const failure = kodDuzeltmeIpucuEkle(yerelHaritaEmniyeti(
+  const failure = ortakFixtureOnerisiniDuzelt(oturumKanitsizEnvDuzelt(kodDuzeltmeIpucuEkle(yerelHaritaEmniyeti(
     { ...beyinYaniti.json, evidence: kanitlar },
     haritaFarki,
     maskeliDusenAdim.stepIndex,
     maskeliHataMetni,
     maskeliKod,
-  ), maskeliHataMetni);
+  ), maskeliHataMetni), maskeliDom, maskeliHataMetni, agHatalari), test.id);
   const temizSonuc = sonuc.errorMessage === undefined ? sonuc : {
     ...sonuc,
     errorMessage: gizliDegerleriMaskele(hataMesajiniTemizle(sonuc.errorMessage)),

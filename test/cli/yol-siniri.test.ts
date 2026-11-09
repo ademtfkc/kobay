@@ -60,7 +60,7 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
     for (const planPath of ['../../disarisi.json', '../disarisi.json', disBelge]) {
       const sonuc = await testCreate({ cwd, planPath });
       expect(sonuc.exitCode, planPath).toBe(2);
-      expect(sonuc.mesaj, planPath).toContain('planPath cannot be outside the project root');
+      expect(sonuc.mesaj, planPath).toContain('--plan cannot be outside the project root');
     }
   });
 
@@ -92,7 +92,7 @@ describe('CLI dosya yolları proje kökünden çıkamaz', () => {
 
     const planla = await testCreate({ cwd, planPath: 'belge/kacak.md' });
     expect(planla.exitCode).toBe(2);
-    expect(planla.mesaj).toContain('planPath cannot be outside the project root');
+    expect(planla.mesaj).toContain('--plan cannot be outside the project root');
   });
 
   it('kayıtlı docsPath sonradan dışarı çevrilirse okuma anında reddedilir', async () => {

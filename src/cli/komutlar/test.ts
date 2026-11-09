@@ -76,7 +76,7 @@ export async function testCreate(a: { cwd: string; planPath: string }): Promise<
   return komutCalistir(async () => {
     const dizin = await dizinBul(a.cwd);
     const yol = isAbsolute(a.planPath) ? a.planPath : resolve(a.cwd, a.planPath);
-    await belgeYoluDenetle(dizin.projeKoku, yol, 'planPath');
+    await belgeYoluDenetle(dizin.projeKoku, yol, '--plan');
     let plan: unknown;
     try {
       plan = JSON.parse(await readFile(yol, 'utf8')) as unknown;

@@ -1,5 +1,5 @@
 import { lstat, rm } from 'node:fs/promises';
-import type { BrowserContext, Locator, Page } from '@playwright/test';
+import type { BrowserContext, Locator, Page, Request, Response } from '@playwright/test';
 import { authOriginNormallestir, yazAtomik, type Kimlik } from '../depo/index.js';
 import type { GirisFormu } from './giris.js';
 import {
@@ -176,10 +176,103 @@ export function kimlikOriginDogrula(kimlik: Kimlik, hedefOrigin: string, authOri
  */
 export type GirisSayfaMesaji = { tur: 'alinti'; metin: string } | { tur: 'gizlendi' };
 
-/** `girisiGonder` sonucu: giriş tamamlandı mı, tamamlanmadıysa sayfanın gösterdiği uyarı (varsa). */
+/**
+ * Gönderimden sonra uygulama hız sınırıyla (HTTP 429) yanıt verdi (0.8.0 P2-3). Yalnız HTTP
+ * durumundan gelir, sayfa metninden asla: ret sayfasının "Too Many Requests" yazması bunu
+ * üretmez. `retryAfterSn`: yanıtın `Retry-After` başlığı (saniye; okunamazsa yok).
+ */
+export interface GirisHizSiniri {
+  retryAfterSn?: number;
+}
+
+/**
+ * `girisiGonder` sonucu: giriş tamamlandı mı, tamamlanmadıysa sayfanın gösterdiği uyarı (varsa).
+ * `hizSiniri`: gönderimden sonra izinli kümeye giden GET/HEAD/OPTIONS dışı bir istek (giriş
+ * isteği) 429 aldı. Çağıran yalnız başarısız girişte kullanır: kimlik reddi sayılmaz.
+ */
 export interface GirisSonucu {
   basarili: boolean;
   sayfaMesaji?: GirisSayfaMesaji;
+  hizSiniri?: GirisHizSiniri;
+}
+
+/** `Retry-After` başlığının kabul edilen en büyük değeri (sn); üstü ya da okunamayanı yok sayılır. */
+export const RETRY_AFTER_TAVANI_SN = 86_400;
+
+/** `Retry-After`: saniye ya da HTTP tarihi. Uygulamanın başlığıdır; yalnız sayıya çevrilir. */
+export function retryAfterCoz(deger: string | undefined, simdiMs = Date.now()): number | undefined {
+  if (deger === undefined) return undefined;
+  const metin = deger.trim();
+  let sn: number;
+  if (/^\d{1,6}$/.test(metin)) sn = Number(metin);
+  else {
+    const zaman = Date.parse(metin);
+    if (!Number.isFinite(zaman) || !/[a-z]/i.test(metin)) return undefined;
+    sn = Math.max(0, Math.ceil((zaman - simdiMs) / 1000));
+  }
+  return sn <= RETRY_AFTER_TAVANI_SN ? sn : undefined;
+}
+
+/**
+ * Hız sınırı mesajının öneri cümlesi; `komut` yeniden çalıştırılacak komut (backtick'li).
+ * `Retry-After: 0` ya da geçmiş tarih: uygulama hemen yeniden denemeye izin veriyor.
+ */
+export function hizSiniriOnerisi(hiz: GirisHizSiniri, komut: string): string {
+  if (hiz.retryAfterSn === 0) return `The app's Retry-After allows a retry now: run ${komut}.`;
+  return `Wait ${hizBeklemesi(hiz)}, then run ${komut}.`;
+}
+
+function hizBeklemesi(hiz: GirisHizSiniri): string {
+  return hiz.retryAfterSn === undefined ? 'about a minute' : `about ${hiz.retryAfterSn} s (the app's Retry-After)`;
+}
+
+/**
+ * Giriş 429'dan sonra başka bir hatayla bittiğinde (ör. SSO origin'inde kaldı) hatanın sonuna
+ * eklenen not (başında boşluk). Hatanın sınıfı ve önceliği değişmez; sızıntı hatalarına eklenmez.
+ */
+export function hizSiniriNotu(hiz: GirisHizSiniri): string {
+  const sonra = hiz.retryAfterSn === 0 ? 'the app allows a retry now' : `wait ${hizBeklemesi(hiz)} before trying again`;
+  return ` The app also answered the login request with HTTP 429 Too Many Requests (rate limit), so the credentials`
+    + ` may be right; ${sonra}.`;
+}
+
+/**
+ * İstek gövdesi kobay'ın yazdığı parolayı taşıyor mu: ham (JSON değeri, çok parçalı form),
+ * `application/x-www-form-urlencoded` (`+` boşluk), `encodeURIComponent` ve JSON kaçışlı biçim.
+ * Giriş isteğini tanımak içindir; gövde ve parola hiçbir yere yazılmaz.
+ */
+export function parolaGovdedeMi(govde: string | null, parola: string): boolean {
+  if (govde === null || govde === '' || parola === '') return false;
+  const bicimler = new Set([
+    parola,
+    encodeURIComponent(parola),
+    new URLSearchParams({ p: parola }).toString().slice(2),
+    JSON.stringify(parola).slice(1, -1),
+  ]);
+  for (const bicim of bicimler) if (govde.includes(bicim)) return true;
+  return false;
+}
+
+/**
+ * Giriş isteğinin yanıtı için, sonuca karar vermeden önce beklenen en uzun süre. Yalnız giriş
+ * isteği (ya da yönlendirme zincirinin bir ayağı) hâlâ yanıtsızsa harcanır; hızlı girişte 0.
+ */
+export const GIRIS_ISTEGI_BEKLEME_MS = 5_000;
+
+/** Gönderim penceresinde (tıklamadan sonuca) giriş isteğinin 429'unu toplayan iz. */
+interface HizSiniriIzi {
+  acik: boolean;
+  hiz?: GirisHizSiniri;
+  /** Yanıtı (başlıkları) henüz gelmemiş giriş istekleri (zincir ayakları dahil). */
+  bekleyen: Set<Request>;
+}
+
+/** Bekleyen giriş istekleri bitene ya da tavan dolana kadar bekler (50 ms aralıkla bakar). */
+async function girisIstekleriniBekle(iz: HizSiniriIzi, tavanMs: number): Promise<void> {
+  const son = Date.now() + tavanMs;
+  while (iz.bekleyen.size > 0 && Date.now() < son) {
+    await new Promise((coz) => { setTimeout(coz, 50); });
+  }
 }
 
 /**
@@ -208,14 +301,68 @@ export async function girisiGonder(
   donusBeklemeMs = GIRIS_DONUS_BEKLEME_MS,
   tiklamaBeklemeMs = GIRIS_TIKLAMA_BEKLEME_MS,
 ): Promise<GirisSonucu> {
+  // Hız sınırı yalnız HTTP durumundan okunur ve giriş isteğinin KENDİSİNE bağlanır: gönderimden
+  // sonra, giriş sayfasının ana çerçevesinden (iframe, açılır pencere ve başka sayfa sayılmaz)
+  // izinli kümeye giden, GET/HEAD/OPTIONS olmayan ve gövdesinde kobay'ın yazdığı parolayı taşıyan
+  // isteğin 429 yanıtı. Sayfa metni, parolasız istek ya da başka çerçevenin isteği yanlış kimliği
+  // "hız sınırı" diye gizleyemez. Gövde yalnız karşılaştırılır, hiçbir yere yazılmaz.
+  // Yönlendirme zinciri (`POST /session` → 302 → `GET /rate-limit` = 429): koşullar zincirin
+  // BAŞLANGIÇ isteğine (parola, yöntem, izinli küme) uygulanır; her ayak ana çerçevede ve izinli
+  // kümede olmalı.
+  const iz: HizSiniriIzi = { acik: false, bekleyen: new Set() };
+  const girisIstegiMi = (istek: Request): boolean => {
+    try {
+      if (istek.frame() !== sayfa.mainFrame()) return false;
+      if (!izinliKumedeMi(istek.url(), hedefOrigin, authOrigins)) return false;
+      let ilk = istek;
+      for (let onceki = ilk.redirectedFrom(); onceki !== null; onceki = ilk.redirectedFrom()) {
+        if (!izinliKumedeMi(onceki.url(), hedefOrigin, authOrigins)) return false;
+        ilk = onceki;
+      }
+      const yontem = ilk.method().toUpperCase();
+      if (yontem === 'GET' || yontem === 'HEAD' || yontem === 'OPTIONS') return false;
+      return parolaGovdedeMi(ilk.postData(), kimlik.password);
+    } catch {
+      // Çerçevesi ya da gövdesi okunamayan istek giriş isteği sayılmaz.
+      return false;
+    }
+  };
+  const istekBasladi = (istek: Request): void => {
+    if (iz.acik && girisIstegiMi(istek)) iz.bekleyen.add(istek);
+  };
+  const istekBitti = (istek: Request): void => { iz.bekleyen.delete(istek); };
+  const dinle = (yanit: Response): void => {
+    // Yanıt başlıkları geldi: durum belli, gövdenin bitmesi beklenmez (bitmeyen ret gövdesi).
+    iz.bekleyen.delete(yanit.request());
+    if (!iz.acik || yanit.status() !== 429 || !girisIstegiMi(yanit.request())) return;
+    const sn = retryAfterCoz(yanit.headers()['retry-after']);
+    if (iz.hiz === undefined || (sn !== undefined && (iz.hiz.retryAfterSn ?? -1) < sn)) {
+      iz.hiz = sn === undefined ? {} : { retryAfterSn: sn };
+    }
+  };
+  sayfa.on('request', istekBasladi);
+  sayfa.on('requestfinished', istekBitti);
+  sayfa.on('requestfailed', istekBitti);
+  sayfa.on('response', dinle);
   try {
-    return await girisiGonderIc(sayfa, form, kimlik, hedefOrigin, authOrigins, urlBeklemeMs, donusBeklemeMs, tiklamaBeklemeMs);
+    const sonuc = await girisiGonderIc(sayfa, form, kimlik, hedefOrigin, authOrigins, urlBeklemeMs, donusBeklemeMs, tiklamaBeklemeMs, iz);
+    // İç karardan sonra gelen 429 da girişi başarısız yapar (her iki çağıran için).
+    return iz.hiz === undefined ? sonuc : { ...sonuc, basarili: false, hizSiniri: iz.hiz };
   } catch (hata: unknown) {
     if (hata instanceof Error) {
+      // 429'dan sonra gelen hata (ör. dönüş yok) kendi sınıfıyla kalır; 429 bilgisi nota girer.
+      // Sızıntı/kesim hataları (CredentialLeakBlockedError ailesi) not almaz: öncelikleri ve
+      // anlamları "belki yalnız hız sınırı" diye yumuşamasın.
+      if (iz.hiz !== undefined && !(hata instanceof CredentialLeakBlockedError)) hata.message += hizSiniriNotu(iz.hiz);
       const koruma = girisKorumasiBul(sayfa.context());
       hata.message = koruma === undefined ? metniGizle(hata.message, kimlikIzleri(kimlik)) : koruma.metniGizle(hata.message);
     }
     throw hata;
+  } finally {
+    sayfa.off('request', istekBasladi);
+    sayfa.off('requestfinished', istekBitti);
+    sayfa.off('requestfailed', istekBitti);
+    sayfa.off('response', dinle);
   }
 }
 
@@ -228,6 +375,7 @@ async function girisiGonderIc(
   urlBeklemeMs: number,
   donusBeklemeMs: number,
   tiklamaBeklemeMs: number,
+  hizIzi: HizSiniriIzi,
 ): Promise<GirisSonucu> {
   kimlikOriginDogrula(kimlik, hedefOrigin, authOrigins);
   const izinli = izinliOriginler(hedefOrigin, authOrigins);
@@ -243,13 +391,19 @@ async function girisiGonderIc(
       `The login page is on a different origin (${sayfaOrigin}); credentials are only typed on ${izinli.join(', ')}.${ssoIpucu}`,
     );
   }
-  const formHedefi = await sinirli(form.parolaAlani.evaluate((alan) => {
-    const girdi = alan as HTMLInputElement;
-    const dugme = girdi.form?.querySelector('button[type="submit"], input[type="submit"], button:not([type])') as
-      HTMLButtonElement | null | undefined;
+  // Form hedefi seçilen düğmeden okunur: `formaction` yalnız gönderen (submit) düğmede formun
+  // hedefini ezer. Tip `button` olan düğme ve Enter (yalnız gönderen düğmesi olmayan formda) formun
+  // kendi hedefine gider; betiğin attığı istekleri ağ koruması denetler.
+  const formHedefi = await sinirli((form.gonderDugmesi ?? form.parolaAlani).evaluate((oge) => {
+    // Enter yolunda öğe parola alanının kendisidir (gönderen değil): formun hedefi okunur.
+    const dugme = oge as HTMLButtonElement | HTMLInputElement;
+    const hedefForm = dugme.form;
+    const gonderen = dugme instanceof HTMLButtonElement
+      ? dugme.type === 'submit'
+      : dugme.type === 'submit' || dugme.type === 'image';
     // formAction, öznitelik yoksa sayfa adresini döner; yalnız öznitelik varsa formun hedefini ezer.
-    if (dugme?.hasAttribute('formaction') === true) return dugme.formAction;
-    return girdi.form?.action ?? document.location.href;
+    if (gonderen && dugme.hasAttribute('formaction')) return dugme.formAction;
+    return hedefForm?.action ?? document.location.href;
   }), tiklamaBeklemeMs);
   // Sınır tıklama bütçesiyle aynı: bu okuma akışı keser (parola yazılmaz), o an meşgul olan
   // sağlıklı sayfa düşmesin. Envanter ve düğme durumu okumaları 2 sn kalır, yalnız `[withheld]`e düşer.
@@ -281,19 +435,33 @@ async function girisiGonderIc(
   // `pencereyiAc` kimlikli evreyi başlatır (bağlam kapanana kadar sürer): siteler-arası yazma,
   // belge, WebSocket ve GET dahil izinli küme dışına hiçbir istek gitmez.
   // `denetle` giriş penceresini kapatır; pencereye özgü ret kuralları orada biter.
-  const yabanciCerceveOriginleri = yabanciCerceveler(
-    sayfa.context().pages().flatMap((baglamSayfasi) => baglamSayfasi.frames().map((cerceve) => cerceve.url())),
-    hedefOrigin,
-    authOrigins,
-  );
-  if (yabanciCerceveOriginleri.length > 0) {
-    const origin = yabanciCerceveOriginleri[0] as string;
-    throw yabanciBelgeHatasi(origin);
-  }
+  // Belge denetimi: ana çerçeve hâlâ denetlenen izinli origin'de mi, yabancı çerçeve/pencere var mı.
+  // Yazmadan hemen önce yeniden yapılır: ilk denetimle `pencereyiAc` arasındaki `await`'lerde commit
+  // olan yabancı belge (pencere açıkken commit olan ise `framenavigated` kuralına düşer) kaçmasın.
+  const belgeyiDenetle = (): void => {
+    const simdikiOrigin = new URL(sayfa.url()).origin;
+    if (simdikiOrigin !== sayfaOrigin) {
+      throw new LoginFormOriginError(
+        `The login page moved to ${simdikiOrigin} before the credentials were typed; the password was not typed.${ssoIpucu}`,
+      );
+    }
+    const yabanciCerceveOriginleri = yabanciCerceveler(
+      sayfa.context().pages().flatMap((baglamSayfasi) => baglamSayfasi.frames().map((cerceve) => cerceve.url())),
+      hedefOrigin,
+      authOrigins,
+    );
+    if (yabanciCerceveOriginleri.length > 0) {
+      const origin = yabanciCerceveOriginleri[0] as string;
+      throw yabanciBelgeHatasi(origin);
+    }
+  };
+  belgeyiDenetle();
   // Çıktı maskesi: parola yazılmadan önceki çerez ve depolama değerleri (sayfa sonra silebilir).
   await envantereEkle(sayfa, koruma);
   koruma.pencereyiAc();
+  belgeyiDenetle();
   await form.kullaniciAlani.fill(kimlik.username, { timeout: GIRIS_DOLDURMA_MS });
+  belgeyiDenetle();
   await form.parolaAlani.fill(kimlik.password, { timeout: GIRIS_DOLDURMA_MS });
   await envantereEkle(sayfa, koruma);
   const oncekiUrl = sayfa.url();
@@ -303,11 +471,15 @@ async function girisiGonderIc(
   const urlDegisimi = sayfa.waitForURL((url) => url.href !== oncekiUrl, { timeout: tiklamaBeklemeMs + urlBeklemeMs })
     .then(() => true)
     .catch(() => false);
+  // Hız sınırı izi gönderimle başlar: gönderimden önceki istekler giriş isteği değildir.
+  hizIzi.acik = true;
   try {
-    await form.gonderDugmesi.click({ timeout: tiklamaBeklemeMs });
+    // Gönder düğmesi yoksa (bkz. `girisFormuBul`) form parola alanında Enter ile gönderilir.
+    if (form.gonderDugmesi === null) await form.parolaAlani.press('Enter', { timeout: tiklamaBeklemeMs });
+    else await form.gonderDugmesi.click({ timeout: tiklamaBeklemeMs });
   } catch (hata: unknown) {
     if (!(hata instanceof Error) || hata.name !== 'TimeoutError') throw hata;
-    throw await tiklamaZamanAsimiHatasi(sayfa, form.gonderDugmesi, koruma, hata, tiklamaBeklemeMs);
+    throw await tiklamaZamanAsimiHatasi(sayfa, form.gonderDugmesi ?? form.parolaAlani, koruma, hata, tiklamaBeklemeMs);
   }
   let zamanlayici: ReturnType<typeof setTimeout> | undefined;
   const urlSuresi = new Promise<boolean>((coz) => { zamanlayici = setTimeout(() => { coz(false); }, urlBeklemeMs); });
@@ -339,7 +511,12 @@ async function girisiGonderIc(
   // sayfayı uygulamadan çıkarmış olabilir. `denetle`den önce başarısız sayılır ki kesilen
   // yabancı ana-çerçeve origin'i chrome-error sayfasının `null` origin'inden önce bildirilsin.
   if (urlDegisti && donulmeyenOrigin === null && !uygulamadaMi()) donulmeyenOrigin = new URL(sayfa.url()).origin;
-  const girisBasarili = urlDegisti && donulmeyenOrigin === null;
+  // Erken URL değişimi (SPA `pushState`) giriş isteğinin yanıtını beklemez: karar vermeden önce
+  // hâlâ yanıtsız giriş isteği varsa tavanlı beklenir (geç 429 kaçmasın).
+  await girisIstekleriniBekle(hizIzi, GIRIS_ISTEGI_BEKLEME_MS);
+  // Giriş isteğinin kendisi 429 aldıysa URL değişse de (form `action` 429 sayfasına gitti) giriş
+  // başarılı sayılmaz: oturum yazılmaz, ret yolu (hız sınırı) çalışır.
+  const girisBasarili = urlDegisti && donulmeyenOrigin === null && hizIzi.hiz === undefined;
   // Tarayıcıya bir gidiş-dönüş (en iyi çaba): tarayıcının bu yanıttan önce yaydığı istek/commit
   // olayları (pencere sonunda başlamış bir yönlendirme ayağı dahil) aynı sıralı bağlantıdan önce
   // gelir ve `denetle` evreyi kapatmadan işlenir. Playwright'ın kendi içinde ertelediği olaylar

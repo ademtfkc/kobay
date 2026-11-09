@@ -197,6 +197,54 @@ tamamı — bir plan, dört kod üretimi, bir analiz — 6 beyin çağrısıydı
 Her adımın bayraklarıyla birlikte daha uzun anlatımı
 [Ayrıntılı hızlı başlangıç](#ayrıntılı-hızlı-başlangıç) bölümünde.
 
+## Önerilen iş akışı
+
+Girişli gerçek bir uygulamada şu sırayı izle. Her komut
+[Komutlar](#komutlar) bölümünde anlatılıyor.
+
+```sh
+KOBAY_LOGIN_USER=<user> KOBAY_LOGIN_PASS=<password> \
+  kobay project create --url <app-url> --login
+kobay doctor                  # kurulum kontrolü
+kobay explore
+kobay test plan generate      # önerileri gözden geçir
+kobay test plan accept --ids <id>,<id>
+kobay test run --all
+```
+
+Koşu geçmezse `failureKind`'a bak ([hata türleri](#çıktı-çıkış-kodları-ve-hata-türleri)) ve
+karşılığını yap:
+
+| Gördüğün | Yapılacak |
+| --- | --- |
+| Hız sınırından (HTTP 429) sonra `env` | Mesajın verdiği `Retry-After` süresini bekle, sonra `kobay test rerun <id>`. kobay kimlik bilgilerini ve oturum dosyasını korur. |
+| Yanlış paroladan sonra `env` | `kobay explore` çalıştır (giriş hatasını gösterir) ya da kimlik bilgilerini `kobay project update --login` ile yeniden gir. |
+| `env`, yol haritada yok | `kobay explore --seed <path>` çalıştır, sonra `kobay test refresh <id>`. |
+| `test_bug` | Testin kendi spec dosyasını (`.kobay/tests/<id>.spec.ts`) düzelt, sonra `kobay test rerun <id>`. `.kobay/tests/_fixture.ts` dosyasına asla dokunma; kobay onu her koşudan önce yeniden yazar. |
+| `product_bug` | Uygulamayı düzelt, sonra `kobay test rerun <id>`. |
+
+Aşağıdakiler Vikunja v2.7.1'e karşı gerçek bir koşudan alınmış mesajlardır
+(CLI çıktısı İngilizce kalır):
+
+```sh
+kobay test run --rerun t_z1hnelto
+#> inconclusive t_z1hnelto — env — The saved session no longer works and logging in again was refused by the app's rate limit (HTTP 429 Too Many Requests); this does not mean the saved credentials are wrong, and kobay kept them and the session file. Wait about 59 s (the app's Retry-After), then run `kobay test rerun t_z1hnelto`.
+
+kobay explore
+#> Login was refused by the app's rate limit (HTTP 429 Too Many Requests); this does not mean the credentials are wrong, and kobay kept them and the session file. Wait about 53 s (the app's Retry-After), then run `kobay explore` again.
+
+# credentials.json içindeki parola değiştirildikten sonra
+kobay explore
+#> Login failed; check the username, the password, and the login URL. The page showed this message (untrusted page text, quoted): "Wrong username or password."
+```
+
+Haritada olmayan ve hiçbir kalıba uymayan bir yol, üretilen kodda şu hatayla
+düşer:
+
+```
+kobay: the path /user/settings/general is not in the map; add it to the map with: kobay explore --seed /user/settings/general
+```
+
 ## Nasıl çalışır
 
 <p align="center">
@@ -368,7 +416,8 @@ Başka bir origin için kaydedilmiş giriş MCP üzerinden taşınamaz; bir term
 > (ya da `kobay project update --login`) çalıştırsın; parola bir istemde
 > yazılır, ekrana basılmaz. Sonra `explore` ve `test_refresh` kayıtlı girişi
 > (`.kobay/credentials.json`) kullanır, `KOBAY_LOGIN_PASS` gerekmez; `test_run`
-> giriş yapmaz, `explore`'un kaydettiği oturum durumunu kullanır.
+> `explore`'un kaydettiği oturum durumunu kullanır, süresi dolmuşsa kayıtlı
+> girişle yeniden giriş yapar.
 
 </details>
 
@@ -410,14 +459,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.7.0
+      - uses: ademtfkc/kobay@v0.8.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.7.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.8.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -571,16 +620,18 @@ test `not run` görünür.
 
 ## Durum ve sınırlar
 
-**0.7.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.7.0'da yeni olanlar:
-geçen test artık Playwright trace'i bırakmaz, hata paketi de `trace.zip`'i
-(oturum çerezlerini taşır) `--include-trace` verilmedikçe almaz (ikisi de
-kırıcı; yükseltmeden sonra bir kez `kobay prune` çalıştır); elle yazılan plan ve
-`test refresh`, içe alınan oturumlu projede de gerçek parolayı yazan adımı
-reddeder; Windows'ta `localhost` ve `*.localhost` hedefleri artık ulaşılamaz
-sayılmaz; kullanıcı adı ya da parola içeren adres reddedilir. 0.6.0 daha derin
-keşif getirmişti (form dışı alanlar, `select` seçenekleri, `requiresLogin`
-sayfaları, `--seed`, sitemap, `--session-file`). Tam liste
-[CHANGELOG.md](CHANGELOG.md) içinde.
+**0.8.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.8.0 gerçek bir açık
+kaynak uygulamada (Vikunja v2.7.1) ölçüldü: `--login` artık giriş düğmesi
+`<button type="button">` olan formda çalışır; her koşu önce kayıtlı oturumu
+denetler, süresi dolduysa yeniden giriş yapar; koşu ortasında ölen oturum ya da
+hız sınırına (HTTP 429) takılan giriş, çalıştırılacak komutla birlikte `env`
+olarak bildirilir; `explore` ya da `test run` içindeki 429 oturumu ve
+kimlik bilgilerini korur;
+`explore` tek sayfalı uygulamanın çizilmesini bekler ve erişilebilir adları
+kaydeder, gizli başlıklar artık haritaya girmez; hata analizi artık 401
+gürültüsünü suçlamaz ve `.kobay/tests/_fixture.ts`'yi düzenlemeyi önermez.
+0.7.0 geçen testlerin trace'ini bırakmamış, `trace.zip`'i hata paketinden
+çıkarmıştı. Tam liste [CHANGELOG.md](CHANGELOG.md) içinde.
 
 Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
 
@@ -853,6 +904,14 @@ kobay project update --login --clear-auth-origins
   `explore` "Login did not return to the app origin" ile `5` çıkar. Bu, auth
   origin'li ya da onsuz her girişte geçerlidir.
 - `.kobay/storageState.json` (0600) bu durumda auth sitesinin çerezlerini de tutar.
+
+- **Sınır: gerçek bir kimlik sağlayıcıya karşı denenmedi.** `--auth-origin`
+  yalnız kobay'ın kendi testlerinde, ikinci bir yerel origin'e karşı denendi.
+  Okta, Auth0, Google, Entra ya da başka gerçek bir kimlik sağlayıcıya karşı
+  denenmedi. Yönlendirme zincirlerinin, ek onay ya da MFA ekranlarının, iframe
+  ve açılır pencerelerin bununla çalışıp çalışmadığı bilinmiyor. Giriş
+  tamamlanmazsa `explore` `5` koduyla çıkar; bunun yerine
+  [içe alınan oturumu](#içe-alınan-oturum-captcha-2fa) kullan.
 
 ### İçe alınan oturum (CAPTCHA, 2FA)
 
@@ -1138,7 +1197,8 @@ kobay test list
 ```
 
 **Kendi testin.** `test create --plan` elle yazılmış bir plan dosyası alır
-(biçim [Komutlar](#komutlar) altında). Hızlı başlangıçtaki aylık toplam planı:
+(biçim [Komutlar](#komutlar) altında). Plan dosyası proje klasörünün içinde
+olmalıdır; `--plan` dışarıdaki bir yolu reddeder. Hızlı başlangıçtaki aylık toplam planı:
 
 ```json
 { "type": "frontend", "name": "Record list shows a monthly total",
@@ -1191,7 +1251,7 @@ pakete yalnız analiz onlara atıf yaparsa girer. Trace pakette yoktur (oturum
 
 ### Komutlar
 
-Aşağıdaki bayraklar 0.7.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
+Aşağıdaki bayraklar 0.8.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
 örtüşür.
 
 | Komut | Ne yapar |

@@ -7,6 +7,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-09
+
+### Fixed
+
+- The failure analysis no longer treats rejected token refresh requests (401)
+  as a lost session: apps like Vikunja show them in healthy runs, and kobay
+  already checks the session itself after a failed run. The prompt drops that
+  rule, and an `env` verdict that rests on 401 noise alone (no login page in
+  the DOM, no 5xx or timeout) becomes `unknown` without the "rerun" advice.
+- The analysis keeps a correct recommendation when the brain only repeats the
+  ban ("Do not edit .kobay/tests/_fixture.ts"); only a real suggestion to edit
+  that file is replaced.
+- The map reads headings, menu links, `<select>` options and `<summary>` titles
+  like button names: hidden ones (for example a print-only `h1`) stay out and
+  `aria-label` wins.
+- The "page is not in the map" analysis names the real test id in
+  `kobay test refresh <id>`.
+
+- `--login` now logs in when the form's login button is `<button type="button">`
+  (Vikunja v2.7.1; before, explore exited 5 "Login failed" without typing the
+  credentials). Buttons inside the form and buttons bound to it with
+  `form="<id>"` count. kobay clicks a button named like a login ("Log in",
+  "Sign in", "Anmelden", "Continue"…; a submit button first), else the first
+  other submit button, else presses Enter in the password field when the form
+  has no submit button at all. Buttons named or marked like show/hide
+  password, forgot password, sign-up, cancel, single sign-on, a login link, or
+  another way in ("Sign in with Google", "Continue with <any provider>", "… via
+  …") are skipped ("Continue with password" and "Sign in with email" are not);
+  when every submit button is such a button, kobay does not try to log in
+  (Enter would press it). The list covers common names, not every language.
+- With saved credentials, every test run first checks `.kobay/storageState.json`
+  under the imported-session guard (no request leaves the allowed origins
+  from the first one). If the app does not show its login page and no popup or
+  foreign frame opened, the session (possibly rotated by the app) is written
+  back. Otherwise kobay logs in again in a clean browser with the same guards
+  as explore; a login that ends on the login form's page again with a login
+  form (for example `/login?error=…`) counts as refused, while a forced
+  password change on another page does not. A refused login stops the run as `env`
+  and removes the session file. Only the project's own session file is renewed.
+- When the session dies during a run, the run is `inconclusive` with failure
+  kind `env` and names the fix: `kobay test rerun <id>` with saved
+  credentials, `kobay explore --session-file <file>` with an imported session.
+  This needs both signs: the test's own browser (with its latest session) is
+  sent to the login page, and the saved session opens the login page too.
+  Otherwise the run stays `failed`. No brain call is made for it.
+- The failure analysis no longer suggests editing the shared
+  `.kobay/tests/_fixture.ts`, for any failure kind: a session expiry names the
+  session commands, other advice points at the test's own spec file. Advice
+  about the app's own data fixtures is left alone.
+- `kobay explore` (and the single-page refresh) now reads a single-page app's
+  page after it renders. It waits until the DOM is quiet for 150 ms and no
+  short request is in flight, at most 3 s per page and 30 s per explore; a
+  request older than 1.5 s (long-poll, stream) does not hold the wait. Before,
+  pages were saved at `domcontentloaded`, often with 0 links, forms and
+  buttons, and two explores of the same app gave different maps. A page that a
+  client redirect moves (for example `/projects/2` to `/projects/2/9`) is
+  saved under the address it rendered at; refreshing such a page
+  (`kobay test refresh`) accepts the same-origin client redirect too, unless
+  it lands on a login form. The wait only observes; it clicks and types
+  nothing, and it stops as soon as the page moves to another origin (no kobay
+  script runs in that document). Reading a page whose main thread is frozen is
+  bounded by the page timeout: explore stops there and keeps the pages it
+  already has (a frozen tab cannot navigate again), refresh fails with
+  "Page did not respond".
+- Button names in the map are accessible names (the name `getByRole` matches),
+  not rendered text: CSS `text-transform` no longer turns "Create" into
+  "CREATE", and `aria-labelledby` / `aria-label` now come before the text, as
+  in the accessibility tree. Button names and form field labels skip hidden
+  text: a hidden button, a hidden or `aria-hidden` part or `aria-labelledby`
+  target (also through an open shadow root's host), and an element that is
+  itself `opacity: 0`. Headings, menu entries, select options and disclosure
+  titles still read raw text, so hidden text can still appear there.
+- Plan and code generation now use the same "is it in the map" rule. A path
+  that matches a map path pattern (`/tasks/999999` for `/tasks/36`) was
+  accepted by `plan accept` but refused when the code was generated; the code
+  gate now accepts it too. The origin check is unchanged: a `page.goto` to
+  another origin is still refused. A path that is neither in the map nor
+  matches a pattern is refused with the command that fixes it:
+  `kobay explore --seed <path>` (in the plan's dropped reason, in the code
+  gate's message, and in the error the generated test throws).
+- A generated test that fails because its page is not in the map is no longer
+  analysed as "needs the real credentials". The analysis is `env`, names
+  `kobay explore --seed <path>` and `kobay test refresh <id>`, and the report's
+  fix prompt lists it under "Review", not under "Fix (code change)".
+- `kobay test create --plan <file>` names the flag `--plan` (not the internal
+  `planPath`) when the file is outside the project folder. The README states
+  the limit.
+- A login refused by the app's rate limit is no longer reported as wrong
+  credentials. When the login request gets HTTP 429, the pre-run renewal
+  stops the run as `env` and says to wait (the app's `Retry-After` seconds
+  when it sends them, "retry now" for `Retry-After: 0`, else about a minute)
+  and then run `kobay test rerun <id>`; `kobay explore --login` says the same
+  for explore (exit 5 as before). In both cases the session file and the
+  credentials are kept, and the login does not count as done even when the
+  form's 429 page has another address. The login request is the one sent
+  after submit from the login page's main frame to the allowed origins, not
+  GET/HEAD/OPTIONS, with the typed password in its body. Only its HTTP
+  status counts: a refusal page that says "Too Many Requests", or a 429 on
+  another request (one without the password, or from a frame or popup), is
+  still a refused login. A 429 at the end of the login request's redirect
+  chain (`POST` → 302 → a 429 page) counts too, and so does a 429 that
+  comes after a single-page app already changed the address. If the login
+  then fails another way (for example it stays on the sign-in site), that
+  error notes the 429. kobay does not wait or retry by itself.
+
+### Known limitations
+
+- An imported session (`--session-file`) is never refreshed or written back by
+  kobay. When the app expires it (for example a short access token with a
+  single-use refresh cookie), import a fresh one with
+  `kobay explore --session-file <file>`.
+- The "session died" sign from the test's browser is a file in the run folder,
+  which a hostile generated test could write; kobay also requires the saved
+  session to open the login page before it reports `env`.
+- A rate-limited login is recognized only by the HTTP 429 status of the login
+  request. An app that refuses with another status (for example 401 or 200
+  with a "too many attempts" page) is still reported as a failed login with
+  the page text quoted, and the session file is removed. An app that answers
+  429 to every login, even with wrong credentials, makes kobay keep asking
+  you to wait. `kobay test refresh` still treats a 429 login as refused.
+  kobay waits for the login request's answer for about 7 s after submit when
+  the page address changes right away (longer when it does not); a 429 that
+  comes later is missed, and the login counts as refused (the session file
+  is removed).
+- The login page's own main-frame script can send the typed password to
+  another allowed endpoint and get a 429 there; wrong credentials then look
+  like a rate limit and the files are kept. Nothing leaks (a hostile app
+  could do worse). A login that sends the password in a binary or base64
+  body is not matched, so a 429 there is still a refused login (files
+  removed).
+- Two `kobay test run` processes on the same project at the same time can race
+  on `.kobay/storageState.json` while renewing it (runs inside one process,
+  such as the MCP server, take turns).
+- A test generated before 0.8.0 from a map that recorded a hidden heading (for
+  example a print-only `<h1>`) keeps looking for that heading. Its failure can
+  be classified `flaky` with "increase the timeout" advice, which does not fix
+  it. Regenerate such a test from a fresh map with `kobay test refresh <id>`.
+
+### Added
+
+- Map pages carry `disabledButtons`: the names of buttons that were disabled
+  (`disabled`, inside a disabled `fieldset`, or `aria-disabled="true"`) when
+  the page was explored. The field is optional; older maps still load.
+- The plan prompt and the code generation prompt include each page's
+  `disabledButtons`. The plan is told not to click a disabled button and wait for
+  a message (an empty required title disables "Create" instead of showing an
+  error); generated code is told it can assert `toBeDisabled()`.
+
 ## [0.7.0] - 2026-11-07
 
 ### Changed
@@ -1070,7 +1218,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/ademtfkc/kobay/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/ademtfkc/kobay/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ademtfkc/kobay/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/ademtfkc/kobay/compare/v0.4.0...v0.5.0

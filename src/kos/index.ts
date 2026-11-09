@@ -16,9 +16,11 @@ import { raporuAyristir } from './rapor.js';
 import { kobayOlurkenAgaciOldur, sureciSonlandir } from '../ortak/komut-coz.js';
 import { gizliDegerleriMaskele } from '../beyin/ortak.js';
 import { kokAdres, loopbackAdiMi, loopbackYokla } from './loopback-yokla.js';
+import { kosuOncesiOturum, kosuSonrasiOturumDustuMu, oturumDususuMesaji } from './oturum-tazele.js';
 
 export { FixtureModuleMissing, fixtureYenidenAktarimMetni, kaliciCalismaAlaniHazirla } from './calisma-alani.js';
 export { testSureciOrtami } from './ortam.js';
+export { girisEkranindaMi, kosuOncesiOturum, kosuSonrasiOturumDustuMu, oturumDususuMesaji } from './oturum-tazele.js';
 export { hataMetniniTemizle, raporuAyristir, type PlaywrightRaporSonucu } from './rapor.js';
 
 export interface KosturmaAyari {
@@ -217,6 +219,22 @@ async function kosturHam(
   const kosuDizini = await dizin.kosuDizini(runId);
   const raporYolu = join(kosuDizini, 'pw-report.json');
   const storageStateYolu = s.storageStateYolu ?? dizin.storageStateYolu();
+  // Kayıtlı kimlikli projede oturum her koşudan önce yoklanır, ölmüşse yeniden giriş yapılır
+  // (bkz. `oturum-tazele.ts`). Giriş olmazsa test koşmaz: sonuç `env` ve düzeltme yolu.
+  const oturumHazirligi = await kosuOncesiOturum(dizin, s.baseUrl, storageStateYolu, test.id);
+  if (oturumHazirligi.tur === 'hata') {
+    const sonuc: KosuSonucu = {
+      ...temel,
+      status: 'unknown',
+      verdict: 'inconclusive',
+      failureKind: 'env',
+      finishedAt: simdi(),
+      errorMessage: oturumHazirligi.mesaj.slice(0, 2000),
+    };
+    const adimlar: AdimSonucu[] = [];
+    await kaydet(dizin, test, sonuc, adimlar);
+    return { sonuc, adimlar };
+  }
   // Üretilen kod bu süreçte çalışır: kullanıcının sırları (API anahtarları, KOBAY_LOGIN_PASS…)
   // devredilmez. Oturum storageState dosyasıyla taşınır.
   const env = testSureciOrtami(process.env, {
@@ -261,7 +279,7 @@ async function kosturHam(
   const dusenAdim = ayrismis.adimlar.find((adim) => adim.status === 'failed');
   const basarisiz = dusenAdim !== undefined || ayrismis.hataMesaji !== undefined;
   // Playwright'ın kendi hatası (hiç test koşmaması dahil) "geçti"yi de "düştü"yü de geçersiz kılar.
-  const sonuc: KosuSonucu = ayrismis.motorHatasi === undefined ? {
+  const kosuSonucu: KosuSonucu = ayrismis.motorHatasi === undefined ? {
     ...temel,
     status: basarisiz ? 'failed' : 'passed',
     verdict: basarisiz ? 'failed' : 'passed',
@@ -275,6 +293,19 @@ async function kosturHam(
     failureKind: 'env',
     finishedAt: simdi(),
     errorMessage: [ayrismis.motorHatasi, ayrismis.hataMesaji].filter((metin) => metin !== undefined).join('\n').slice(0, 2000),
+  };
+  // Test kendi (son) oturumuyla giriş ekranı gördüyse VE diskteki oturum da giriş ekranına düşüyorsa
+  // koşu ürün hakkında bir şey söylemez: `env` + kurtarma komutu, sonuçsuz (analiz yok, yanlış öneri
+  // yok). Biri tutmazsa gerçek hata saklanmaz, koşu `failed` kalır (bkz. `kosuSonrasiOturumDustuMu`).
+  const dusenKaynak = kosuSonucu.verdict === 'failed'
+    ? await kosuSonrasiOturumDustuMu(dizin, s.baseUrl, storageStateYolu, kosuDizini)
+    : null;
+  const sonuc: KosuSonucu = dusenKaynak === null ? kosuSonucu : {
+    ...kosuSonucu,
+    status: 'unknown',
+    verdict: 'inconclusive',
+    failureKind: 'env',
+    errorMessage: `${oturumDususuMesaji(dusenKaynak, test.id)}\n\n${kosuSonucu.errorMessage ?? ''}`.trim().slice(0, 4000),
   };
   // `retain-on-failure`: geçen testte trace yoktur; o zaman taşınacak bir şey yok, koşu trace'siz kalır.
   const kaynakTrace = join(kosuDizini, 'pw');

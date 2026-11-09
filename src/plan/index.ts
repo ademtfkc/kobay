@@ -13,7 +13,7 @@ import {
 import { girisKuraliIhlali } from './giris-filtresi.js';
 import { PLAN_SISTEM_ISTEMI, planKullaniciIstemiOlustur } from './istem.js';
 import { PlanYanitiSemasi, type PlanYaniti } from './sema.js';
-import { haritaSlugOnekleri, haritaYolKaliplari, oneriUrlKarari, yoluNormallestir, yolKalibi } from './url-kalip.js';
+import { haritaSlugOnekleri, haritaYolKaliplari, haritayaEkleKomutu, oneriUrlKarari, yoluNormallestir, yolKalibi } from './url-kalip.js';
 
 export {
   PLAN_SISTEM_ISTEMI,
@@ -112,9 +112,11 @@ export async function planUret(
     const karar = oneriUrlKarari(taslak.url, harita, kaliplar);
     if (!karar.kabul) {
       const kalipMetni = karar.kalip === null ? 'no pattern could be derived' : `pattern: ${karar.kalip}`;
+      const komut = haritayaEkleKomutu(taslak.url, harita.baseUrl);
+      const komutEki = komut === null ? '' : `; add it to the map with: ${komut}`;
       dusurulen.push({
         title: taslak.title,
-        reason: `URL is not in the map and no path pattern matched: ${taslak.url} (${kalipMetni})`,
+        reason: `URL is not in the map and no path pattern matched: ${taslak.url} (${kalipMetni})${komutEki}`,
       });
       continue;
     }

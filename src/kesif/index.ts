@@ -19,6 +19,7 @@ import {
   loginUrlDogrula,
   oturumDurumunuSil,
   oturumDurumunuYaz,
+  type GirisHizSiniri,
   type GirisSayfaMesaji,
   type GirisSonucu,
 } from './oturum.js';
@@ -60,6 +61,8 @@ export interface KesifSecenekleri {
 export interface KesifSonucu {
   harita: Harita;
   girisSayfaMesaji?: GirisSayfaMesaji;
+  /** Giriş, uygulamanın hız sınırıyla (HTTP 429) reddedildi (0.8.0 P2-3); kimlik reddi değil. */
+  girisHizSiniri?: GirisHizSiniri;
 }
 
 /** Uygulamayı güvenli bağlantılarla gezip test üretimine uygun bir harita çıkarır. */
@@ -123,6 +126,7 @@ export async function kesfetAyrintili(secenekler: KesifSecenekleri): Promise<Kes
   /** Giriş denendiyse sonucu; form bulunamadıysa undefined. */
   let giris: GirisSonucu | undefined;
   let girisSayfaMesaji: GirisSayfaMesaji | undefined;
+  let girisHizSiniri: GirisHizSiniri | undefined;
   const ilkSayfalar: Sayfa[] = [];
 
   try {
@@ -145,6 +149,7 @@ export async function kesfetAyrintili(secenekler: KesifSecenekleri): Promise<Kes
         giris = await girisiGonder(sayfa, form, secenekler.kimlik, hedefOrigin, authOrigins);
         girisYapildi = giris.basarili;
         girisSayfaMesaji = giris.sayfaMesaji;
+        if (!giris.basarili) girisHizSiniri = giris.hizSiniri;
       }
     }
 
@@ -156,7 +161,8 @@ export async function kesfetAyrintili(secenekler: KesifSecenekleri): Promise<Kes
     if (oturum === undefined) {
       if (secenekler.kimlik === undefined || girisYapildi) {
         await oturumDurumunuYaz(context, secenekler.storageStateYolu);
-      } else if (giris?.basarili === false) {
+      } else if (giris?.basarili === false && girisHizSiniri === undefined) {
+        // Hız sınırıyla (HTTP 429) reddedilen giriş kimlik reddi değildir: dosya kalır (P2-3).
         await oturumDurumunuSil(secenekler.storageStateYolu);
       }
     }
@@ -198,7 +204,11 @@ export async function kesfetAyrintili(secenekler: KesifSecenekleri): Promise<Kes
       ...(siteHaritasi === null ? {} : { sitemap: { url: siteHaritasi.url, urlCount: siteHaritasi.adresler.length } }),
       ...(sessionSource === undefined ? {} : { sessionSource }),
     };
-    return girisSayfaMesaji === undefined ? { harita } : { harita, girisSayfaMesaji };
+    return {
+      harita,
+      ...(girisSayfaMesaji === undefined ? {} : { girisSayfaMesaji }),
+      ...(girisHizSiniri === undefined ? {} : { girisHizSiniri }),
+    };
   } catch (hata: unknown) {
     // İçe alınan oturumda her hata mesajı (Playwright'ınki dahil) oturum değerlerine göre maskelenir.
     const koruma = oturum === undefined ? undefined : girisKorumasiBul(context);
@@ -215,6 +225,7 @@ export { CredentialLeakBlockedError } from './giris-korumasi.js';
 export {
   girisiGonder,
   girisSayfaMesajiNotu,
+  hizSiniriOnerisi,
   CredentialOriginError,
   GIRIS_DONUS_BEKLEME_MS,
   kimlikOriginDogrula,
@@ -223,6 +234,7 @@ export {
   LoginSubmitTimeoutError,
   loginUrlDogrula,
   oturumDurumunuYaz,
+  type GirisHizSiniri,
   type GirisSayfaMesaji,
   type GirisSonucu,
 } from './oturum.js';

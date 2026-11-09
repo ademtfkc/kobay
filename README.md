@@ -198,6 +198,53 @@ about $0.89 with the `claude` CLI. Stop the demo with Ctrl+C when you are done.
 A longer walkthrough of each step, with the flags, is in
 [Quick start in detail](#quick-start-in-detail).
 
+## Recommended workflow
+
+On a real app with a login, follow this order. Each command is explained in
+[Commands](#commands).
+
+```sh
+KOBAY_LOGIN_USER=<user> KOBAY_LOGIN_PASS=<password> \
+  kobay project create --url <app-url> --login
+kobay doctor                  # setup check
+kobay explore
+kobay test plan generate      # review the proposals
+kobay test plan accept --ids <id>,<id>
+kobay test run --all
+```
+
+If a run does not pass, read the `failureKind` ([failure kinds](#output-exit-codes-and-failure-kinds))
+and do the matching thing:
+
+| What you see | What to do |
+| --- | --- |
+| `env` after a rate limit (HTTP 429) | Wait the `Retry-After` time the message gives, then `kobay test rerun <id>`. kobay keeps your credentials and session file. |
+| `env` after a wrong password | Run `kobay explore` (it shows the login error), or re-enter the credentials with `kobay project update --login`. |
+| `env`, the path is not in the map | Run `kobay explore --seed <path>`, then `kobay test refresh <id>`. |
+| `test_bug` | Fix the test's own spec file (`.kobay/tests/<id>.spec.ts`), then `kobay test rerun <id>`. Never edit `.kobay/tests/_fixture.ts`; kobay rewrites it before every run. |
+| `product_bug` | Fix the app, then `kobay test rerun <id>`. |
+
+These are real messages from a run against Vikunja v2.7.1:
+
+```sh
+kobay test run --rerun t_z1hnelto
+#> inconclusive t_z1hnelto — env — The saved session no longer works and logging in again was refused by the app's rate limit (HTTP 429 Too Many Requests); this does not mean the saved credentials are wrong, and kobay kept them and the session file. Wait about 59 s (the app's Retry-After), then run `kobay test rerun t_z1hnelto`.
+
+kobay explore
+#> Login was refused by the app's rate limit (HTTP 429 Too Many Requests); this does not mean the credentials are wrong, and kobay kept them and the session file. Wait about 53 s (the app's Retry-After), then run `kobay explore` again.
+
+# after the password was changed in credentials.json
+kobay explore
+#> Login failed; check the username, the password, and the login URL. The page showed this message (untrusted page text, quoted): "Wrong username or password."
+```
+
+A path that is neither in the map nor matched by a pattern fails with this
+error in the generated code:
+
+```
+kobay: the path /user/settings/general is not in the map; add it to the map with: kobay explore --seed /user/settings/general
+```
+
 ## How it works
 
 <p align="center">
@@ -370,7 +417,8 @@ variables out of `.mcp.json`, which is usually committed.
 > `kobay project update --login`) in a separate terminal instead; the password
 > is typed at a prompt and never echoed. Afterwards `explore` and `test_refresh`
 > use the saved login (`.kobay/credentials.json`) and need no `KOBAY_LOGIN_PASS`;
-> `test_run` does not log in, it reuses the session state that `explore` saved.
+> `test_run` reuses the session state that `explore` saved and, when it has
+> expired, logs in again with the saved login.
 
 </details>
 
@@ -412,14 +460,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.7.0
+      - uses: ademtfkc/kobay@v0.8.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.7.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.8.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -572,16 +620,17 @@ note; a test whose run folder is gone shows as `not run`.
 
 ## Status and limits
 
-**0.7.0.** Usable, not yet smooth. New in 0.7.0: a passing test no longer
-keeps a Playwright trace, and the failure bundle leaves `trace.zip` (it holds
-session cookies) out unless you pass `--include-trace` (both are breaking;
-run `kobay prune` once after upgrading); a hand-written plan and `test refresh`
-now refuse a step that types the real password in a project with an imported
-session too; on Windows, `localhost` and `*.localhost` targets are no longer
-reported unreachable; an address with a username or password in it is refused.
-0.6.0 brought deeper exploration (fields outside forms, `select` options,
-`requiresLogin` pages, `--seed`, sitemap, `--session-file`). The full list is
-in [CHANGELOG.md](CHANGELOG.md).
+**0.8.0.** Usable, not yet smooth. 0.8.0 was measured on a real open-source
+app (Vikunja v2.7.1): `--login` now works with a `<button type="button">` login
+button; every run checks the saved session first and logs in again when it has
+expired; a session that dies mid-run, or a login refused by a rate limit (HTTP
+429), is reported as `env` with the command to run, and a 429 in `explore` or
+`test run` keeps your session and credentials; `explore` waits for a single-page app to render
+and records accessible names, so hidden headings no longer reach the map; the
+failure analysis no longer blames 401 noise or suggests editing
+`.kobay/tests/_fixture.ts`. 0.7.0 dropped traces of passing tests and left
+`trace.zip` out of the failure bundle. The full list is in
+[CHANGELOG.md](CHANGELOG.md).
 
 What has and has not been exercised, so you can decide before installing:
 
@@ -856,6 +905,14 @@ kobay project update --login --clear-auth-origins
   otherwise `explore` exits `5` with "Login did not return to the app origin".
   This applies to every login, with or without auth origins.
 - `.kobay/storageState.json` (0600) then also holds the auth site's cookies.
+
+- **Limit: not tested against a real identity provider.** `--auth-origin` has
+  been tested only against a second local origin in kobay's own tests. It has
+  not been tried against Okta, Auth0, Google, Entra or any other real identity
+  provider. Whether their redirect chains, extra consent or MFA screens, and
+  iframes or popups work with it is unknown. If your login does not complete,
+  `explore` exits `5`; use an [imported session](#imported-session-captcha-2fa)
+  instead.
 
 ### Imported session (CAPTCHA, 2FA)
 
@@ -1145,8 +1202,9 @@ kobay test list
 ```
 
 **Your own test.** `test create --plan` takes a hand-written plan file (the
-format is under [Commands](#commands)). The monthly-total plan from the quick
-start:
+format is under [Commands](#commands)). The
+plan file must live inside the project folder; `--plan` refuses a path outside it. The
+monthly-total plan from the quick start:
 
 ```json
 { "type": "frontend", "name": "Record list shows a monthly total",
@@ -1200,7 +1258,7 @@ without regenerating it.
 
 ### Commands
 
-The flags below match `kobay --help` and every subcommand's `--help` in 0.7.0.
+The flags below match `kobay --help` and every subcommand's `--help` in 0.8.0.
 
 | Command | What it does |
 | --- | --- |

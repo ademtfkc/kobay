@@ -17,6 +17,7 @@ import {
   haritadaSayfaBul,
   girisSayfaMesajiNotu,
   haritadaSayfayiDegistir,
+  hizSiniriOnerisi,
   kesfetAyrintili,
   sayfayiYenile,
   type KesifSonucu,
@@ -458,6 +459,13 @@ export async function kesfiYenile(dizin: KobayDizini, ayar: KesifAyari = {}, otu
     process.stderr.write(
       `[kobay] Warning: ${dusenSayfa} page${dusenSayfa === 1 ? '' : 's'} sent the imported session to a login page;`
       + ' the session may have expired. Import a fresh one with `kobay explore --session-file <file>`.\n',
+    );
+  }
+  if (kimlik !== null && !harita.loggedIn && sonuc.girisHizSiniri !== undefined) {
+    // P2-3: giriş isteği HTTP 429 aldı (sayfa metni değil); kimlik ve oturum dosyası kalır.
+    throw new PermissionError(
+      'Login was refused by the app\'s rate limit (HTTP 429 Too Many Requests); this does not mean the credentials are'
+        + ` wrong, and kobay kept them and the session file. ${hizSiniriOnerisi(sonuc.girisHizSiniri, '`kobay explore` again')}`,
     );
   }
   if (kimlik !== null && !harita.loggedIn) {
