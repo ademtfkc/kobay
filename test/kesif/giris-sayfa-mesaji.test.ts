@@ -150,6 +150,17 @@ const YAVAS_GOVDE_MS = 6_000;
  * `/sekme-302`ye gider, o da yabancı kökene (`localhost`, ayrı site) 302 döner.
  */
 const GEC_SEKME_MS = 4_000;
+/**
+ * `/gec-gezinme`: gönderimi sayfanın betiği yapar (tıklama gezinmeyi beklemeden döner): parolayı
+ * istemcide dönüştürür (gövdede ham parola yok, giriş isteği sayılmaz) ve formu 300 ms sonra
+ * gönderir. Sunucu ret yanıtının başlıklarını `GEC_BASLIK_MS` tutar: gezinme URL bütçesi (1 sn)
+ * içinde başlar, ağ durulmasının 2 sn tavanından sonra yerleşir. Yerleşmeyi beklemeyen okuma eski
+ * belgeyi görür, gerekçe kaybolur.
+ */
+const GEC_BASLIK_MS = 4_000;
+const GEC_GEZINME_SAYFASI = sayfa(`${form('/gec-gezinme')}<script>const f=document.querySelector('form');`
+  + 'f.addEventListener(\'submit\',(olay)=>{olay.preventDefault();const p=f.querySelector(\'input[type=password]\');'
+  + 'p.value=\'h-\'+btoa(p.value);setTimeout(()=>f.submit(),300);});</script>');
 /** `/bitmeyen`: başı gönderilip hiç tamamlanmayan ret yanıtları (afterAll'da kapatılır). */
 const bitmeyenYanitlar: ServerResponse[] = [];
 /** JavaScript ile ret: gönderim engellenir (gezinme yok), uyarı 300 ms sonra DOM'a yazılır. */
@@ -191,6 +202,16 @@ beforeAll(async () => {
           setTimeout(() => {
             yanit.end(`${form('/gec-sekme')}<script>location.href='/sekme-302';</script></body></html>`);
           }, GEC_SEKME_MS);
+          return;
+        }
+        if (yol === '/gec-gezinme') {
+          const govdeHtml = istek.method === 'POST'
+            ? sayfa(`<div role="alert">Slow headers say no</div>${form('/gec-gezinme')}`)
+            : GEC_GEZINME_SAYFASI;
+          setTimeout(() => {
+            yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            yanit.end(govdeHtml);
+          }, istek.method === 'POST' ? GEC_BASLIK_MS : 0);
           return;
         }
         if (yol === '/sekme-302') {
@@ -389,6 +410,11 @@ describe('A6: giriş reddinde sayfa uyarısı (gerçek Chromium)', () => {
     expect(await girisDene(`${appOrigin}/bitmeyen`)).toEqual({ basarili: false });
     // URL bütçesi (1 sn) + ağ durulması (2 sn) + yükleme tavanı (5 sn) + okuma (2 sn) + pay.
     expect(Date.now() - bas).toBeLessThan(13_000);
+  }, 30_000);
+
+  it('gönderimden sonra başlayan gezinme ağ durulması tavanından sonra yerleşirse uyarı yeni belgeden okunur', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    expect(alinti(await girisDene(`${appOrigin}/gec-gezinme`))).toBe('Slow headers say no');
   }, 30_000);
 
   it('ret sayfasının geç gelen script\'i aynı-köken adres üzerinden yabancıya 302 olursa giriş reddedilir', async (context) => {

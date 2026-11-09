@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A rejected login no longer loses the page's reason when the page submits the
+  form itself and the rejection response arrives late: kobay now waits (within
+  the same 5 s load cap) for that navigation to settle and reads the warning
+  from the new page, not the old one. Rejections without a navigation are not
+  delayed.
 - The failure analysis no longer treats rejected token refresh requests (401)
   as a lost session: apps like Vikunja show them in healthy runs, and kobay
   already checks the session itself after a failed run. The prompt drops that

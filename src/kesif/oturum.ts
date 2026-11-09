@@ -1,5 +1,5 @@
 import { lstat, rm } from 'node:fs/promises';
-import type { BrowserContext, Locator, Page, Request, Response } from '@playwright/test';
+import type { BrowserContext, Frame, Locator, Page, Request, Response } from '@playwright/test';
 import { authOriginNormallestir, yazAtomik, type Kimlik } from '../depo/index.js';
 import type { GirisFormu } from './giris.js';
 import {
@@ -259,18 +259,38 @@ export function parolaGovdedeMi(govde: string | null, parola: string): boolean {
  */
 export const GIRIS_ISTEGI_BEKLEME_MS = 5_000;
 
-/** Gönderim penceresinde (tıklamadan sonuca) giriş isteğinin 429'unu toplayan iz. */
+/**
+ * Gönderim penceresinde (tıklamadan sonuca) giriş isteğinin 429'unu ve ana çerçevenin henüz
+ * yerleşmemiş gezinmelerini toplayan iz.
+ */
 interface HizSiniriIzi {
   acik: boolean;
   hiz?: GirisHizSiniri;
   /** Yanıtı (başlıkları) henüz gelmemiş giriş istekleri (zincir ayakları dahil). */
   bekleyen: Set<Request>;
+  /**
+   * Gönderimden sonra başlamış, henüz yeni belge olarak yerleşmemiş (commit) ana çerçeve gezinme
+   * istekleri. Giriş isteği sayılmasa da (gövdede ham parola yok, GET) ret belgesi bu gezinmeyle
+   * gelir. Belge açan yanıt (2xx, 4xx, 5xx; 204/205 hariç) yalnız ana çerçeve gezinince çıkar:
+   * gövde, commit'ten önce bitebilir. Belge açmayan sonlar kendi olaylarında çıkar: yönlendirme
+   * ayağı (3xx; sonraki ayak aynı olay turunda eklenir), 204/205, indirme ve başarısızlık.
+   */
+  gezinmeler: Set<Request>;
+  /** `gezinmeler`deki isteklerin yanıt durum kodu (başlıklar geldikçe yazılır). */
+  gezinmeDurumu: WeakMap<Request, number>;
 }
 
-/** Bekleyen giriş istekleri bitene ya da tavan dolana kadar bekler (50 ms aralıkla bakar). */
-async function girisIstekleriniBekle(iz: HizSiniriIzi, tavanMs: number): Promise<void> {
+/** Bu durum koduyla biten ana çerçeve gezinmesi yeni belge açar mı (yerleşmesi beklenir mi). */
+function belgeAcanDurumMu(durum: number | undefined): boolean {
+  if (durum === undefined) return false;
+  if (durum === 204 || durum === 205) return false;
+  return (durum >= 200 && durum < 300) || durum >= 400;
+}
+
+/** Kümedeki istekler bitene ya da tavan dolana kadar bekler (50 ms aralıkla bakar). */
+async function istekleriBekle(kume: ReadonlySet<Request>, tavanMs: number): Promise<void> {
   const son = Date.now() + tavanMs;
-  while (iz.bekleyen.size > 0 && Date.now() < son) {
+  while (kume.size > 0 && Date.now() < son) {
     await new Promise((coz) => { setTimeout(coz, 50); });
   }
 }
@@ -309,7 +329,7 @@ export async function girisiGonder(
   // Yönlendirme zinciri (`POST /session` → 302 → `GET /rate-limit` = 429): koşullar zincirin
   // BAŞLANGIÇ isteğine (parola, yöntem, izinli küme) uygulanır; her ayak ana çerçevede ve izinli
   // kümede olmalı.
-  const iz: HizSiniriIzi = { acik: false, bekleyen: new Set() };
+  const iz: HizSiniriIzi = { acik: false, bekleyen: new Set(), gezinmeler: new Set(), gezinmeDurumu: new WeakMap() };
   const girisIstegiMi = (istek: Request): boolean => {
     try {
       if (istek.frame() !== sayfa.mainFrame()) return false;
@@ -327,13 +347,36 @@ export async function girisiGonder(
       return false;
     }
   };
+  const anaGezinmeMi = (istek: Request): boolean => {
+    try {
+      return istek.isNavigationRequest() && istek.frame() === sayfa.mainFrame();
+    } catch {
+      return false;
+    }
+  };
   const istekBasladi = (istek: Request): void => {
     if (iz.acik && girisIstegiMi(istek)) iz.bekleyen.add(istek);
+    if (iz.acik && anaGezinmeMi(istek)) iz.gezinmeler.add(istek);
   };
-  const istekBitti = (istek: Request): void => { iz.bekleyen.delete(istek); };
+  const istekBitti = (istek: Request): void => {
+    iz.bekleyen.delete(istek);
+    // Belge açan yanıtın gövdesi bitti ama belge henüz yerleşmemiş olabilir: commit beklenir.
+    if (!belgeAcanDurumMu(iz.gezinmeDurumu.get(istek))) iz.gezinmeler.delete(istek);
+  };
+  const istekDustu = (istek: Request): void => {
+    iz.bekleyen.delete(istek);
+    iz.gezinmeler.delete(istek);
+  };
+  // Ana çerçeve yeni belgeye (ya da aynı belgede) gezindi: bekleyen gezinme yerleşti.
+  const cerceveGezindi = (cerceve: Frame): void => {
+    if (cerceve === sayfa.mainFrame()) iz.gezinmeler.clear();
+  };
+  // İndirme olan gezinme belge açmaz.
+  const indirmeBasladi = (): void => { iz.gezinmeler.clear(); };
   const dinle = (yanit: Response): void => {
     // Yanıt başlıkları geldi: durum belli, gövdenin bitmesi beklenmez (bitmeyen ret gövdesi).
     iz.bekleyen.delete(yanit.request());
+    if (iz.gezinmeler.has(yanit.request())) iz.gezinmeDurumu.set(yanit.request(), yanit.status());
     if (!iz.acik || yanit.status() !== 429 || !girisIstegiMi(yanit.request())) return;
     const sn = retryAfterCoz(yanit.headers()['retry-after']);
     if (iz.hiz === undefined || (sn !== undefined && (iz.hiz.retryAfterSn ?? -1) < sn)) {
@@ -342,8 +385,10 @@ export async function girisiGonder(
   };
   sayfa.on('request', istekBasladi);
   sayfa.on('requestfinished', istekBitti);
-  sayfa.on('requestfailed', istekBitti);
+  sayfa.on('requestfailed', istekDustu);
   sayfa.on('response', dinle);
+  sayfa.on('framenavigated', cerceveGezindi);
+  sayfa.on('download', indirmeBasladi);
   try {
     const sonuc = await girisiGonderIc(sayfa, form, kimlik, hedefOrigin, authOrigins, urlBeklemeMs, donusBeklemeMs, tiklamaBeklemeMs, iz);
     // İç karardan sonra gelen 429 da girişi başarısız yapar (her iki çağıran için).
@@ -361,8 +406,10 @@ export async function girisiGonder(
   } finally {
     sayfa.off('request', istekBasladi);
     sayfa.off('requestfinished', istekBitti);
-    sayfa.off('requestfailed', istekBitti);
+    sayfa.off('requestfailed', istekDustu);
     sayfa.off('response', dinle);
+    sayfa.off('framenavigated', cerceveGezindi);
+    sayfa.off('download', indirmeBasladi);
   }
 }
 
@@ -491,7 +538,15 @@ async function girisiGonderIc(
   // URL değişmediyse (ret) aynı adrese dönen ret belgesi yüklensin: ağ durulmasının 2 sn tavanı
   // `load`'dan önce dolabilir. Giriş penceresi açıkken beklenir ki belgenin geç yüklenen
   // kısmının yaptığı her şey (ör. yabancıya 302 olan gezinme) pencere kuralıyla denetlensin.
-  if (!urlDegisti) await sayfa.waitForLoadState('load', { timeout: GIRIS_RET_YUKLEME_MS }).catch(() => undefined);
+  // Gönderimden sonra başlamış ama henüz yerleşmemiş ana çerçeve gezinmesi (tıklama gezinmeyi
+  // beklemeden döndü, yanıt geç geldi) varsa önce o yerleşir: yoksa `load` eski belgede hemen
+  // döner ve uyarı eski belgeden okunur. İkisi aynı `GIRIS_RET_YUKLEME_MS` tavanını paylaşır;
+  // gezinme yoksa (aynı sayfada JavaScript ile ret) hiç beklemez.
+  if (!urlDegisti) {
+    const son = Date.now() + GIRIS_RET_YUKLEME_MS;
+    await istekleriBekle(hizIzi.gezinmeler, GIRIS_RET_YUKLEME_MS);
+    await sayfa.waitForLoadState('load', { timeout: Math.max(1, son - Date.now()) }).catch(() => undefined);
+  }
   // Giriş, uygulamanın origin'ine dönünce tamamlanmış sayılır (ayrı giriş sitesi olsun olmasın;
   // liste boşken yabancı origin'e inen giriş de tamamlanmamıştır). Dönüş beklenirken giriş
   // penceresi açık kalır (sıkı kural sürer).
@@ -513,7 +568,7 @@ async function girisiGonderIc(
   if (urlDegisti && donulmeyenOrigin === null && !uygulamadaMi()) donulmeyenOrigin = new URL(sayfa.url()).origin;
   // Erken URL değişimi (SPA `pushState`) giriş isteğinin yanıtını beklemez: karar vermeden önce
   // hâlâ yanıtsız giriş isteği varsa tavanlı beklenir (geç 429 kaçmasın).
-  await girisIstekleriniBekle(hizIzi, GIRIS_ISTEGI_BEKLEME_MS);
+  await istekleriBekle(hizIzi.bekleyen, GIRIS_ISTEGI_BEKLEME_MS);
   // Giriş isteğinin kendisi 429 aldıysa URL değişse de (form `action` 429 sayfasına gitti) giriş
   // başarılı sayılmaz: oturum yazılmaz, ret yolu (hız sınırı) çalışır.
   const girisBasarili = urlDegisti && donulmeyenOrigin === null && hizIzi.hiz === undefined;

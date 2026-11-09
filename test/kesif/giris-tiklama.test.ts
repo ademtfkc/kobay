@@ -53,10 +53,15 @@ const SAYFALAR: Record<string, () => Cevap> = {
     '<button type="submit">Log in</button>',
     '<div id="perde" style="position:fixed;inset:0;background:rgba(0,0,0,.2)"></div>',
   ) }),
-  // Kilitli değil ama hiç durmayan animasyon: Playwright "stable" bekler, tıklama zaman aşar.
+  // Kilitli değil ama hiç durmayan düğme: Playwright "stable" (art arda iki karede aynı kutu)
+  // bekler, tıklama zaman aşar. Konum her karede betikle değişir. CSS animasyonu kullanılmaz:
+  // animasyonun başlangıcı beklerken (yüklü makinede daha uzun) zamanı iki karede 0 kalır,
+  // düğme o an "stable" sayılır ve tıklama geçer (macOS CI'da görüldü).
   '/kaygan': () => ({ govde: form(
-    '<button type="submit" style="animation:kay .2s linear infinite alternate">Log in</button>',
-    '<style>@keyframes kay{from{transform:translateX(0)}to{transform:translateX(40px)}}</style>',
+    '<button type="submit">Log in</button>',
+    '<script>const b=document.querySelector(\'button\');let n=0;'
+      + 'const kay=()=>{n=(n+1)%40;b.style.transform=\'translateX(\'+n+\'px)\';requestAnimationFrame(kay);};'
+      + 'requestAnimationFrame(kay);</script>',
   ) }),
   // Sayfa kimliği ve çerezi düğmenin title'ına yansıtır: hata mesajına sızmamalı.
   '/yansitan': () => ({ govde: form(
