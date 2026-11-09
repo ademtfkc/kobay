@@ -530,7 +530,7 @@ async function girisiGonderIc(
   }
   let zamanlayici: ReturnType<typeof setTimeout> | undefined;
   const urlSuresi = new Promise<boolean>((coz) => { zamanlayici = setTimeout(() => { coz(false); }, urlBeklemeMs); });
-  const urlDegisti = await Promise.race([urlDegisimi, urlSuresi]) || sayfa.url() !== oncekiUrl;
+  let urlDegisti = await Promise.race([urlDegisimi, urlSuresi]) || sayfa.url() !== oncekiUrl;
   clearTimeout(zamanlayici);
   // Yeni sayfanın açılışta attığı istekler de denetlensin diye ağın durulması beklenir;
   // ağ hiç durulmayan uygulamada en fazla iki saniye. Sonraki istekleri koruma yine keser.
@@ -546,6 +546,11 @@ async function girisiGonderIc(
     const son = Date.now() + GIRIS_RET_YUKLEME_MS;
     await istekleriBekle(hizIzi.gezinmeler, GIRIS_RET_YUKLEME_MS);
     await sayfa.waitForLoadState('load', { timeout: Math.max(1, son - Date.now()) }).catch(() => undefined);
+    // URL bütçesinden sonra yerleşen gezinme izinli bir auth origin'ine indiyse (SSO yolu) giriş
+    // "URL değişti" yolundan karara gider: dönüş beklenir, dönmezse LoginDidNotReturnError.
+    // İzinsiz yere inen geç gezinme denetim/sızıntı yolunda kalır.
+    const gecOrigin = new URL(sayfa.url()).origin;
+    if (sayfa.url() !== oncekiUrl && gecOrigin !== hedefOrigin && izinli.includes(gecOrigin)) urlDegisti = true;
   }
   // Giriş, uygulamanın origin'ine dönünce tamamlanmış sayılır (ayrı giriş sitesi olsun olmasın;
   // liste boşken yabancı origin'e inen giriş de tamamlanmamıştır). Dönüş beklenirken giriş

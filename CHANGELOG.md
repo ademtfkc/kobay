@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failing with the original error.
 - README.tr: the five in-page links to the imported-session section now
   resolve.
+- A login that goes through an allowed SSO origin and is answered there with
+  HTTP 429 now fails with "Login did not return to the app origin" (with the
+  429 note) also when the page settles after the 1 s URL wait. Before, a slow
+  machine could report it as a plain rejected login. No session was written in
+  either case.
 
 ## [0.8.0] - 2026-11-09
 
