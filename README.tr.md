@@ -459,14 +459,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.8.0
+      - uses: ademtfkc/kobay@v0.8.1
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.8.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.8.1` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -666,7 +666,7 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
   (bkz. [Ayrı giriş sitesi (SSO)](#ayrı-giriş-sitesi-sso)); OAuth onay ekranları,
   CAPTCHA ve 2FA `--login` ile ele alınmaz (kendi tarayıcında giriş yapıp
   oturumu `--session-file` ile içe al; bkz.
-  [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa)); uygulamanın kendi sitesindeki alt alanlar kimlik
+  [İçe alınan oturum](#i̇çe-alınan-oturum-captcha-2fa)); uygulamanın kendi sitesindeki alt alanlar kimlik
   bilgisini alabilir. JavaScript ile yapılan bir giriş yalnız ağ koruması
   kapsamındadır, form-origin denetimi kapsamında değil.
 - **Planın kimlik süzgeci güvenli yönde hata yapar.** Giriş tanımlıysa, sahte
@@ -799,7 +799,7 @@ Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
   istekleri hataya ipucu olarak eklenir, tek başlarına girişi reddettirmez.
   İçe alınan oturumla (`--session-file`) çalışan `explore` ve `test refresh` ilk
   isteğinden itibaren aynı kurallarla çalışır; bkz.
-  [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa). Test koşuları ve `--login`
+  [İçe alınan oturum](#i̇çe-alınan-oturum-captcha-2fa). Test koşuları ve `--login`
   oturumunu parola yazmadan kullanan `test refresh` sınırlanmaz: uygulamanın kendi trafiği, oturum çerezi dahil, uygulamanın
   gönderdiği yere gider; bu yüzden test hesabı kullan. Aynı sitedeki alt alanlara izin verilir
   (`app.example.com` ve `api.example.com`, aynı şema); ayrı bir kimlik doğrulama
@@ -911,7 +911,7 @@ kobay project update --login --clear-auth-origins
   denenmedi. Yönlendirme zincirlerinin, ek onay ya da MFA ekranlarının, iframe
   ve açılır pencerelerin bununla çalışıp çalışmadığı bilinmiyor. Giriş
   tamamlanmazsa `explore` `5` koduyla çıkar; bunun yerine
-  [içe alınan oturumu](#içe-alınan-oturum-captcha-2fa) kullan.
+  [içe alınan oturumu](#i̇çe-alınan-oturum-captcha-2fa) kullan.
 
 ### İçe alınan oturum (CAPTCHA, 2FA)
 
@@ -1260,7 +1260,7 @@ Aşağıdaki bayraklar 0.8.0'da `kobay --help` ve her alt komutun `--help` çık
 | `install-browser [--with-deps]` | Uyan Chromium'u kurar; `--with-deps` Linux sistem kütüphanelerini ekler. |
 | `demo [--port <port>]` | Paketteki demo uygulamayı başlatır. Varsayılan port 3000; `0` boş birini seçer. |
 | `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi (Windows'ta ayrıca Git Bash'i) denetler. Proje içindeyken `0` ile çıkar (satır düşse bile); proje bulunamazsa `2` ile çıkar. |
-| `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Burada `.kobay/` oluşturur. `--url` bir `http://` ya da `https://` adresi olmalıdır. `--force` var olan bir projenin yalnız config'ini yeniden yazar; yenilerini vermedikçe beynini ve limitlerini korur. `--session-file` girişli bir Playwright `storageState` dosyasını içe alır (bkz. [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa)); `--auth-origin` `--login` ya da `--session-file` ister. |
+| `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Burada `.kobay/` oluşturur. `--url` bir `http://` ya da `https://` adresi olmalıdır. `--force` var olan bir projenin yalnız config'ini yeniden yazar; yenilerini vermedikçe beynini ve limitlerini korur. `--session-file` girişli bir Playwright `storageState` dosyasını içe alır (bkz. [İçe alınan oturum](#i̇çe-alınan-oturum-captcha-2fa)); `--auth-origin` `--login` ya da `--session-file` ister. |
 | `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Yalnız verdiğin alanları değiştirir; `--base-url` ve `--login-url` `http://` ya da `https://` olmalıdır. `--login` kimlik bilgilerini yeniden girer; `--auth-origin` auth origin listesinin tamamını değiştirir ve `--clear-auth-origins` gibi `--login` ister. |
 | `project get` | Ayarlar, test sayısı, bir harita olup olmadığı. |
 | `explore [--seed <url>]... [--no-sitemap] [--max-pages <n>] [--depth <n>] [--session-file <path>]` | Uygulamayı keşfeder ve `.kobay/map.json`'ı yeniden yazar. Bayraklar aşağıda. |
@@ -1296,7 +1296,7 @@ Aşağıdaki bayraklar 0.8.0'da `kobay --help` ve her alt komutun `--help` çık
 - `--depth <n>`: başlangıç URL'lerinden en çok bağlantı derinliği (varsayılan: 3).
 - `--session-file <path>`: önce girişli bir Playwright `storageState` dosyasını
   içe alır, sonra onunla keşfeder; kimlik kayıtlıyken reddedilir (exit `2`).
-  Bkz. [İçe alınan oturum](#içe-alınan-oturum-captcha-2fa).
+  Bkz. [İçe alınan oturum](#i̇çe-alınan-oturum-captcha-2fa).
 
 
 `prune --dry-run` bir özet basar (demo projesinde gerçek bir koşudan örnek):

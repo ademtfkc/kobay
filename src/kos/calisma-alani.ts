@@ -1,7 +1,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { yazAtomik } from '../depo/index.js';
+import { mesgulseYinele, yazAtomik } from '../depo/index.js';
 import { fixtureSablonu } from './fixture-sablonu.js';
 
 /** Üretilen testlerin yükleyeceği fixture modülü bulunamadığında atılır. */
@@ -63,7 +63,7 @@ async function dosyaVarMi(yol: string): Promise<boolean> {
 
 async function farkliysaYaz(yol: string, icerik: string): Promise<void> {
   try {
-    if (await readFile(yol, 'utf8') === icerik) return;
+    if (await mesgulseYinele(() => readFile(yol, 'utf8')) === icerik) return;
   } catch (hata: unknown) {
     if (!(typeof hata === 'object' && hata !== null && 'code' in hata && hata.code === 'ENOENT')) throw hata;
   }
@@ -86,20 +86,54 @@ export async function fixtureYenidenAktarimMetni(paketKoku: string = AKTIF_PAKET
 }
 
 /**
+ * Bu süreçte kök başına hazırlık sırası. Aynı kökte eşzamanlı iki koşu
+ * oku-karşılaştır-yaz adımını aynı anda yapıp aynı dosyayı iki kez taşırdı;
+ * Windows'ta ikinci taşıma EPERM verir ve koşu `env` olurdu. Sırada ikinci
+ * çağrı içeriği aynı bulur ve yazmaz. Farklı kökler birbirini beklemez; düşen
+ * hazırlık sırayı kilitlemez. Ayrı süreçlerin yarışı `yazAtomik`in yeniden
+ * denemesine kalır.
+ */
+const hazirlikSiralari = new Map<string, Promise<void>>();
+
+async function kokSirasiyla<T>(kobayKoku: string, is: () => Promise<T>): Promise<T> {
+  const anahtar = resolve(kobayKoku);
+  const onceki = hazirlikSiralari.get(anahtar) ?? Promise.resolve();
+  const sonuc = onceki.then(is);
+  const zincir = sonuc.then(() => undefined, () => undefined);
+  hazirlikSiralari.set(anahtar, zincir);
+  void zincir.then(() => {
+    if (hazirlikSiralari.get(anahtar) === zincir) hazirlikSiralari.delete(anahtar);
+  });
+  return sonuc;
+}
+
+/**
  * Koşuların paylaştığı kalıcı Playwright yapılandırmasını hazırlar.
  * `_fixture.ts` her koşudan önce tazelenir; içerik aynıysa dosyaya dokunulmaz.
+ * Aynı kök için eşzamanlı çağrılar sıraya girer (bkz. `hazirlikSiralari`).
  */
 export async function kaliciCalismaAlaniHazirla(
   kobayKoku: string,
   paketKoku: string = AKTIF_PAKET_KOKU,
 ): Promise<{ configYolu: string; fixtureYolu: string }> {
+  return kokSirasiyla(kobayKoku, () => calismaAlaniniHazirla(kobayKoku, paketKoku));
+}
+
+async function calismaAlaniniHazirla(
+  kobayKoku: string,
+  paketKoku: string,
+): Promise<{ configYolu: string; fixtureYolu: string }> {
   const configYolu = join(kobayKoku, 'playwright.config.ts');
   const fixtureYolu = join(kobayKoku, 'tests', '_fixture.ts');
   // Fixture modülü yoksa burada patlar; koşu tarayıcı açmadan inconclusive olur.
   const fixtureMetni = await fixtureYenidenAktarimMetni(paketKoku);
-  await Promise.all([
+  // allSettled: biri düşse de kardeş yazım bitmeden sıra sonraki hazırlığa geçmesin.
+  const sonuclar = await Promise.allSettled([
     farkliysaYaz(configYolu, kaliciConfigMetni()),
     farkliysaYaz(fixtureYolu, fixtureMetni),
   ]);
+  for (const sonuc of sonuclar) {
+    if (sonuc.status === 'rejected') throw sonuc.reason;
+  }
   return { configYolu, fixtureYolu };
 }
