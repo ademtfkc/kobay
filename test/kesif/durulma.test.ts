@@ -1,7 +1,7 @@
 // 0.8.0 Ş2 (P2-1): keşif SPA sayfasını çizildikten sonra okur; bekleme tavanlıdır.
 // Gerçek Chromium + yerel HTTP sunucusu; sayfa özeti sahte değil.
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import { join } from 'node:path';
 import { chromium, type Browser } from '@playwright/test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -76,23 +76,68 @@ const SAYAN_SAYFALAR: Record<string, string> = {
 const YABANCIYA_GIDEN = (hedef: string) => `<!doctype html><title>Go</title><button>x</button><script>
   setTimeout(() => { location.href = ${JSON.stringify(hedef)}; }, 60);
 </script>`;
+/** Hedef belgenin özette görünen her alanı (başlık, bağlantı, menü, form, düğme, disclosure) yabancıdakinden farklı. */
+const HEDEF_ICERIK = `<h1>Target page</h1><nav><a href="/x">Target menu</a></nav>
+<form><input name="hedefAlan" placeholder="Target field"></form><button>Target button</button>
+<details><summary>Target more</summary></details>`;
 /**
- * Durulmadan SONRA, özet okunurken başka kökene geçen sayfa: kobay bağlantı adresini okuduğu anda
- * yönlenir (CI'da yavaş makinede 60 ms'lik zamanlayıcının durulma penceresinden sonra ateşlenmesinin
- * zamanlamadan bağımsız kopyası). Bağlantı okuması (`evaluateAll`) yarıda kesilir: bağlam yok hatası.
+ * Durulmadan SONRA, özet okunurken başka kökene geçen sayfa: kobay bağlantı adresini (`evaluateAll`)
+ * ilk okuduğu anda yönlenme başlar (CI'da 60 ms'lik zamanlayıcının durulma penceresinden sonra
+ * ateşlenmesinin kopyası). `evaluateAll` normal biter; yeni belgenin kobay'ın sonraki okumasından
+ * (`okuDom`) önce yerleşip yerleşmemesi Chromium zamanlamasıdır. Yerleşirse okuma "bağlam yok" ile
+ * kesilir ya da yeni belgeye düşer, köken hatası gelir; yerleşmezse özet tümüyle hedef belgedendir.
+ * `bekle`: getter yönlenmeyi başlatıp ana iş parçacığını 300 ms tutar. Bu bir sıra engeli DEĞİLDİR
+ * (`location.href` gezinmesi getter döndükten sonraki bir görevde başlar; sayfa içinden "gezinme
+ * başladı" ya da "yerleşti" anını bekleyecek bir engel kurulamadı); yalnız köken hatası dalını sıklaştırır.
+ * `okumadan-sonra`: yönlenme `okuDom`'un düğme denetiminden (`matches(':disabled')`) kurulan
+ * `setTimeout(0)` ile, yani `okuDom` görevi bittikten sonra başlar. Bekleyen gezinme varken Playwright
+ * yeni okumayı belge yerleşene dek beklettiği için yönlenme okumadan önce başlayamaz.
  */
-const OZETTE_YABANCIYA = (hedef: string) => `<!doctype html><title>Go</title><a href="/x">x</a><script>
+const OZETTE_YABANCIYA = (hedef: string, kip: 'hemen' | 'bekle' | 'okumadan-sonra' = 'hemen') => {
+  const git = `location.href = ${JSON.stringify(hedef)};`;
+  if (kip === 'okumadan-sonra') {
+    return `<!doctype html><title>Go</title>${HEDEF_ICERIK}<script>
+  const asil = HTMLButtonElement.prototype.matches;
+  let gitti = false;
+  HTMLButtonElement.prototype.matches = function (...a) {
+    if (!gitti) {
+      gitti = true;
+      const x = new XMLHttpRequest(); x.open('GET', '/tetiklendi', false); x.send();
+      setTimeout(() => { ${git} }, 0);
+    }
+    return asil.apply(this, a);
+  };
+</script>`;
+  }
+  const bekle = kip === 'bekle' ? 'const t = performance.now(); while (performance.now() - t < 300) {}' : '';
+  return `<!doctype html><title>Go</title>${HEDEF_ICERIK}<script>
   const asil = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'href');
+  let gitti = false;
   Object.defineProperty(HTMLAnchorElement.prototype, 'href', { configurable: true, get() {
-    location.href = ${JSON.stringify(hedef)};
+    if (!gitti) { gitti = true; ${git} ${bekle} }
     return asil.get.call(this);
   } });
 </script>`;
-/** Yabancı kökendeki belge: içine gözlemci kurulursa (kobay script'i çalışırsa) sunucuya haber verir. */
+};
+/** `OZETTE_YABANCIYA` sayfasının (hangi kipte olursa olsun) hedef belgeden alınmış tam özeti. */
+const hedefOzeti = (kokAdres: string, yol: string) => ({
+  url: `${kokAdres}${yol}`, title: 'Go', headings: ['Target page'], links: [`${kokAdres}/x`],
+  forms: [{ fields: [{ name: 'hedefAlan', type: 'input', label: 'Target field', placeholder: 'Target field' }] }],
+  buttons: ['Target button'], menu: ['Target menu'], disclosures: ['Target more'],
+});
+/**
+ * Yabancı kökendeki belge: içine gözlemci kurulursa (kobay ya da Playwright script'i çalışırsa)
+ * sunucuya EŞZAMANLI haber verir; `observe` sayaç artmadan dönmez. Özetteki her alanı hedeften farklı.
+ */
 const YABANCI_BELGE = `<!doctype html><title>Foreign</title><script>
   const asil = MutationObserver.prototype.observe;
-  MutationObserver.prototype.observe = function (...a) { fetch('/gozlendi'); return asil.apply(this, a); };
-</script><p>foreign</p>`;
+  MutationObserver.prototype.observe = function (...a) {
+    const x = new XMLHttpRequest(); x.open('GET', '/gozlendi', false); x.send();
+    return asil.apply(this, a);
+  };
+</script><h1>Foreign page</h1><nav><a href="/y">Foreign menu</a></nav>
+<form><input name="yabanciAlan"></form><button>Foreign button</button>
+<details><summary>Foreign more</summary></details><p>foreign</p>`;
 
 /** Kör kabul 2: ana iş parçacığı 50 ms sonra sonsuza dek kilitlenir. */
 const DONUK = `<!doctype html><title>Hung</title><button>HungBtn</button><a href="/sabit">s</a>
@@ -120,6 +165,14 @@ const asiliYanitlar: Array<() => void> = [];
 /** Yol başına HTML belge isteği sayısı. */
 const belgeIstekleri = new Map<string, number>();
 let yabanciGozlem = 0;
+/** Yabancı sunucuya açık bağlantılar: yenilemenin tarayıcısı kapanınca onunkiler kapanır. */
+const yabanciSoketler = new Set<Socket>();
+/** `/tutulan-belge` yanıtları: yenileme bitince salınır. */
+const tutulanBelgeler: Array<() => void> = [];
+/** `okumadan-sonra` kancasının çalıştığı (yönlenmenin kurulduğu) kez: test boşuna geçmesin. */
+let tetiklenme = 0;
+/** Dal sayacı: `KOBAY_DAL_SAYACI=1` ile hangi testin hangi dalı aldığı sonda yazılır. */
+const dallar: Record<string, Record<string, number>> = {};
 
 beforeAll(async () => {
   yabanciSunucu = createServer((istek, yanit) => {
@@ -136,6 +189,14 @@ beforeAll(async () => {
       }, 1_000);
       return;
     }
+    if ((istek.url ?? '').startsWith('/tutulan-belge')) {
+      // Yanıt testin elinde: yenileme bitene dek gönderilmez, yabancı belge o süre içinde yerleşemez.
+      tutulanBelgeler.push(() => {
+        yanit.writeHead(200, { 'content-type': 'text/html' });
+        yanit.end(YABANCI_BELGE);
+      });
+      return;
+    }
     if ((istek.url ?? '').startsWith('/fetchli')) {
       yanit.writeHead(200, { 'content-type': 'text/html' });
       yanit.end("<!doctype html><title>F</title><script>fetch('/asili-belge');</script>");
@@ -143,6 +204,10 @@ beforeAll(async () => {
     }
     yanit.writeHead(200, { 'content-type': 'text/html' });
     yanit.end(YABANCI_BELGE);
+  });
+  yabanciSunucu.on('connection', (soket) => {
+    yabanciSoketler.add(soket);
+    soket.on('close', () => yabanciSoketler.delete(soket));
   });
   await new Promise<void>((coz) => yabanciSunucu.listen(0, '127.0.0.1', coz));
   yabanciKok = `http://127.0.0.1:${(yabanciSunucu.address() as AddressInfo).port}`;
@@ -166,7 +231,8 @@ beforeAll(async () => {
       return;
     }
     yanit.writeHead(200, { 'content-type': 'text/html' });
-    if (yol.startsWith('/mesgul')) yanit.end(DURULMAYAN);
+    if (yol === '/tetiklendi') { tetiklenme++; yanit.end(''); }
+    else if (yol.startsWith('/mesgul')) yanit.end(DURULMAYAN);
     else if (yol === '/bozuk') yanit.end(BOZUK_ZAMANLAYICI);
     else if (yol === '/uzun-istek') yanit.end(UZUN_ISTEK);
     else if (yol === '/gec-cizim') yanit.end(GEC_CIZIM);
@@ -177,6 +243,8 @@ beforeAll(async () => {
     // Yabancı yanıt 1 s gecikir: yönlenme özet sırasında başlar, Playwright sonraki okumayı yeni belge
     // yerleşene dek bekletir; yabancı belge hedef kökene geri gönderir.
     else if (yol === '/ozette-yavas-donen') yanit.end(OZETTE_YABANCIYA(`${yabanciKok}/yavas-geri-don`));
+    else if (yol === '/ozette-tutulan') yanit.end(OZETTE_YABANCIYA(`${yabanciKok}/tutulan-belge`, 'okumadan-sonra'));
+    else if (yol === '/ozette-tutan-getter') yanit.end(OZETTE_YABANCIYA(`${yabanciKok}/belge`, 'bekle'));
     else if (yol === '/yabanciya-asili') yanit.end(YABANCIYA_GIDEN(`${yabanciKok}/asili-belge`));
     else if (yol === '/donuk') yanit.end(DONUK);
     else if (yol === '/gec-yabanci') {
@@ -194,7 +262,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (process.env.KOBAY_DAL_SAYACI) process.stdout.write(`DALLAR ${JSON.stringify(dallar)}\n`);
   await tarayici?.close();
+  for (const birak of tutulanBelgeler.splice(0)) birak();
   for (const bitir of asiliYanitlar) bitir();
   sunucu?.closeAllConnections();
   yabanciSunucu?.closeAllConnections();
@@ -407,30 +477,79 @@ describe('durulma beklemesi: Codex 2. tur', () => {
   }, 30_000);
 
   it('P1-1: sayfa yenilemede de yabancı kökene geçen belgede bekleme kodu çalışmaz', async () => {
-    yabanciGozlem = 0;
-    const dizin = await geciciDizinAc('kobay-durulma-yabanci-');
-    await expect(sayfayiYenile({ baseUrl: kok, url: '/yabanciya', storageStateYolu: join(dizin, 'yok.json') }))
-      .rejects.toThrow(/could not be refreshed.*another origin/);
-    await new Promise((coz) => setTimeout(coz, 300));
-    expect(yabanciGozlem).toBe(0);
+    await yenilemeKokenHatasi('/yabanciya');
   }, 30_000);
+
+  /**
+   * Yenilemeyi çalıştırır, sonra yenilemenin tarayıcısının yabancı sunucuya açtığı bağlantıların
+   * kapanmasını bekler (tavanlı). Gözlem isteği eşzamanlıdır ve bağlantı kapanmadan önce sunucuya
+   * ulaşır; bağlantılar kapandıysa sayaç kesindir. Süre beklemesi yok.
+   */
+  const yenileVeSay = async (url: string): Promise<{ sonuc: Awaited<ReturnType<typeof sayfayiYenile>> | Error; gozlem: number }> => {
+    yabanciGozlem = 0;
+    const onceki = new Set(yabanciSoketler);
+    const dizin = await geciciDizinAc('kobay-durulma-ozette-yabanci-');
+    const sonuc = await sayfayiYenile({ baseUrl: kok, url, storageStateYolu: join(dizin, 'yok.json') })
+      .catch((hata: unknown) => (hata instanceof Error ? hata : new Error(String(hata))));
+    for (const birak of tutulanBelgeler.splice(0)) birak();
+    const bitis = Date.now() + 5_000;
+    while ([...yabanciSoketler].some((soket) => !onceki.has(soket)) && Date.now() < bitis) {
+      await new Promise((coz) => setTimeout(coz, 10));
+    }
+    expect([...yabanciSoketler].filter((soket) => !onceki.has(soket)), 'yenilemenin yabancı bağlantıları kapanmadı').toEqual([]);
+    return { sonuc, gozlem: yabanciGozlem };
+  };
 
   /** Yenileme köken hatasıyla reddedilir ve yabancı belgede kobay'ın bekleme kodu çalışmaz. */
   const yenilemeKokenHatasi = async (url: string): Promise<void> => {
-    yabanciGozlem = 0;
-    const dizin = await geciciDizinAc('kobay-durulma-ozette-yabanci-');
-    await expect(sayfayiYenile({ baseUrl: kok, url, storageStateYolu: join(dizin, 'yok.json') }))
-      .rejects.toThrow(/could not be refreshed.*another origin/);
-    await new Promise((coz) => setTimeout(coz, 300));
-    expect(yabanciGozlem).toBe(0);
+    const { sonuc, gozlem } = await yenileVeSay(url);
+    expect(gozlem).toBe(0);
+    expect(sonuc).toBeInstanceOf(Error);
+    expect((sonuc as Error).message).toMatch(/could not be refreshed.*another origin/);
   };
 
-  it('P1-1 (a): durulmadan sonra özet yarıda kesilirse (bağlam yok) köken hatası verir', async () => {
-    await yenilemeKokenHatasi('/ozette-yabanciya');
+  /**
+   * Özet sırasında yabancıya yönelen sayfa: kobay yabancı belgeden hiçbir şey okumaz. Ya köken hatası
+   * verir ya da özet tam olarak hedef belgenin özetidir; iki dalda da yabancı belgede kobay kodu
+   * çalışmaz. Hangi dalın geldiği Chromium zamanlamasıdır; `KOBAY_DAL_SAYACI` dalları sayar.
+   */
+  const yenilemeYabanciOkumaz = async (url: string): Promise<'koken hatasi' | 'hedef ozeti'> => {
+    const { sonuc, gozlem } = await yenileVeSay(url);
+    expect(gozlem).toBe(0);
+    let dal: 'koken hatasi' | 'hedef ozeti';
+    if (sonuc instanceof Error) {
+      expect(sonuc.message).toMatch(/could not be refreshed.*another origin/);
+      dal = 'koken hatasi';
+    } else {
+      expect(sonuc).toEqual(hedefOzeti(kok, url));
+      dal = 'hedef ozeti';
+    }
+    const sayac = (dallar[url] ??= {});
+    sayac[dal] = (sayac[dal] ?? 0) + 1;
+    return dal;
+  };
+
+  it('P1-1 (a): durulmadan sonra özet sırasında yabancıya yönelen sayfadan yabancı içerik okunmaz', async () => {
+    await yenilemeYabanciOkumaz('/ozette-yabanciya');
   }, 30_000);
 
-  it('P1-1 (b): özet sırasında yabancıya yönelip hedef kökene dönen belge yine köken hatası verir', async () => {
-    await yenilemeKokenHatasi('/ozette-yavas-donen');
+  it('P1-1 (b): özet sırasında yabancıya yönelip hedef kökene dönen belgeden de hedef dışı içerik okunmaz', async () => {
+    // Dönülen /sabit belgesi hedef kökendedir; özet ondan alınsaydı adres ve içerik tutmazdı.
+    await yenilemeYabanciOkumaz('/ozette-yavas-donen');
+  }, 30_000);
+
+  it('P1-1 (a, tutulan): okumadan sonra başlayan yönlenme yerleşemezse özet hep hedef belgedendir, son denetim beklemez', async () => {
+    // Yönlenme `okuDom` bittikten sonra başlar; yabancı yanıt yenileme bitene dek sunucuda tutulur,
+    // yani yabancı belge yenileme sırasında hiç yerleşemez.
+    tetiklenme = 0;
+    expect(await yenilemeYabanciOkumaz('/ozette-tutulan')).toBe('hedef ozeti');
+    // Kanca `okuDom` içinde çalıştı, yani yönlenme gerçekten kuruldu (Codex tur 2 P2).
+    expect(tetiklenme).toBe(1);
+  }, 30_000);
+
+  it('P1-1 (a, tutan getter): getter yönlenmeyi başlatıp ana iş parçacığını tutsa da yabancı içerik okunmaz', async () => {
+    // İki dal da geçerli; bu kip köken hatası dalını sıklaştırır, garanti etmez.
+    await yenilemeYabanciOkumaz('/ozette-tutan-getter');
   }, 30_000);
 
   it('P1-1 (c): ağ isteği olmayan gezinme (about:blank) özeti keserse yeni belge beklenir, köken hatası verir', async () => {
