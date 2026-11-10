@@ -22,7 +22,9 @@ import { OZET_ISARETI, VARSAYILAN_ISTEM_SAYISI } from '../../src/rapor/ozet.js';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
 const kok = new URL('../../', import.meta.url);
-const dosyaOku = (yol: string): Promise<string> => readFile(new URL(yol, kok), 'utf8');
+/** Windows'ta git `core.autocrlf` ile CRLF çıkarır; satır kalıpları LF bekler. */
+const dosyaOku = async (yol: string): Promise<string> =>
+  (await readFile(new URL(yol, kok), 'utf8')).replace(/\r\n/g, '\n');
 
 // ---------------------------------------------------------------------------------------------
 // CLI
