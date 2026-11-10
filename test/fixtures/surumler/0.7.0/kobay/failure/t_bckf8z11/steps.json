@@ -1,0 +1,19 @@
+[
+  {
+    "stepIndex": 0,
+    "description": "Open the login page",
+    "status": "passed",
+    "durationMs": 50,
+    "screenshotPath": "step-0.png",
+    "htmlPath": "step-0.html"
+  },
+  {
+    "stepIndex": 1,
+    "description": "See the welcome heading",
+    "status": "failed",
+    "durationMs": 3034,
+    "errorMessage": "Error: expect(locator).toBeVisible() failed\n\nLocator: getByRole('heading', { name: 'Welcome aboard' })\nExpected: visible\nTimeout: 3000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" getByRole('heading', { name: 'Welcome aboard' }) with timeout 3000ms\n  - waiting for getByRole('heading', { name: 'Welcome aboard' })",
+    "screenshotPath": "step-1.png",
+    "htmlPath": "step-1.html"
+  }
+]

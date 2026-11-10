@@ -1,0 +1,12 @@
+{
+  "testId": "t_o6placir",
+  "runId": "r_20261110130707_3twa",
+  "startedAt": "2026-11-10T10:07:07.262Z",
+  "codeVersion": 1,
+  "status": "failed",
+  "verdict": "failed",
+  "finishedAt": "2026-11-10T10:07:11.017Z",
+  "failedStepIndex": 1,
+  "errorMessage": "Error: expect(locator).toBeVisible() failed\n\nLocator: getByRole('heading', { name: 'Welcome aboard' })\nExpected: visible\nTimeout: 3000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" getByRole('heading', { name: 'Welcome aboard' }) with timeout 3000ms\n  - waiting for getByRole('heading', { name: 'Welcome aboard' })\n\n\n   5 |   });\n   6 |   await test.step(\"1: See the welcome heading\", async () => {\n>  7 |     await expect(page.getByRole('heading', { name: 'Welcome aboard' })).toBeVisible({ timeout: 3000 });\n     |                                                                         ^\n   8 |   });\n   9 | });\n  10 |\n    at /work/project/.kobay/tests/t_o6placir.spec.ts:7:73\n    at /work/kobay/dist/kos/fixture.js:43:30\n    at /work/kobay/dist/kos/fixture-sablonu.js:11:26",
+  "failureKind": "product_bug"
+}

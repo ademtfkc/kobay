@@ -10,10 +10,10 @@ branding:
 inputs:
   version:
     description: >-
-      @ademtfkc/kobay version to install from npm ("0.8.1", "latest", ...).
+      @ademtfkc/kobay version to install from npm ("0.9.0", "latest", ...).
       A path to a local .tgz package or a file: spec is installed as it is.
     required: false
-    default: 0.8.1
+    default: 0.9.0
   node-version:
     description: Node.js version for actions/setup-node (kobay needs 22.12 or newer).
     required: false
@@ -61,7 +61,7 @@ inputs:
 
 outputs:
   exit-code:
-    description: "Exit code of kobay test run: 0 passed, 1 failed, 3 blocked or target not reachable, 4 engine error."
+    description: "Exit code of kobay test run: 0 passed, 1 failed, 2 usage error, 3 blocked or target not reachable, 4 engine error, 5 login or permission problem."
     value: ${{ steps.run.outputs.exit-code }}
   report-dir:
     description: Absolute path of the HTML report directory.
@@ -275,6 +275,7 @@ runs:
           0) echo "kobay: all selected tests passed." ;;
           1) echo "::error::kobay: at least one test failed (exit code 1)." ;;
           3) echo "::error::kobay: at least one test was blocked: the app was not reachable or a test has no generated code (exit code 3)." ;;
+          5) echo "::error::kobay: a login or permission problem stopped the run: the login was refused, or kobay blocked credentials bound for another origin (exit code 5)." ;;
           *) echo "::error::kobay: the run did not finish cleanly (exit code $kod)." ;;
         esac
         exit "$kod"

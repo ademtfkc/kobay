@@ -26,7 +26,7 @@ is scoped).
 | --- | --- | --- |
 | Project status | `project_get` | `kobay project get --output json` |
 | Create project | `project_create` | `kobay project create --url <URL> --output json` |
-| Change project settings (`baseUrl`, `loginUrl`, `docsPath`, `brain`, `model`, `effort`) | `project_update` | `kobay project update --base-url <URL> --output json` |
+| Change project settings (`baseUrl`, `loginUrl`, `docsPath`, `brain`, `model`, `effort`) | `project_update` | `kobay project update --url <URL> --output json` |
 | Environment check | `doctor` | `kobay doctor --output json` |
 | Explore the app | `explore` | `kobay explore --output json` |
 | Propose tests | `plan_generate` | `kobay test plan generate --output json` |

@@ -1,0 +1,142 @@
+{
+  "baseUrl": "http://127.0.0.1:47391",
+  "girisYapildi": true,
+  "sayfalar": [
+    {
+      "url": "http://127.0.0.1:47391/login",
+      "baslik": "Login",
+      "basliklar": [
+        "Login"
+      ],
+      "linkler": [],
+      "formlar": [
+        {
+          "alanlar": [
+            {
+              "ad": "username",
+              "tip": "text",
+              "etiket": "Username"
+            },
+            {
+              "ad": "password",
+              "tip": "password",
+              "etiket": "Password"
+            }
+          ],
+          "action": "/login"
+        }
+      ],
+      "dugmeler": [
+        "Log in"
+      ],
+      "menu": []
+    },
+    {
+      "url": "http://127.0.0.1:47391/",
+      "baslik": "Dashboard",
+      "basliklar": [
+        "Dashboard"
+      ],
+      "linkler": [
+        "http://127.0.0.1:47391/records",
+        "http://127.0.0.1:47391/new",
+        "http://127.0.0.1:47391/logout"
+      ],
+      "formlar": [],
+      "dugmeler": [],
+      "menu": [
+        "Records",
+        "New Record",
+        "Logout"
+      ]
+    },
+    {
+      "url": "http://127.0.0.1:47391/records",
+      "baslik": "Record List",
+      "basliklar": [
+        "Record List"
+      ],
+      "linkler": [
+        "http://127.0.0.1:47391/records",
+        "http://127.0.0.1:47391/new",
+        "http://127.0.0.1:47391/logout"
+      ],
+      "formlar": [
+        {
+          "alanlar": [
+            {
+              "ad": "index",
+              "tip": "hidden"
+            }
+          ],
+          "action": "/records/delete"
+        },
+        {
+          "alanlar": [
+            {
+              "ad": "index",
+              "tip": "hidden"
+            }
+          ],
+          "action": "/records/delete"
+        },
+        {
+          "alanlar": [
+            {
+              "ad": "index",
+              "tip": "hidden"
+            }
+          ],
+          "action": "/records/delete"
+        }
+      ],
+      "dugmeler": [
+        "Delete"
+      ],
+      "menu": [
+        "Records",
+        "New Record",
+        "Logout"
+      ]
+    },
+    {
+      "url": "http://127.0.0.1:47391/new",
+      "baslik": "New Record",
+      "basliklar": [
+        "New Record"
+      ],
+      "linkler": [
+        "http://127.0.0.1:47391/records",
+        "http://127.0.0.1:47391/new",
+        "http://127.0.0.1:47391/logout"
+      ],
+      "formlar": [
+        {
+          "alanlar": [
+            {
+              "ad": "name",
+              "tip": "text",
+              "etiket": "Name",
+              "placeholder": "Record name"
+            },
+            {
+              "ad": "amount",
+              "tip": "number",
+              "etiket": "Amount"
+            }
+          ],
+          "action": "/new"
+        }
+      ],
+      "dugmeler": [
+        "Save"
+      ],
+      "menu": [
+        "Records",
+        "New Record",
+        "Logout"
+      ]
+    }
+  ],
+  "kesifTarihi": "2026-11-10T10:06:45.868Z"
+}

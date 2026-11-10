@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-10
+
+### Added
+
+- `kobay project update --url <url>` and `--docs <path>`: the same names as
+  `project create`. Giving a new name together with its old name
+  (`--url` with `--base-url`, `--docs` with `--docs-path`) is a usage error
+  (exit `2`).
+- Warnings: a deprecated name prints one line to stderr, once per process
+  (`kobay: warning: --base-url is deprecated, use --url (removal: 2.0)`), and
+  `--output json` adds an optional `warnings` array to the envelope
+  (`[{ "code": "DEPRECATED", "message", "replacement" }]`). The field is left
+  out when there is no warning; the other envelope fields do not change.
+- MCP: an unknown field on a non-strict tool is still ignored (not rejected),
+  and the response now lists it in a `warnings` field
+  (`[{ "code": "UNKNOWN_FIELD", "message", "field" }]`) and in a second text
+  block. The first text block (the tool result) does not change. At most 10
+  fields are listed (names cut at 64 characters); the rest are counted in one
+  `and N more unknown fields were ignored` warning, so the response stays small.
+  `project_create` and `prune` stay strict and still reject unknown fields.
+- A kobay that finds a `.kobay/` file with a newer `schemaVersion` than it
+  supports stops with exit code 2 and the error code `SchemaVersionTooNew`
+  (CLI and MCP), names the file, and asks you to upgrade kobay. It does not
+  read, migrate, move, delete or overwrite the file, and `kobay prune` deletes
+  nothing while such a run record or failure bundle is present. This applies
+  from 0.9.0 on; 0.8.x and older do not know the field. Known limit: the
+  refusal is a check before each write, not an atomic one, so it does not
+  protect against a newer kobay that writes the same file at the same moment.
+- README "Stability" section (English and Turkish): what is frozen for 1.x,
+  what is versioned, what is internal, what counts as a breaking change, and
+  the deprecation policy. A contract test now fails when a frozen CLI flag,
+  MCP tool or field, envelope field, exit code or GitHub Action input/output
+  changes, or when the README Commands table or `schemas/plan.schema.json`
+  drifts from the code.
+
+### Changed
+
+- The JSON files kobay owns under `.kobay/` (`config.json`,
+  `credentials.json`, `map.json`, `plan/proposals.json`, `tests/<id>.json`,
+  `runs/<runId>/result.json`, `failure/<id>/failure.json` and `meta.json`) now
+  carry `"schemaVersion": 1`. Files written by 0.1–0.8 have no such field and
+  are read as version 0. On the first command, `config.json`,
+  `credentials.json` (kept at 0600), `map.json` and `plan/proposals.json` are
+  rewritten once in the new format; later commands do not touch them again.
+  Test records, run results and failure bundles are read as they are and get
+  the field the next time kobay writes them. Without write access the
+  migration happens in memory only and the files stay as they are.
+- `plan/proposals.json` now has an object root, `{ "schemaVersion": 1,
+  "items": [...] }`, instead of a bare array. Note: kobay 0.8.x and older cannot
+  read this file and fail with a schema error; regenerate the proposals with
+  `kobay test plan generate` if you go back to an older kobay. The other files
+  stay readable by 0.8.x, which ignores the new field.
+- GitHub Action: the `exit-code` output description lists every exit code
+  (`2` usage and `5` login or permission were missing), and the last step
+  prints its own error line for exit code `5`. The exit code itself does not
+  change.
+- The agent skill (`beceri/SKILL.md`) suggests `project update --url` instead
+  of the deprecated `--base-url`.
+
+### Deprecated
+
+- `kobay project update --base-url` (use `--url`) and `--docs-path` (use
+  `--docs`). Both keep working with a warning and are removed in 2.0 at the
+  earliest.
+
 ## [0.8.1] - 2026-11-09
 
 ### Fixed
@@ -1247,7 +1312,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/ademtfkc/kobay/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/ademtfkc/kobay/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ademtfkc/kobay/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/ademtfkc/kobay/compare/v0.6.0...v0.7.0

@@ -1,0 +1,128 @@
+{
+  "baseUrl": "http://127.0.0.1:47391",
+  "loggedIn": true,
+  "pages": [
+    {
+      "url": "http://127.0.0.1:47391/login",
+      "title": "Login",
+      "headings": [
+        "Login"
+      ],
+      "links": [],
+      "forms": [
+        {
+          "fields": [
+            {
+              "name": "username",
+              "type": "text",
+              "label": "Username"
+            },
+            {
+              "name": "password",
+              "type": "password",
+              "label": "Password"
+            }
+          ],
+          "action": "/login"
+        }
+      ],
+      "buttons": [
+        "Log in"
+      ],
+      "menu": []
+    },
+    {
+      "url": "http://127.0.0.1:47391/",
+      "title": "Dashboard",
+      "headings": [
+        "Dashboard"
+      ],
+      "links": [
+        "http://127.0.0.1:47391/records",
+        "http://127.0.0.1:47391/new",
+        "http://127.0.0.1:47391/logout"
+      ],
+      "forms": [],
+      "buttons": [],
+      "menu": [
+        "Records",
+        "New Record",
+        "Logout"
+      ]
+    },
+    {
+      "url": "http://127.0.0.1:47391/records",
+      "title": "Record List",
+      "headings": [
+        "Record List"
+      ],
+      "links": [
+        "http://127.0.0.1:47391/records",
+        "http://127.0.0.1:47391/new",
+        "http://127.0.0.1:47391/logout"
+      ],
+      "forms": [
+        {
+          "fields": [],
+          "action": "/records/delete"
+        },
+        {
+          "fields": [],
+          "action": "/records/delete"
+        },
+        {
+          "fields": [],
+          "action": "/records/delete"
+        }
+      ],
+      "buttons": [
+        "Delete"
+      ],
+      "menu": [
+        "Records",
+        "New Record",
+        "Logout"
+      ]
+    },
+    {
+      "url": "http://127.0.0.1:47391/new",
+      "title": "New Record",
+      "headings": [
+        "New Record"
+      ],
+      "links": [
+        "http://127.0.0.1:47391/records",
+        "http://127.0.0.1:47391/new",
+        "http://127.0.0.1:47391/logout"
+      ],
+      "forms": [
+        {
+          "fields": [
+            {
+              "name": "name",
+              "type": "text",
+              "label": "Name",
+              "placeholder": "Record name"
+            },
+            {
+              "name": "amount",
+              "type": "number",
+              "label": "Amount"
+            }
+          ],
+          "action": "/new"
+        }
+      ],
+      "buttons": [
+        "Save"
+      ],
+      "menu": [
+        "Records",
+        "New Record",
+        "Logout"
+      ]
+    }
+  ],
+  "exploredAt": "2026-11-10T10:07:14.047Z",
+  "sessionSource": "login"
+}

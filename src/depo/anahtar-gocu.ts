@@ -119,3 +119,68 @@ export const ISARET_ESKI_ANAHTARLARI: AnahtarTablosu = {
 
 /** İşaret kaydını 0.1'in Türkçe şemasına çevirir (`kalicidanEsle`nin tersi). */
 export const eskiIsaretineEsle = eskiAnahtarlariEsle(ISARET_ESKI_ANAHTARLARI);
+
+/**
+ * Yol-duyarlı eşleme tablosu: `anahtarlar` bu düzeydeki eski→yeni adlar,
+ * `alt` YENİ adı verilen alanın içine (dizi ise her elemanına) uygulanacak
+ * tablo. Tabloda olmayan hiçbir alt nesneye inilmez.
+ */
+export interface YolluTablo {
+  readonly anahtarlar?: AnahtarTablosu;
+  readonly alt?: Readonly<Record<string, YolluTablo>>;
+}
+
+/**
+ * Sürüm göçünün (0→1) 0.1 ad eşlemesi. `eskiAnahtarlariEsle`'den farkı:
+ * yalnız 0.1'in gerçekten yazdığı yollara uygulanır. Böylece diske yazılan
+ * göçte şemanın tanımadığı alt nesneler (ör. `extensionData.ad`) yeniden
+ * adlandırılmaz, olduğu gibi kalır. Eski anahtar yenisine TAŞINIR; ikisi
+ * birden varsa yeni ad kazanır.
+ */
+export function yolluEsle(tablo: YolluTablo): (deger: unknown) => unknown {
+  const uygula = (deger: unknown, duzey: YolluTablo): unknown => {
+    if (Array.isArray(deger)) return deger.map((oge) => uygula(oge, duzey));
+    if (!duzNesneMi(deger)) return deger;
+    const sonuc: Record<string, unknown> = { ...deger };
+    for (const [eski, yeni] of Object.entries(duzey.anahtarlar ?? {})) {
+      if (!(eski in sonuc)) continue;
+      if (sonuc[yeni] === undefined) sonuc[yeni] = sonuc[eski];
+      delete sonuc[eski];
+    }
+    for (const [ad, altTablo] of Object.entries(duzey.alt ?? {})) {
+      if (ad in sonuc) sonuc[ad] = uygula(sonuc[ad], altTablo);
+    }
+    return sonuc;
+  };
+  return (deger) => uygula(deger, tablo);
+}
+
+const FORM_ALANI_YOLLARI: YolluTablo = { anahtarlar: { ad: 'name', tip: 'type', etiket: 'label' } };
+const SAYFA_YOLLARI: YolluTablo = {
+  anahtarlar: { baslik: 'title', basliklar: 'headings', linkler: 'links', formlar: 'forms', dugmeler: 'buttons' },
+  alt: { forms: { anahtarlar: { alanlar: 'fields' }, alt: { fields: FORM_ALANI_YOLLARI } } },
+};
+const HARITA_FARKI_YOLLARI: YolluTablo = {
+  anahtarlar: {
+    eklenenBasliklar: 'addedHeadings',
+    silinenBasliklar: 'removedHeadings',
+    eklenenDugmeler: 'addedButtons',
+    silinenDugmeler: 'removedButtons',
+    eklenenFormAlanlari: 'addedFormFields',
+    silinenFormAlanlari: 'removedFormFields',
+    sayfaKimligiUyusuyor: 'pageIdentityMatches',
+    degisti: 'changed',
+  },
+};
+
+/** Dosya başına 0.1 yolları: `KALICI_ANAHTARLAR`'ın kalıcı dosya satırları, bulundukları yerle. */
+export const ESKI_YOLLAR: Readonly<Record<'config' | 'kimlik' | 'harita' | 'hataPaketi' | 'meta', YolluTablo>> = {
+  config: { anahtarlar: { beyin: 'brain' } },
+  kimlik: { anahtarlar: { kullanici: 'username', parola: 'password' } },
+  harita: {
+    anahtarlar: { girisYapildi: 'loggedIn', sayfalar: 'pages', kesifTarihi: 'exploredAt' },
+    alt: { pages: SAYFA_YOLLARI },
+  },
+  hataPaketi: { anahtarlar: { haritaFarki: 'mapDiff' }, alt: { mapDiff: HARITA_FARKI_YOLLARI } },
+  meta: { anahtarlar: { yazildi: 'writtenAt' } },
+};

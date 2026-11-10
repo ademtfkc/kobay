@@ -40,6 +40,7 @@ import {
   testRun,
 } from './komutlar/index.js';
 import { demoPortu } from './komutlar/demo.js';
+import { eskiAdUyarisi, uyarilariYaz, type Uyari } from './uyari.js';
 
 const require = createRequire(import.meta.url);
 const paket = require('../../package.json') as { version: string };
@@ -88,6 +89,46 @@ function beyinSecenekleri(
   const secimMetni = gorunen.map((secim) => `"${secim}"`).join(', ');
   return komut
     .addOption(new Option('--brain <adaptor>', `${aciklama} (choices: ${secimMetni})`).argParser(denetle));
+}
+
+/** `project update`'in eski bayrak adları (0.9.0'da create ile aynı adlar geldi; eskiler 2.0'a dek uyarıyla çalışır). */
+const ESKI_UPDATE_BAYRAKLARI = [
+  { eski: 'baseUrl', yeni: 'url', eskiBayrak: '--base-url', yeniBayrak: '--url' },
+  { eski: 'docsPath', yeni: 'docs', eskiBayrak: '--docs-path', yeniBayrak: '--docs' },
+] as const;
+
+/**
+ * Yeni ad önceliklidir ama iki ad birlikte verilemez: hangisinin geçerli olduğu sessizce seçilmez,
+ * `--auth-origin`/`--clear-auth-origins` ve `--login`/`--session-file` gibi kullanım hatası döner.
+ */
+function eskiAdlariCoz(secenekler: { url?: string; baseUrl?: string; docs?: string; docsPath?: string }): {
+  url?: string;
+  docs?: string;
+  uyarilar: Uyari[];
+  hata?: string;
+} {
+  const uyarilar: Uyari[] = [];
+  const degerler: { url?: string; docs?: string } = {};
+  let hata: string | undefined;
+  for (const ad of ESKI_UPDATE_BAYRAKLARI) {
+    const eski = secenekler[ad.eski];
+    const yeni = secenekler[ad.yeni];
+    if (eski !== undefined) uyarilar.push(eskiAdUyarisi(ad.eskiBayrak, ad.yeniBayrak));
+    if (eski !== undefined && yeni !== undefined) {
+      hata ??= `${ad.yeniBayrak} and ${ad.eskiBayrak} cannot be used together; use ${ad.yeniBayrak}`
+        + ` (${ad.eskiBayrak} is deprecated)`;
+    }
+    const deger = yeni ?? eski;
+    if (deger !== undefined) degerler[ad.yeni] = deger;
+  }
+  return { ...degerler, uyarilar, ...(hata === undefined ? {} : { hata }) };
+}
+
+/** Komut sonucuna CLI katmanının uyarılarını ekler (JSON zarfında `warnings`). */
+async function uyarili(islem: Promise<KomutSonucu>, uyarilar: Uyari[]): Promise<KomutSonucu> {
+  const sonuc = await islem;
+  if (uyarilar.length === 0) return sonuc;
+  return { ...sonuc, uyarilar: [...uyarilar, ...(sonuc.uyarilar ?? [])] };
 }
 
 /** Tekrarlanabilir seçenek: her `--auth-origin` değeri listeye eklenir. */
@@ -259,9 +300,11 @@ export function programOlustur(
     });
   beyinSecenekleri(project.command('update')
     .description('updates individual project fields; unspecified fields are unchanged')
-    .option('--base-url <url>', 'new target application URL')
+    .option('--url <url>', 'new target application URL')
+    .option('--base-url <url>', 'deprecated: use --url (removal: 2.0)')
     .option('--login-url <url>', 'new login page URL')
-    .option('--docs-path <path>', 'product document file path')
+    .option('--docs <path>', 'product document file path')
+    .option('--docs-path <path>', 'deprecated: use --docs (removal: 2.0)')
     .option(
       '--login',
       'prompt for credentials again and save them in .kobay (replaces the saved ones); without --auth-origin,'
@@ -273,8 +316,10 @@ export function programOlustur(
     .option('--model <model>', 'model name to pass to the brain')
     .option('--effort <effort>', 'reasoning effort, when supported by the adapter')
     .action(async (secenekler: {
+      url?: string;
       baseUrl?: string;
       loginUrl?: string;
+      docs?: string;
       docsPath?: string;
       login?: boolean;
       authOrigin?: string[];
@@ -283,9 +328,27 @@ export function programOlustur(
       model?: string;
       effort?: string;
     }) => {
-      const login = secenekler.login === true && authOriginBayragiUygun(secenekler)
-        ? await girisBilgisi(akislar)
-        : undefined;
+      const eskiAdlar = eskiAdlariCoz(secenekler);
+      // Uyarı parola isteminden önce görünsün; sonuç yazılırken aynı satır bir daha basılmaz.
+      uyarilariYaz(eskiAdlar.uyarilar, akislar.stderr);
+      if (eskiAdlar.hata !== undefined) {
+        await calistir(Promise.resolve({ ...basarisiz(new UsageError(eskiAdlar.hata)), uyarilar: eskiAdlar.uyarilar }));
+        return;
+      }
+      const { url, docs } = eskiAdlar;
+      let login: Kimlik | undefined;
+      try {
+        login = secenekler.login === true && authOriginBayragiUygun(secenekler)
+          ? await girisBilgisi(akislar)
+          : undefined;
+      } catch (hata: unknown) {
+        // Kimlik sorulamadıysa hata zarfı da eski ad uyarılarını taşır (ana catch'e düşseydi kaybolurdu).
+        await calistir(Promise.resolve({
+          ...basarisiz(hata instanceof Error ? hata : new Error(String(hata)), CIKIS.KULLANIM),
+          uyarilar: eskiAdlar.uyarilar,
+        }));
+        return;
+      }
       const brain = secenekler.brain;
       const beyin = brain === undefined && secenekler.model === undefined && secenekler.effort === undefined
         ? undefined
@@ -294,16 +357,16 @@ export function programOlustur(
           ...(secenekler.model === undefined ? {} : { model: secenekler.model }),
           ...(secenekler.effort === undefined ? {} : { effort: secenekler.effort }),
         };
-      await calistir(projectUpdate({
+      await calistir(uyarili(projectUpdate({
         cwd: cwd(),
-        ...(secenekler.baseUrl === undefined ? {} : { url: secenekler.baseUrl }),
+        ...(url === undefined ? {} : { url }),
         ...(secenekler.loginUrl === undefined ? {} : { loginUrl: secenekler.loginUrl }),
-        ...(secenekler.docsPath === undefined ? {} : { docs: secenekler.docsPath }),
+        ...(docs === undefined ? {} : { docs }),
         ...(beyin === undefined ? {} : { beyin }),
         ...(login === undefined ? {} : { login }),
         ...(secenekler.authOrigin === undefined ? {} : { authOrigins: secenekler.authOrigin }),
         ...(secenekler.clearAuthOrigins === true ? { clearAuthOrigins: true } : {}),
-      }));
+      }), eskiAdlar.uyarilar));
     });
   project.command('get')
     .description('shows project settings, test count, and map status')

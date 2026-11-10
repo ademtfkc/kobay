@@ -159,7 +159,7 @@ describe('MCP isError yalnız gerçek araç hatalarında', () => {
       // Kimlikli kayıtlı adresle yalnız adresi düzelten güncelleme geçer.
       const guncelle = await baglanti.istemci.callTool({ name: 'project_update', arguments: { brain: 'codex' } });
       expect(guncelle.isError).toBe(true);
-      expect(JSON.stringify(guncelle)).toContain('kobay project update --base-url <URL>');
+      expect(JSON.stringify(guncelle)).toContain('kobay project update --url <URL>');
       expect(JSON.stringify(guncelle)).not.toContain('Hunter2Pass');
       const duzelt = await baglanti.istemci.callTool({ name: 'project_update', arguments: { baseUrl: 'http://localhost:3000' } });
       expect(duzelt.isError).not.toBe(true);

@@ -1,12 +1,15 @@
 import type { Writable } from 'node:stream';
 import { metindekiKimligiGizle } from '../depo/adres.js';
 import type { KomutSonucu } from './komut.js';
+import { uyarilariYaz, type Uyari } from './uyari.js';
 
 export interface CiktiZarfi {
   ok: boolean;
   exitCode: number;
   data?: unknown;
   error?: { code: string; message: string };
+  /** Yalnız uyarı varsa (ör. eski bayrak adı); uyarısız komutta alan hiç yazılmaz. */
+  warnings?: Uyari[];
   /** Yalnız komut beyin çağrısı yaptıysa; `costUsd` maliyeti bilinmeyen çağrı varsa `null`. */
   brain?: BeyinOzeti;
 }
@@ -23,12 +26,17 @@ function hataMi(veri: unknown): veri is { error: { code: string; message: string
   return typeof hata === 'object' && hata !== null && 'code' in hata && 'message' in hata;
 }
 
-export function ciktiZarfi(sonuc: KomutSonucu): CiktiZarfi {
+function govdeZarfi(sonuc: KomutSonucu): CiktiZarfi {
   if (sonuc.exitCode !== 0) {
     if (hataMi(sonuc.json)) return { ok: false, exitCode: sonuc.exitCode, error: sonuc.json.error };
     return { ok: false, exitCode: sonuc.exitCode, ...(sonuc.hata === undefined ? {} : { error: sonuc.hata }), data: sonuc.json };
   }
   return { ok: true, exitCode: sonuc.exitCode, data: sonuc.json };
+}
+
+export function ciktiZarfi(sonuc: KomutSonucu): CiktiZarfi {
+  const zarf = govdeZarfi(sonuc);
+  return sonuc.uyarilar === undefined || sonuc.uyarilar.length === 0 ? zarf : { ...zarf, warnings: sonuc.uyarilar };
 }
 
 /** İç içe dizi hücrelerinde sayının yanına yazılan birim; bilinmeyen alan "item" olur. */
@@ -164,6 +172,8 @@ export function ciktiYaz(
   stderr: Writable = process.stderr,
   beyin?: BeyinOzeti,
 ): void {
+  // Uyarı satırı iki modda da stderr'e gider (stdout makine çıktısı temiz kalır); süreç başına bir kez.
+  uyarilariYaz(sonuc.uyarilar, stderr);
   if (json) {
     const zarf = ciktiZarfi(sonuc);
     const brain = beyin === undefined ? undefined : { calls: beyin.calls, costUsd: gecerliMaliyet(beyin.costUsd) };

@@ -280,7 +280,7 @@ export function kayitliAdresleriDenetle(config: KobayConfig, birlikteDuzelt = fa
   if (kimlikli.length === 1 && !birlikteDuzelt) {
     // Tek adres kimlikli: tek bayrak yeter, mesaj o bayrağı söyler.
     if (kimlikli[0]?.ad === 'base URL') {
-      kimlikliAdresReddet(config.baseUrl, 'and fix it with `kobay project update --base-url <URL>`; save the login with `--login`');
+      kimlikliAdresReddet(config.baseUrl, 'and fix it with `kobay project update --url <URL>`; save the login with `--login`');
     }
     kimlikliAdresReddet(config.loginUrl ?? '', 'and fix it with `kobay project update --login-url <URL>`; save the login with `--login`');
     return;
@@ -289,7 +289,7 @@ export function kayitliAdresleriDenetle(config: KobayConfig, birlikteDuzelt = fa
   // bu yüzden hepsi tek mesajda sayılır ve iki bayrak birlikte önerilir.
   throw new UsageError(
     `The saved addresses must not contain a username or password: ${kimlikli.map((k) => `${k.ad} ${adresKimligiGizle(k.url)}`).join('; ')}.`
-    + ' Remove the username and password from both addresses; fix both in one command: `kobay project update --base-url <URL> --login-url <URL>`'
+    + ' Remove the username and password from both addresses; fix both in one command: `kobay project update --url <URL> --login-url <URL>`'
     + ' (save the login with `--login`)',
   );
 }
@@ -299,7 +299,7 @@ async function hedefiDogrula(baseUrl: string): Promise<void> {
   if (await hedefAyaktaMi(baseUrl)) return;
   throw new TargetUnreachableError(
     `Target app is not reachable: ${adresKimligiGizle(baseUrl)}; start the app`
-    + ' or fix the address with `kobay project update --base-url <URL>`',
+    + ' or fix the address with `kobay project update --url <URL>`',
   );
 }
 

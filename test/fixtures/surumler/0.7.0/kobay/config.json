@@ -1,0 +1,6 @@
+{
+  "baseUrl": "http://127.0.0.1:47391",
+  "brain": {
+    "adaptor": "sahte"
+  }
+}

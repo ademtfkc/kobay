@@ -1,6 +1,7 @@
 import {
   access, link, lstat, mkdir, open, readdir, readFile, rename, rm, stat, unlink,
 } from 'node:fs/promises';
+import { constants as fsSabitleri } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import * as v from 'valibot';
@@ -13,21 +14,45 @@ import type {
   Oneri,
   TestKaydi,
 } from './tipler.js';
-import {
-  HaritaSemasi,
-  HataPaketiSemasi,
-  KimlikSemasi,
-  KobayConfigSemasi,
-  KosuSonucuSemasi,
-  OneriSemasi,
-  TestKaydiSemasi,
-} from './semalar.js';
 import { FileNotFound, jsonOku, yazAtomik } from './dosya.js';
 import { eskiAnahtarVarMi, eskiIsaretineEsle, kalicidanEsle } from './anahtar-gocu.js';
 import {
+  CONFIG_BICIMI,
+  HARITA_BICIMI,
+  HATA_PAKETI_BICIMI,
+  KIMLIK_BICIMI,
+  KOSU_BICIMI,
+  ONERI_BICIMI,
+  PAKET_META_BICIMI,
+  TEST_BICIMI,
+  bicimDaralt,
+} from './bicimler.js';
+import { KobayConfigSemasi } from './semalar.js';
+import {
+  SchemaVersionTooNew,
+  guncelSurum,
+  guncelSurumeGocur,
+  surumluCoz,
+  surumluMetin,
+  surumluOku,
+  surumuDenetle,
+  type SurumluBicim,
+} from './surum.js';
+import {
   UnsafeBundlePath, eskiDizinleriSil, guvenliKokuBul, hataPaketiYolunuDenetle, kokCocugunuDenetle,
 } from './paket-yolu.js';
-import { paketKilidiniAl, pidYasiyor, type PaketKilidi } from './paket-kilidi.js';
+import { paketKilidiniAl, pidYasiyor, type PaketKilidi, type PaketKilidiKancasi } from './paket-kilidi.js';
+
+/**
+ * Yalnız testler için: açılış göçünün yarış sıralamasını zorlamak üzere
+ * beklenen noktalar. `yazmadanOnce`, göç bir kök dosyayı okuyup yazmaya karar
+ * verdikten hemen sonra çağrılır; `kilit`, göç kilidine verilen kancadır.
+ * Üretim kodu bunları vermez.
+ */
+export const GOC_KANCASI: {
+  yazmadanOnce?: (yol: string) => Promise<void>;
+  kilit?: PaketKilidiKancasi;
+} = {};
 
 export class BundleIncomplete extends Error {
   constructor(testId: string) {
@@ -124,8 +149,11 @@ export class CredentialsTxnInProgress extends Error {
 const TEST_KIMLIGI = /^t_[a-z0-9]{8}$/;
 const KOSU_KIMLIGI = /^r_\d{14}_[a-z0-9]{4}$/;
 const PaketMetaSemasi = v.object({ snapshotId: v.string() });
+/** Paketin `snapshotId`'si; meta'nın geri kalanı doğrulanmaz. */
+const PAKET_SNAPSHOT_BICIMI = bicimDaralt(PAKET_META_BICIMI, PaketMetaSemasi);
 /** Paketin hangi koşuyu gösterdiğini okumak için; paketin geri kalanı doğrulanmaz. */
 const PaketKosuSemasi = v.object({ runId: v.string() });
+const PAKET_KOSU_BICIMI = bicimDaralt(HATA_PAKETI_BICIMI, PaketKosuSemasi);
 
 /** Trace arşivinin adı: koşu dizininde (ve eski sürümlerin paketinde) bu adla durur. */
 const TRACE_ADI = 'trace.zip';
@@ -226,16 +254,35 @@ const YENIDEN_ADLANDIRILANLAR: ReadonlyArray<{ eski: readonly string[]; yeni: re
 ];
 
 /**
- * Alan adları yerinde göç eden dosyalar. Ad değişmez, yalnız içerik yeni
- * anahtarlarla yeniden yazılır; böylece ilk komuttan sonra diskte tek sözleşme
- * kalır. Sıra önemsiz — harita ve öneriler bu adımdan önce yeni adlarına taşınır.
+ * Açılışta yerinde göç eden kök dosyalar (sürüm okuyucusu, 0.9.0 D1). Ad
+ * değişmez; sürümü güncelden eski olan dosya göç edilip güncel `schemaVersion`
+ * ile yeniden yazılır. Böylece ilk komuttan sonra diskte tek sözleşme kalır.
+ * Sıra önemsiz — harita ve öneriler bu adımdan önce yeni adlarına taşınır.
+ *
+ * Daha derindeki sürümlü dosyalar (tests/, runs/, failure/) açılışta yeniden
+ * yazılmaz: okunurken bellekte göç eder, kobay onları bir sonraki yazışında
+ * güncel sürümle yazar. Kanıt dosyalarına ve git'e girmiş test kayıtlarına
+ * yalnız sürüm damgası için dokunmamak bilinçli bir seçimdir.
  */
-const ALAN_GOCU_DOSYALARI: ReadonlyArray<{ ad: readonly string[]; mod?: number }> = [
-  { ad: ['config.json'] },
-  { ad: ['credentials.json'], mod: 0o600 },
-  { ad: [HARITA_DOSYASI] },
-  { ad: [...ONERI_DOSYASI] },
+const KOK_SURUMLU_DOSYALAR: ReadonlyArray<{ ad: readonly string[]; bicim: SurumluBicim<unknown>; mod?: number }> = [
+  { ad: ['config.json'], bicim: CONFIG_BICIMI },
+  { ad: ['credentials.json'], bicim: KIMLIK_BICIMI, mod: 0o600 },
+  { ad: [HARITA_DOSYASI], bicim: HARITA_BICIMI },
+  { ad: [...ONERI_DOSYASI], bicim: ONERI_BICIMI },
 ];
+
+/**
+ * Açılışın ön denetimi bunlara da bakar: 0.1 adlı harita ve öneriler açılışta
+ * yeni adlarına taşınır; daha yeni sürümlü bir dosya taşınmadan reddedilmeli.
+ */
+const ON_DENETIM_DOSYALARI: ReadonlyArray<{ ad: readonly string[]; bicim: SurumluBicim<unknown> }> = [
+  ...KOK_SURUMLU_DOSYALAR,
+  { ad: [ESKI_HARITA_DOSYASI], bicim: HARITA_BICIMI },
+  { ad: [...ESKI_ONERI_DOSYASI], bicim: ONERI_BICIMI },
+];
+
+/** Göç kilidi: `.kobay/logs/.lock-schema-migration` (paket kilidiyle aynı protokol). */
+const GOC_KILIDI = { ad: 'logs', testId: 'schema-migration' } as const;
 
 /**
  * Kenara alınan kimlik/oturum kopyasının adı: `.stale-<txnId>-<asıl ad>`.
@@ -586,6 +633,22 @@ function jsonYaz(veri: unknown): string {
   return `${JSON.stringify(veri, null, 2)}\n`;
 }
 
+/** Dosyayı ham JSON olarak okur; yoksa ya da JSON değilse `null` (okuma yolu hatayı kendisi bildirir). */
+async function hamJsonOku(yol: string): Promise<{ metin: string; veri: unknown } | null> {
+  let metin: string;
+  try {
+    metin = await readFile(yol, 'utf8');
+  } catch (hata: unknown) {
+    if (hataKodu(hata) === 'ENOENT') return null;
+    throw hata;
+  }
+  try {
+    return { metin, veri: JSON.parse(metin) as unknown };
+  } catch {
+    return null;
+  }
+}
+
 async function gitignoreGuncelle(yol: string): Promise<void> {
   let mevcut: string;
   try {
@@ -744,6 +807,7 @@ export class KobayDizini {
 
   static async ac(projeKoku: string, config: KobayConfig): Promise<KobayDizini> {
     const dizin = new KobayDizini(projeKoku);
+    await dizin.yeniSurumuReddet();
     await mkdir(dizin.kok, { recursive: true });
     await dizin.altDizinleriSagla();
     await gitignoreSenkronla(dizin.yol('.gitignore'));
@@ -843,47 +907,142 @@ export class KobayDizini {
   }
 
   /**
-   * `config.json` ve `credentials.json`'ı yerinde yeni alan adlarına çevirir.
-   * Okuma zaten eski adları da kabul ediyor; bu adım dosyanın kendisini de
-   * tekilleştirir, böylece kullanıcı diskte tek bir sözleşme görür. Bozuk JSON'a
-   * dokunulmaz (şema hatasını kullanıcı görsün), eski anahtar yoksa disk hiç
-   * yazılmaz. `credentials.json` 0600 ile yeniden yazılır.
+   * Kök sürümlü dosyaları (`KOK_SURUMLU_DOSYALAR`) yerinde güncel sürüme
+   * çevirir. Okuma zaten her sürümü bellekte göç ettiriyor; bu adım dosyanın
+   * kendisini de tekilleştirir, böylece kullanıcı diskte tek bir sözleşme görür.
+   *
+   * Yalnız gerektiğinde yazar: sürümü güncel olan dosyaya dokunulmaz (ikinci
+   * açılış bayt bayt aynı kalır). Bozuk JSON'a, geçersiz sürüm alanına ya da
+   * göçten sonra şemaya uymayan içeriğe de dokunulmaz — hatayı okuma yolu
+   * kullanıcıya gösterir. Yazılan, göç edilmiş HAM veridir (şemanın tanımadığı
+   * alanlar korunur), doğrulanmış çıktı değil. `credentials.json` 0600 ile
+   * yeniden yazılır. Daha yeni sürüm `SchemaVersionTooNew` ile reddedilir;
+   * dosyaya yazılmaz.
+   *
+   * Yazma hakkı yoksa (salt okunur kopya) komut düşmez: dosya eski sürümünde
+   * kalır, okuma her seferinde bellekte göç eder. Okuma ile yazma arasında
+   * başka bir süreç dosyayı değiştirdiyse (eşzamanlı komut) göç yazılmaz;
+   * yeni içerik ezilmez.
+   *
+   * Dönen `eskiAd`: 0.1'in Türkçe alan adlarından en az biri taşındı mı
+   * (açılıştaki tek satırlık bildirim için).
    */
-  private async alanAdlariniGocur(): Promise<boolean> {
-    let degisti = false;
-    for (const { ad, mod } of ALAN_GOCU_DOSYALARI) {
+  private async kokDosyalariniGocur(): Promise<{ eskiAd: boolean }> {
+    // Kilitsiz ilk bakış: göçecek dosya yoksa kilit hiç alınmaz (olağan açılış).
+    if (!(await this.gocGerekiyorMu())) return { eskiAd: false };
+    // Yazma hakkı yoksa göç bellekte kalır; kilit dosyası da açılmaya çalışılmaz.
+    if (!(await access(this.kok, fsSabitleri.W_OK).then(() => true, () => false))) return { eskiAd: false };
+    let kilit: PaketKilidi;
+    try {
+      kilit = await paketKilidiniAl({
+        kobayKoku: this.kok,
+        ad: GOC_KILIDI.ad,
+        testId: GOC_KILIDI.testId,
+        reddet: (yol, sebep) => new Error(`Unsafe migration lock path: ${yol} (${sebep})`),
+        ...(GOC_KANCASI.kilit === undefined ? {} : { kanca: GOC_KANCASI.kilit }),
+      });
+    } catch {
+      // Kilit alınamadı (logs/ yok ya da güvensiz, ya da başka bir göç uzun süre kilidi tutuyor):
+      // diske yazılmaz, okuma bellekte göç eder, komut sürer. Bu komutun kendi yazımları da tek
+      // yazma yolundan (mevcut dosyanın sürüm denetimi + güncel sürüm) geçer; kilidi tutan göç
+      // yazmadan önce dosyayı yeniden okuduğu için bu yazımın üstüne eski içeriği koymaz.
+      // Komutu düşürmek (ya da sınırsız beklemek) yerine bu seçildi: bellekte göç diske
+      // hiçbir şey yazmaz, kaybettirecek bir şeyi yoktur.
+      return { eskiAd: false };
+    }
+    try {
+      return await this.kokDosyalariniKilitAltindaGocur();
+    } finally {
+      await kilit.birak();
+    }
+  }
+
+  /** Kök dosyalardan en az biri güncelden eski ve geçerli mi (yazılacak göç var mı)? */
+  private async gocGerekiyorMu(): Promise<boolean> {
+    for (const { ad, bicim } of KOK_SURUMLU_DOSYALAR) {
       const yol = this.yol(...ad);
-      let ham: string;
+      const okunan = await hamJsonOku(yol);
+      if (okunan === null) continue;
       try {
-        ham = await readFile(yol, 'utf8');
+        if (surumuDenetle(okunan.veri, bicim, this.gorunenAd(yol)) < guncelSurum(bicim)) return true;
       } catch (hata: unknown) {
-        if (hataKodu(hata) === 'ENOENT') continue;
-        throw hata;
+        if (hata instanceof SchemaVersionTooNew) throw hata;
       }
-      let veri: unknown;
+    }
+    return false;
+  }
+
+  /**
+   * Göçün kendisi; göç kilidi altında çağrılır. Her dosya kilit alındıktan SONRA
+   * okunur: eşzamanlı başka bir açılış (o da kilidi bekler) dosyayı çoktan
+   * güncel sürüme çevirmiş ve üstüne yeni bir ayar yazmış olabilir; o zaman
+   * sürüm güncel görünür ve dosyaya dokunulmaz. Kilidi bekleyen ikinci komut,
+   * kendi açılışı bitmeden yazamayacağı için göçün okuma ile yazma arası
+   * korunur.
+   */
+  private async kokDosyalariniKilitAltindaGocur(): Promise<{ eskiAd: boolean }> {
+    let eskiAd = false;
+    for (const { ad, bicim, mod } of KOK_SURUMLU_DOSYALAR) {
+      const yol = this.yol(...ad);
+      const okunan = await hamJsonOku(yol);
+      if (okunan === null) continue;
+      let gocmus: unknown;
       try {
-        veri = JSON.parse(ham) as unknown;
-      } catch {
+        const sonuc = guncelSurumeGocur(okunan.veri, bicim, this.gorunenAd(yol));
+        if (sonuc.surum === guncelSurum(bicim)) continue;
+        gocmus = sonuc.veri;
+        surumluCoz(okunan.veri, bicim, this.gorunenAd(yol));
+      } catch (hata: unknown) {
+        // Daha yeni sürüm: açılış burada durur, dosyaya dokunulmaz.
+        if (hata instanceof SchemaVersionTooNew) throw hata;
+        // Geçersiz sürüm alanı ya da şemaya uymayan içerik: okuma yolu bildirir.
         continue;
       }
-      if (!eskiAnahtarVarMi(veri)) continue;
       try {
-        await yazAtomik(yol, jsonYaz(kalicidanEsle(veri)), mod);
-        degisti = true;
+        await GOC_KANCASI.yazmadanOnce?.(yol);
+        // Kilit herkesi korumaz: kilidi bekleyip zaman aşımına düşen bir komut göçü bellekte
+        // yapar ve kendi ayarını yazabilir. Yazmadan hemen önce dosya ilk okumadan farklıysa
+        // göç yazılmaz; o komutun yazımı (zaten güncel sürümle) kalır.
+        if ((await hamJsonOku(yol))?.metin !== okunan.metin) continue;
+        await yazAtomik(yol, jsonYaz(gocmus), mod);
+        if (eskiAnahtarVarMi(okunan.veri)) eskiAd = true;
       } catch (hata: unknown) {
         const kod = hataKodu(hata);
         if (kod === undefined || !YAZILAMAZ_KODLARI.has(kod)) throw hata;
-        return degisti;
       }
     }
-    return degisti;
+    return { eskiAd };
   }
 
-  /** Açılış kancasının göç adımı: önce ad, sonra içerik. */
+  /**
+   * Kök sürümlü dosyalardan biri bu kobay'dan daha yeni bir sürümle yazıldıysa
+   * açılışı, hiçbir dosyaya dokunmadan (`.gitignore`, alt dizinler, kimlik
+   * kurtarması dahil) `SchemaVersionTooNew` ile durdurur (0.9.0 Karar 4).
+   */
+  private async yeniSurumuReddet(): Promise<void> {
+    for (const { ad, bicim } of ON_DENETIM_DOSYALARI) {
+      const yol = this.yol(...ad);
+      const okunan = await hamJsonOku(yol);
+      if (okunan === null) continue;
+      try {
+        surumuDenetle(okunan.veri, bicim, this.gorunenAd(yol));
+      } catch (hata: unknown) {
+        if (hata instanceof SchemaVersionTooNew) throw hata;
+      }
+    }
+  }
+
+  /** Hata mesajlarında görünen yol: proje köküne göre (`.kobay/config.json`), mutlak değil. */
+  private gorunenAd(yol: string): string {
+    return relative(this.projeKoku, yol).split(sep).join('/');
+  }
+
+  /** Açılış kancasının göç adımı: önce ad, sonra içerik ve sürüm. */
   private async eskiSurumdenGocur(): Promise<void> {
     const adDegisti = await this.eskiDosyaAdlariniTasi();
-    const alanDegisti = await this.alanAdlariniGocur();
-    if (adDegisti || alanDegisti) {
+    const { eskiAd } = await this.kokDosyalariniGocur();
+    // Yalnız sürüm damgası basılan 0.2–0.8 dosyaları için bildirim yazılmaz.
+    if (adDegisti || eskiAd) {
       process.stderr.write('[kobay] Migrated project data from the 0.1 format to 0.2.\n');
     }
   }
@@ -916,6 +1075,7 @@ export class KobayDizini {
       }
       if (bulundu) {
         const dizin = new KobayDizini(aday);
+        await dizin.yeniSurumuReddet();
         await gitignoreSenkronla(dizin.yol('.gitignore'));
         await dizin.altDizinleriSagla();
         await dizin.bayatSonListeyiSil();
@@ -950,20 +1110,43 @@ export class KobayDizini {
     return altYol(this.yol('failure'), testId);
   }
 
+  /** `.kobay/` içindeki sürümlü bir dosyanın tek okuma yolu (0.9.0 D1). */
+  private surumluOku<T>(yol: string, bicim: SurumluBicim<T>): Promise<T> {
+    return surumluOku(yol, bicim, this.gorunenAd(yol));
+  }
+
+  /**
+   * Yolu ezecek, silecek ya da taşıyacak her yazımdan önce: orada duran
+   * sürümlü dosya bu kobay'dan daha yeniyse `SchemaVersionTooNew`, sürüm alanı
+   * geçersizse `SchemaError` (0.9.0 Karar 4: dosyaya dokunulmaz). Dosya yoksa
+   * ya da JSON değilse (bozuk, kobay'ın kendi yarım bıraktığı) geçilir.
+   */
+  private async mevcutSurumuDenetle(yol: string, bicim: SurumluBicim<unknown>): Promise<void> {
+    const okunan = await hamJsonOku(yol);
+    if (okunan === null) return;
+    surumuDenetle(okunan.veri, bicim, this.gorunenAd(yol));
+  }
+
+  /** Sürümlü dosyanın tek yazma yolu: önce mevcut dosyanın sürümü, sonra güncel sürümle atomik yazım. */
+  private async surumluYaz(yol: string, bicim: SurumluBicim<unknown>, govde: object, mod?: number): Promise<void> {
+    await this.mevcutSurumuDenetle(yol, bicim);
+    await yazAtomik(yol, surumluMetin(bicim, govde), mod);
+  }
+
   configOku(): Promise<KobayConfig> {
-    return jsonOku(this.yol('config.json'), KobayConfigSemasi);
+    return this.surumluOku(this.yol('config.json'), CONFIG_BICIMI);
   }
 
   async configYaz(config: KobayConfig): Promise<void> {
-    await yazAtomik(this.yol('config.json'), jsonYaz(config));
+    await this.surumluYaz(this.yol('config.json'), CONFIG_BICIMI, config);
   }
 
   kimlikOku(): Promise<Kimlik | null> {
-    return yoksaNull(() => jsonOku(this.yol('credentials.json'), KimlikSemasi));
+    return yoksaNull(() => this.surumluOku(this.yol('credentials.json'), KIMLIK_BICIMI));
   }
 
   async kimlikYaz(kimlik: Kimlik): Promise<void> {
-    await yazAtomik(this.yol('credentials.json'), jsonYaz(kimlik), 0o600);
+    await this.surumluYaz(this.yol('credentials.json'), KIMLIK_BICIMI, kimlik, 0o600);
   }
 
   /**
@@ -981,6 +1164,8 @@ export class KobayDizini {
    * ÖNCEKİ hâlini vermelidir.
    */
   async kimlikVeOturumuKenaraAl(baglam: KimlikIslemiBaglami): Promise<KimlikIslemi> {
+    // Daha yeni sürümlü `credentials.json` kenara taşınmaz (sonra silinirdi).
+    await this.mevcutSurumuDenetle(this.yol('credentials.json'), KIMLIK_BICIMI);
     const islemId = randomUUID();
     const tasinan: Array<{ ad: string; gecici: string }> = [];
     /**
@@ -1630,37 +1815,46 @@ export class KobayDizini {
   private async eskiAdaDuserekOku<T>(
     yeni: readonly string[],
     eski: readonly string[],
-    sema: v.GenericSchema<unknown, T>,
+    bicim: SurumluBicim<T>,
   ): Promise<T | null> {
-    const sonuc = await yoksaNull(() => jsonOku(this.yol(...yeni), sema));
+    const sonuc = await yoksaNull(() => this.surumluOku(this.yol(...yeni), bicim));
     if (sonuc !== null) return sonuc;
-    return yoksaNull(() => jsonOku(this.yol(...eski), sema));
+    return yoksaNull(() => this.surumluOku(this.yol(...eski), bicim));
   }
 
   haritaOku(): Promise<Harita | null> {
-    return this.eskiAdaDuserekOku([HARITA_DOSYASI], [ESKI_HARITA_DOSYASI], HaritaSemasi);
+    return this.eskiAdaDuserekOku([HARITA_DOSYASI], [ESKI_HARITA_DOSYASI], HARITA_BICIMI);
   }
 
   async haritaYaz(harita: Harita): Promise<void> {
-    await yazAtomik(this.yol(HARITA_DOSYASI), jsonYaz(harita));
+    await this.surumluYaz(this.yol(HARITA_DOSYASI), HARITA_BICIMI, harita);
   }
 
   onerileriOku(): Promise<Oneri[]> {
     return this
-      .eskiAdaDuserekOku([...ONERI_DOSYASI], [...ESKI_ONERI_DOSYASI], v.array(OneriSemasi))
-      .then((sonuc) => sonuc ?? []);
+      .eskiAdaDuserekOku([...ONERI_DOSYASI], [...ESKI_ONERI_DOSYASI], ONERI_BICIMI)
+      .then((sonuc) => sonuc?.items ?? []);
   }
 
+  /** Sürüm 1'de kök `{ schemaVersion, items }`; 0.8 ve öncesi dizi kökü yazıyordu. */
   async onerileriYaz(oneriler: Oneri[]): Promise<void> {
-    await yazAtomik(this.yol(...ONERI_DOSYASI), jsonYaz(oneriler));
+    await this.surumluYaz(this.yol(...ONERI_DOSYASI), ONERI_BICIMI, { items: oneriler });
   }
 
   testOku(id: string): Promise<TestKaydi> {
-    return jsonOku(this.testYolu(id, '.json'), TestKaydiSemasi);
+    return this.surumluOku(this.testYolu(id, '.json'), TEST_BICIMI);
+  }
+
+  /**
+   * Birden çok test kaydı yazılmadan önce: hedeflerden biri daha yeni (ya da
+   * geçersiz) sürümlüyse hiçbiri yazılmasın diye topluca denetler.
+   */
+  async testKayitlariniDenetle(kimlikler: readonly string[]): Promise<void> {
+    for (const id of kimlikler) await this.mevcutSurumuDenetle(this.testYolu(id, '.json'), TEST_BICIMI);
   }
 
   async testYaz(test: TestKaydi): Promise<void> {
-    await yazAtomik(this.testYolu(test.id, '.json'), jsonYaz(test));
+    await this.surumluYaz(this.testYolu(test.id, '.json'), TEST_BICIMI, test);
   }
 
   async testListele(): Promise<TestKaydi[]> {
@@ -1682,6 +1876,8 @@ export class KobayDizini {
   async testSil(id: string): Promise<void> {
     const testYolu = this.testYolu(id, '.json');
     const kodYolu = this.testYolu(id, '.spec.ts');
+    // Daha yeni sürümlü test kaydı (ve kodu) silinmez.
+    await this.mevcutSurumuDenetle(testYolu, TEST_BICIMI);
     await Promise.all([
       unlink(testYolu).catch((hata: unknown) => {
         if (typeof hata === 'object' && hata !== null && 'code' in hata && hata.code === 'ENOENT') return;
@@ -1719,11 +1915,27 @@ export class KobayDizini {
 
   async kosuSonucuYaz(sonuc: KosuSonucu): Promise<void> {
     kimlikDogrula(sonuc.testId, 'testId');
-    await yazAtomik(this.kosuYolu(sonuc.runId, 'result.json'), jsonYaz(sonuc));
+    await this.surumluYaz(this.kosuYolu(sonuc.runId, 'result.json'), KOSU_BICIMI, sonuc);
   }
 
   kosuSonucuOku(runId: string): Promise<KosuSonucu> {
-    return jsonOku(this.kosuYolu(runId, 'result.json'), KosuSonucuSemasi);
+    return this.surumluOku(this.kosuYolu(runId, 'result.json'), KOSU_BICIMI);
+  }
+
+  /**
+   * Koşu kaydını yalnız verilen teste aitse sürüm okuyucusundan geçirir. Sahip
+   * test, sürümden bağımsız kök alanı `testId`'den ham olarak okunur: başka
+   * bir testin daha yeni sürümle yazılmış koşusu bu testin listesini
+   * düşürmesin. Bu testin daha yeni sürümlü koşusu ise `SchemaVersionTooNew`
+   * fırlatır (en son sonucu sessizce atlamak yanlış "son sonuç" gösterirdi).
+   */
+  private async testinKosuSonucunuOku(runId: string, testId: string): Promise<KosuSonucu | null> {
+    const yol = this.kosuYolu(runId, 'result.json');
+    const okunan = await hamJsonOku(yol);
+    if (okunan === null) return this.kosuSonucuOku(runId);
+    const { veri } = okunan;
+    if (typeof veri === 'object' && veri !== null && 'testId' in veri && veri.testId !== testId) return null;
+    return surumluCoz(veri, KOSU_BICIMI, this.gorunenAd(yol));
   }
 
   async kosuListele(testId: string): Promise<KosuSonucu[]> {
@@ -1734,7 +1946,7 @@ export class KobayDizini {
       const sonuclar = await Promise.all(
         girdiler
           .filter((girdi) => girdi.isDirectory() && KOSU_KIMLIGI.test(girdi.name))
-          .map(async (girdi) => yoksaNull(() => this.kosuSonucuOku(girdi.name))),
+          .map(async (girdi) => yoksaNull(() => this.testinKosuSonucunuOku(girdi.name, testId))),
       );
       return sonuclar
         .filter((sonuc): sonuc is KosuSonucu => sonuc !== null && sonuc.testId === testId)
@@ -1780,6 +1992,10 @@ export class KobayDizini {
     // Eski paket `rm -r` ile silineceği için `.kobay`, `failure` ve `<testId>`
     // symlink ya da `.kobay` dışı olmamalı (failure-out ile aynı disiplin).
     await hataPaketiYolunuDenetle(this, paket.testId);
+    // Yerinde duran paket daha yeni (ya da geçersiz) sürümlüyse kenara alınıp
+    // silinmez: kilit altında, yol denetiminden sonra bakılır.
+    await this.mevcutSurumuDenetle(join(paketDizini, 'failure.json'), HATA_PAKETI_BICIMI);
+    await this.mevcutSurumuDenetle(join(paketDizini, 'meta.json'), PAKET_META_BICIMI);
     const rastgele = randomUUID();
     const geciciDizin = altYol(hataKoku, `.tmp-${paket.testId}-${rastgele}`);
     const partialYolu = altYol(geciciDizin, '.partial');
@@ -1795,10 +2011,10 @@ export class KobayDizini {
         // `icerik` verilmişse (maskelenmiş metin kanıtı) o yazılır; yoksa bayt bayt kopya.
         await yazAtomik(altYol(geciciDizin, ek.hedefAd), ek.icerik ?? await readFile(ek.kaynak));
       }
-      await yazAtomik(altYol(geciciDizin, 'failure.json'), jsonYaz(paket));
+      await yazAtomik(altYol(geciciDizin, 'failure.json'), surumluMetin(HATA_PAKETI_BICIMI, paket));
       await yazAtomik(altYol(geciciDizin, 'code.ts'), paket.code);
       await yazAtomik(altYol(geciciDizin, 'steps.json'), jsonYaz(paket.steps));
-      await yazAtomik(altYol(geciciDizin, 'meta.json'), jsonYaz({
+      await yazAtomik(altYol(geciciDizin, 'meta.json'), surumluMetin(PAKET_META_BICIMI, {
         snapshotId: paket.snapshotId,
         testId: paket.testId,
         runId: paket.runId,
@@ -1834,6 +2050,20 @@ export class KobayDizini {
     return paketDizini;
   }
 
+  /**
+   * Koşudan ÖNCE: düşen koşu bu testlerin `failure/<id>/` paketini yeniden
+   * yazacak. Paketlerden biri daha yeni (ya da geçersiz) sürümlüyse koşu hiç
+   * başlamasın (Chromium, beyin, koşu dizini, test kaydı yazımı yok) diye
+   * hepsi topluca denetlenir; `SchemaVersionTooNew`/`SchemaError` fırlatılır.
+   */
+  async hataPaketleriniDenetle(testIdleri: readonly string[]): Promise<void> {
+    for (const testId of testIdleri) {
+      const paketDizini = this.hataPaketiYolu(testId);
+      await this.mevcutSurumuDenetle(join(paketDizini, 'failure.json'), HATA_PAKETI_BICIMI);
+      await this.mevcutSurumuDenetle(join(paketDizini, 'meta.json'), PAKET_META_BICIMI);
+    }
+  }
+
   async hataPaketiOku(testId: string): Promise<HataPaketi> {
     const paketDizini = this.hataPaketiYolu(testId);
     try {
@@ -1843,7 +2073,7 @@ export class KobayDizini {
       if (hata instanceof BundleIncomplete) throw hata;
       if (typeof hata === 'object' && hata !== null && 'code' in hata && hata.code !== 'ENOENT') throw hata;
     }
-    return jsonOku(join(paketDizini, 'failure.json'), HataPaketiSemasi);
+    return this.surumluOku(join(paketDizini, 'failure.json'), HATA_PAKETI_BICIMI);
   }
 
   /**
@@ -1857,8 +2087,8 @@ export class KobayDizini {
    */
   private async paketDosyalariniKopyala(testId: string, hedef: string, traceDahil: boolean): Promise<string | null> {
     const kaynak = this.hataPaketiYolu(testId);
-    const oncekiMeta = await jsonOku(join(kaynak, 'meta.json'), PaketMetaSemasi);
-    const { runId } = await jsonOku(join(kaynak, 'failure.json'), PaketKosuSemasi);
+    const oncekiMeta = await this.surumluOku(join(kaynak, 'meta.json'), PAKET_SNAPSHOT_BICIMI);
+    const { runId } = await this.surumluOku(join(kaynak, 'failure.json'), PAKET_KOSU_BICIMI);
     let paketIzi: string | null = null;
     for (const girdi of await readdir(kaynak, { withFileTypes: true })) {
       if (!girdi.isFile()) continue;
@@ -1871,7 +2101,7 @@ export class KobayDizini {
     const kosuIzi = this.kosuYolu(runId, TRACE_ADI);
     const izKaynagi = await lstat(kosuIzi).then((bilgi) => bilgi.isFile(), () => false) ? kosuIzi : paketIzi;
     if (traceDahil && izKaynagi !== null) await yazAtomik(join(hedef, TRACE_ADI), await readFile(izKaynagi));
-    const sonrakiMeta = await jsonOku(join(kaynak, 'meta.json'), PaketMetaSemasi);
+    const sonrakiMeta = await this.surumluOku(join(kaynak, 'meta.json'), PAKET_SNAPSHOT_BICIMI);
     if (oncekiMeta.snapshotId !== sonrakiMeta.snapshotId) {
       throw new Error(`Failure bundle changed while being copied: ${testId}`);
     }
@@ -1903,6 +2133,9 @@ export class KobayDizini {
     traceDahil: boolean,
   ): Promise<string | null> {
     const cikisKoku = await this.varsayilanCikisiDogrula(hedef);
+    // Yerinde duran kopya daha yeni (ya da geçersiz) sürümlüyse kenara alınıp silinmez.
+    await this.mevcutSurumuDenetle(join(hedef, 'failure.json'), HATA_PAKETI_BICIMI);
+    await this.mevcutSurumuDenetle(join(hedef, 'meta.json'), PAKET_META_BICIMI);
     const geciciDizin = altYol(cikisKoku, `.tmp-${testId}-${randomUUID()}`);
     await mkdir(geciciDizin, { recursive: false });
     let izKaynagi: string | null = null;
@@ -1996,6 +2229,8 @@ export class KobayDizini {
   ): Promise<HataPaketiKopyaSonucu> {
     kimlikDogrula(testId, 'testId');
     await this.hataPaketiOku(testId);
+    // Kopya meta.json'u da okur: daha yeni sürümlü meta varsa hiçbir klasör açılmadan durulur.
+    await this.hataPaketleriniDenetle([testId]);
     const hedef = resolve(hedefKlasor);
     const traceDahil = secenekler.traceDahil === true;
     const sonuc = (iz: string | null): HataPaketiKopyaSonucu => (traceDahil && iz !== null
@@ -2019,9 +2254,16 @@ export class KobayDizini {
   }
 
   /** Yayımlanmış paketin gösterdiği koşu; paket yoksa ya da okunamıyorsa undefined. */
+  /**
+   * Paket daha yeni (ya da geçersiz) sürümlüyse hangi koşuyu koruduğu bilinemez:
+   * `SchemaVersionTooNew`/`SchemaError` yukarı taşınır ve budama hiçbir şey silmez.
+   */
   private async paketinKosusu(testId: string): Promise<string | undefined> {
+    const yol = join(this.hataPaketiYolu(testId), 'failure.json');
+    const okunan = await hamJsonOku(yol).catch(() => null);
+    if (okunan !== null) surumuDenetle(okunan.veri, HATA_PAKETI_BICIMI, this.gorunenAd(yol));
     try {
-      const paket = await jsonOku(join(this.hataPaketiYolu(testId), 'failure.json'), PaketKosuSemasi);
+      const paket = await jsonOku(yol, PaketKosuSemasi);
       return paket.runId;
     } catch {
       return undefined;

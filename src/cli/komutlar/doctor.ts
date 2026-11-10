@@ -106,10 +106,10 @@ export async function doctor(a: {
       if (adresKimlikliMi(baseUrl) && config.loginUrl !== undefined && adresKimlikliMi(config.loginUrl)) {
         // İki adres de kimlikli: tek bayrak kısır döngü açar, `kayitliAdresleriDenetle` ile aynı birleşik öneri.
         kimlikliAdresNotu = `${adresKimligiGizle(baseUrl)} and login URL ${adresKimligiGizle(config.loginUrl)} contain a username or password;`
-          + ' fix both in one command: `kobay project update --base-url <URL> --login-url <URL>`';
+          + ' fix both in one command: `kobay project update --url <URL> --login-url <URL>`';
       } else if (adresKimlikliMi(baseUrl)) {
         kimlikliAdresNotu = `${adresKimligiGizle(baseUrl)} contains a username or password;`
-          + ' fix it with `kobay project update --base-url <URL>`';
+          + ' fix it with `kobay project update --url <URL>`';
       } else if (config.loginUrl !== undefined && adresKimlikliMi(config.loginUrl)) {
         kimlikliAdresNotu = `login URL ${adresKimligiGizle(config.loginUrl)} contains a username or password;`
           + ' fix it with `kobay project update --login-url <URL>`';
@@ -149,7 +149,7 @@ export async function doctor(a: {
       ok: hedef,
       oneri: dizin === null
         ? 'no project; run `kobay project create --url <URL>` first'
-        : kimlikliAdresNotu ?? `${baseUrl === undefined ? 'target' : adresKimligiGizle(baseUrl)} is not reachable; start the app or fix the address with \`kobay project update --base-url <URL>\``,
+        : kimlikliAdresNotu ?? `${baseUrl === undefined ? 'target' : adresKimligiGizle(baseUrl)} is not reachable; start the app or fix the address with \`kobay project update --url <URL>\``,
     },
   ];
   const metin = ham

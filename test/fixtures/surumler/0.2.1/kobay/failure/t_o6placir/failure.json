@@ -1,0 +1,71 @@
+{
+  "snapshotId": "r_20261110130707_3twa-de7e199e",
+  "testId": "t_o6placir",
+  "runId": "r_20261110130707_3twa",
+  "result": {
+    "testId": "t_o6placir",
+    "runId": "r_20261110130707_3twa",
+    "startedAt": "2026-11-10T10:07:07.262Z",
+    "codeVersion": 1,
+    "status": "failed",
+    "verdict": "failed",
+    "finishedAt": "2026-11-10T10:07:11.017Z",
+    "failedStepIndex": 1,
+    "errorMessage": "Error: expect(locator).toBeVisible() failed\n\nLocator: getByRole('heading', { name: 'Welcome aboard' })\nExpected: visible\nTimeout: 3000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" getByRole('heading', { name: 'Welcome aboard' }) with timeout 3000ms\n  - waiting for getByRole('heading', { name: 'Welcome aboard' })\n\n\n   5 |   });\n   6 |   await test.step(\"1: See the welcome heading\", async () => {\n>  7 |     await expect(page.getByRole('heading', { name: 'Welcome aboard' })).toBeVisible({ timeout: 3000 });\n     |                                                                         ^\n   8 |   });\n   9 | });\n  10 |\n    at /work/project/.kobay/tests/t_o6placir.spec.ts:7:73",
+    "failureKind": "product_bug"
+  },
+  "steps": [
+    {
+      "stepIndex": 0,
+      "description": "Open the login page",
+      "status": "passed",
+      "durationMs": 34,
+      "screenshotPath": "step-0.png",
+      "htmlPath": "step-0.html"
+    },
+    {
+      "stepIndex": 1,
+      "description": "See the welcome heading",
+      "status": "failed",
+      "durationMs": 3043,
+      "errorMessage": "Error: expect(locator).toBeVisible() failed\n\nLocator: getByRole('heading', { name: 'Welcome aboard' })\nExpected: visible\nTimeout: 3000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" getByRole('heading', { name: 'Welcome aboard' }) with timeout 3000ms\n  - waiting for getByRole('heading', { name: 'Welcome aboard' })",
+      "screenshotPath": "step-1.png",
+      "htmlPath": "step-1.html"
+    }
+  ],
+  "code": "import { test, expect } from './_fixture';\ntest(\"Login heading is wrong on purpose\", async ({ page }) => {\n  await test.step(\"0: Open the login page\", async () => {\n    await page.goto('http://127.0.0.1:47391/login');\n  });\n  await test.step(\"1: See the welcome heading\", async () => {\n    await expect(page.getByRole('heading', { name: 'Welcome aboard' })).toBeVisible({ timeout: 3000 });\n  });\n});\n",
+  "failure": {
+    "rootCauseHypothesis": "The heading text is different from the plan",
+    "failureKind": "product_bug",
+    "recommendedFixTarget": {
+      "kind": "code",
+      "reference": "login page",
+      "rationale": "Wrong heading\n\nKobay hint: to find the source file, search the product code for the \"Received\" value or text from the error message."
+    },
+    "evidence": [
+      {
+        "kind": "screenshot",
+        "stepIndex": 1,
+        "path": "step-1.png",
+        "summary": "screenshot of the failing step"
+      },
+      {
+        "kind": "snapshot",
+        "stepIndex": 1,
+        "path": "step-1.html",
+        "summary": "DOM snapshot of the failing step"
+      }
+    ]
+  },
+  "mapDiff": {
+    "url": "http://127.0.0.1:47391/login",
+    "addedHeadings": [],
+    "removedHeadings": [],
+    "addedButtons": [],
+    "removedButtons": [],
+    "addedFormFields": [],
+    "removedFormFields": [],
+    "pageIdentityMatches": true,
+    "changed": false
+  }
+}

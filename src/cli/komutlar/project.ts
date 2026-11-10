@@ -400,7 +400,7 @@ export async function projectUpdate(a: {
       && a.login === undefined
     ) {
       throw new UsageError(
-        'No field to update; pass --base-url, --login-url, --docs-path, --login, or --brain/--model/--effort',
+        'No field to update; pass --url, --login-url, --docs, --login, or --brain/--model/--effort',
       );
     }
     if (a.url !== undefined) urlDogrula(a.url);
@@ -423,7 +423,7 @@ export async function projectUpdate(a: {
     // Kimlikli kayıtlı adresle yalnız o adresi düzelten güncelleme geçer (yeni adres zaten
     // `urlDogrula`'dan geçti); başka alan değiştirilirse önce adres düzeltilmeli.
     // İki adres de kimlikliyse tek bayrakla kısmi düzeltme geçmez (config kimlikli kalır) ve mesaj
-    // iki bayrağı birlikte önerir; aksi halde `--base-url` ile `--login-url` birbirini işaret ederdi.
+    // iki bayrağı birlikte önerir; aksi halde `--url` ile `--login-url` birbirini işaret ederdi.
     kayitliAdresleriDenetle({
       ...mevcut,
       baseUrl: yeniBaseUrl,

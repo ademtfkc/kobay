@@ -2,8 +2,8 @@ import {
   lstat, readdir, readFile, realpath, rm, unlink,
 } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
-import * as v from 'valibot';
-import { KosuSonucuSemasi } from './semalar.js';
+import { HATA_PAKETI_BICIMI, KOSU_BICIMI, PAKET_META_BICIMI } from './bicimler.js';
+import { surumluCoz, surumuDenetle, type SurumluBicim } from './surum.js';
 import type { KosuSonucu } from './tipler.js';
 import type { KobayDizini } from './dizin.js';
 
@@ -183,12 +183,50 @@ async function yolBoyutu(yol: string): Promise<number> {
   return toplam;
 }
 
+/**
+ * Koşu kaydını sürüm okuyucusuyla okur. Okunamayan, bozuk ya da bu kobay'dan
+ * daha yeni sürümlü kayıt `null` olur: o koşu aday listesine girmez, silinmez.
+ */
 async function kosuSonucuOku(yol: string): Promise<KosuSonucu | null> {
   try {
     const ham = JSON.parse(await readFile(join(yol, 'result.json'), 'utf8')) as unknown;
-    return v.parse(KosuSonucuSemasi, ham);
+    return surumluCoz(ham, KOSU_BICIMI, 'result.json');
   } catch {
     return null;
+  }
+}
+
+/**
+ * Budama, koşu kayıtlarının ve hata paketlerinin İÇERİĞİNE bakarak karar verir
+ * (hangi koşu hangi teste ait, paket hangi koşuyu koruyor). Bu kobay'dan daha
+ * yeni (ya da geçersiz) sürümlü bir kayıt görülürse o içerik yorumlanamaz:
+ * budama hiçbir şey silmeden `SchemaVersionTooNew`/`SchemaError` ile durur
+ * (çıkış 2; 0.9.0 Karar 4). Symlink ve düzenli olmayan dosya okunmaz (kökler
+ * zaten güvenli denetimden geçti, içleri ayrıca denetlenir); JSON olmayan
+ * kayıt bugünkü gibi "okunamaz" sayılır ve korunur.
+ */
+async function yeniSurumluKayitVarsaDur(
+  dizin: KobayDizini,
+  kokler: { runs: GuvenliKok; failure: GuvenliKok },
+): Promise<void> {
+  const denetle = async (yol: string, bicim: SurumluBicim<unknown>): Promise<void> => {
+    const bilgi = await lstat(yol).catch(() => null);
+    if (bilgi === null || !bilgi.isFile()) return;
+    let veri: unknown;
+    try {
+      veri = JSON.parse(await readFile(yol, 'utf8')) as unknown;
+    } catch {
+      return;
+    }
+    surumuDenetle(veri, bicim, genelYol(dizin.projeKoku, yol));
+  };
+  for (const girdi of (await readdir(kokler.runs.yol, { withFileTypes: true })).sort((a, b) => metinSirala(a.name, b.name))) {
+    if (girdi.isDirectory()) await denetle(join(kokler.runs.yol, girdi.name, 'result.json'), KOSU_BICIMI);
+  }
+  for (const girdi of (await readdir(kokler.failure.yol, { withFileTypes: true })).sort((a, b) => metinSirala(a.name, b.name))) {
+    if (!girdi.isDirectory()) continue;
+    await denetle(join(kokler.failure.yol, girdi.name, 'failure.json'), HATA_PAKETI_BICIMI);
+    await denetle(join(kokler.failure.yol, girdi.name, 'meta.json'), PAKET_META_BICIMI);
   }
 }
 
@@ -530,6 +568,7 @@ export async function depoyuBuda(
   const simdi = Date.now();
   const esik = simdi - olderThanDays * 24 * 60 * 60 * 1000;
   const kokler = await kokleriDogrula(dizin);
+  await yeniSurumluKayitVarsaDur(dizin, kokler);
   const testler = await testKimlikleri(kokler.tests);
   const kosular = await kosulariOku(kokler.runs);
   const gruplar = gruplandir(kosular);

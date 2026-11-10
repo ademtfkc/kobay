@@ -459,14 +459,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.8.1
+      - uses: ademtfkc/kobay@v0.9.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.8.1` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.9.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -620,7 +620,22 @@ test `not run` görünür.
 
 ## Durum ve sınırlar
 
-**0.8.0.** Kullanılabilir ama henüz pürüzsüz değil. 0.8.0 gerçek bir açık
+**0.9.0.** Genel yüzey donduruldu: [Kararlılık](#kararlılık) bölümünde
+listelenen komutlar, bayraklar, çıkış kodları, JSON zarfı, MCP araçları, Action
+girdi ve çıktıları ve `.kobay/` dosya adları 1.x boyunca kırılmaz. Bir sözleşme
+testi CLI bayraklarını, MCP araç ve alanlarını, zarf alanlarını, çıkış
+kodlarını ve Action girdi ve çıktılarını sabitler. kobay'ın `.kobay/` altındaki
+kendi JSON kayıtları (ayar, kimlik bilgisi, harita, plan, testler, koşu
+sonuçları, hata paketleri) artık `schemaVersion` taşır. Eski bir projede ilk
+komut `config.json`, `credentials.json`, `map.json` ve `plan/proposals.json`
+dosyalarını yeniden yazar; test kayıtları, koşu sonuçları ve hata paketleri
+alanı kobay onları bir sonraki yazışında alır. Yazma izni yoksa göç yalnız
+bellekte olur, dosyalar olduğu gibi kalır. Daha yeni bir kobay'ın yazdığı
+dosyaya dokunulmaz, komut çıkış kodu `2` ile durur.
+`project update`, `project create` gibi `--url` ve `--docs` alır; eski adlar
+uyarıyla çalışmaya devam eder.
+
+0.8.0 gerçek bir açık
 kaynak uygulamada (Vikunja v2.7.1) ölçüldü: `--login` artık giriş düğmesi
 `<button type="button">` olan formda çalışır; her koşu önce kayıtlı oturumu
 denetler, süresi dolduysa yeniden giriş yapar; koşu ortasında ölen oturum ya da
@@ -703,6 +718,88 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
   kobay Playwright worker'ını ve Chromium'u sonlandırır; SIGKILL yakalanamaz.
 - **`test delete` kanıt bırakır.** Test kaydını ve üretilen kodunu siler, ama
   `failure/<id>/`, `failure-out/<id>/` ve eski koşu klasörleri diskte kalır.
+
+## Kararlılık
+
+0.9.0'dan itibaren genel yüzey donmuştur. 0.9.x en az bir hafta kırıcı değişiklik
+olmadan durunca 1.0.0 aynı yüzeyle, yalnız yeni sürüm numarasıyla çıkar.
+kobay'ın yüzeyi üç katmandır.
+
+**Donmuş — 1.x boyunca kırılmaz.**
+
+- CLI: komut adları ve [Komutlar](#komutlar) tablosundaki bütün bayraklar,
+  varsayılan değerleri dahil; genel `--cwd` ve `--output`.
+- Çıkış kodları: `0` geçti · `1` düştü · `2` kullanım · `3` hedefe ulaşılamadı
+  ya da engellendi · `4` beyin ya da motor · `5` giriş ya da yetki. Birden çok
+  testte `test run` en yüksek kodla çıkar; `test report` testler düşse de `0`
+  ile çıkar.
+- JSON zarfı: `ok`, `exitCode`, `data`, `error.code`, `error.message`,
+  `warnings`, `brain.calls`, `brain.costUsd` ve her komutun `data` içindeki
+  belgelenmiş alanları.
+- Senin verdiğin ortam değişkenleri: `KOBAY_LOGIN_USER`, `KOBAY_LOGIN_PASS`,
+  `KOBAY_LOGIN_ORIGIN`, `KOBAY_MCP_ROOTS`, `KOBAY_MAX_BUDGET_USD`,
+  `KOBAY_MAX_BRAIN_CALLS`, `KOBAY_MAX_TOTAL_COST_USD`,
+  `KOBAY_OPENROUTER_MAX_TOKENS`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` /
+  `CODEX_API_KEY`.
+- kobay'ın üretilen testlere verdiği değişkenler: `KOBAY_BASE_URL`,
+  `KOBAY_RUN_DIR`, `KOBAY_REPORT_FILE`, `KOBAY_TEST_TIMEOUT_MS`,
+  `KOBAY_ACTION_TIMEOUT_MS`, `KOBAY_STORAGE_STATE`.
+- GitHub Action: 11 girdinin ve 3 çıktının adları ve anlamları, artifact adı
+  `kobay-report` ve pull request yorum işareti `<!-- kobay-report -->`.
+- MCP: 19 aracın adları ve belgelenmiş alanları.
+- `.kobay/` yerleşimi: `config.json`, `credentials.json`, `storageState.json`,
+  `map.json`, `plan/proposals.json`, `tests/<id>.json` ve `.spec.ts`,
+  `runs/<runId>/result.json`, `failure/<id>/` ve `failure-out/<id>/` adları.
+
+Bir sözleşme testi (`test/sozlesme/yuzey.test.ts`) CLI bayraklarını, MCP
+araçlarını ve alanlarını, zarf alanlarını, çıkış kodlarını ve Action'ın girdi ve
+çıktılarını sabitler; Komutlar tablosunu CLI ile, `schemas/plan.schema.json`'ı
+doğrulayıcıyla karşılaştırır. Bunlardan biri değişirse test düşer.
+
+**Sürümlü — göçle değişebilir.** kobay'ın `.kobay/` içinde sahip olduğu JSON
+dosyalarının iç biçimi: `config.json`, `credentials.json`, `map.json`,
+`plan/proposals.json`, `tests/<id>.json`, `runs/<runId>/result.json` ve hata
+paketinin `failure.json` ve `meta.json` dosyaları. Her biri bir `schemaVersion`
+taşır. `storageState.json` ve `pw-report.json` Playwright biçimidir; kanıt
+dosyaları (`steps`, `console`, `network`) sürümlenmez. Yeni kobay eski biçimi okur ve yeni biçimde
+yazar; bu senin değil kobay'ın işidir ve kırıcı değişiklik sayılmaz. Daha yeni
+bir `schemaVersion` gören eski kobay `2` ile çıkar ve yükseltmeni ister; dosyaya
+dokunmaz. (0.8.x ve öncesi bu kuralı bilmez.)
+
+**İç — her sürümde değişebilir.** `--brain sahte`, `KOBAY_SAHTE_YANIT_DIZINI`,
+`son-liste.json`, `logs/`, HTML raporun yapısı ve görünümü, metin çıktısının
+(`--output text`) ve hata mesajlarının ifadeleri, beyin istemleri, keşif
+sezgileri ve üretilen test şablonu (`_fixture.ts`). Metni değil
+`--output json`'ı ayrıştır.
+
+**Kırıcı sayılan.** Donmuş katmanda bir şeyin kaldırılması ya da adının
+değişmesi; bir çıkış kodunun anlamının değişmesi; bir zarf alanının kaldırılması
+ya da tipinin değişmesi; bir varsayılan davranışın değişmesi (ör. `prune`
+varsayılanı); eski bir `.kobay/`'ın okunamaz hale gelmesi. Kırıcı olmayan: yeni
+komut, bayrak, alan, ortam değişkeni ya da MCP aracı; iç katmandaki her şey;
+çıkış kodu aynı kalarak hatayı daha erken ya da daha açık bildiren düzeltme.
+
+**Kullanımdan kaldırma.** Adı değişen bir öğe eski adıyla 1.x boyunca çalışır;
+en erken 2.0'da kalkar. Eski adın her kullanımı stderr'e süreç başına bir kez tek
+satır yazar
+(`kobay: warning: --base-url is deprecated, use --url (removal: 2.0)`);
+`--output json` ile zarfa
+`warnings: [{ "code": "DEPRECATED", "message", "replacement" }]` da eklenir.
+Ortam değişkenlerinde de kural aynıdır; yeni ad önceliklidir. MCP'de bilinmeyen
+alan reddedilmez; yok sayılır ve yanıtın `warnings` alanında `UNKNOWN_FIELD`
+olarak bildirilir. Her kullanımdan kaldırma [CHANGELOG.md](CHANGELOG.md)'de
+"Deprecated" başlığında ve burada listelenir.
+
+Şu an kullanımdan kalkmış olanlar:
+
+| Eski ad | Yerine | Başlangıç | Kalkış |
+| --- | --- | --- | --- |
+| `project update --base-url` | `--url` | 0.9.0 | en erken 2.0 |
+| `project update --docs-path` | `--docs` | 0.9.0 | en erken 2.0 |
+
+**Güvenlik istisnası.** Bir güvenlik açığı başka yolla kapanmıyorsa 1.x içinde
+donmuş bir öğe kırılabilir. CHANGELOG'da gerekçesiyle "Security" ve "Breaking"
+yazılır (0.7.0'ın geçen testlerin trace'ini bırakması gibi).
 
 ## Güvenlik modeli
 
@@ -1251,8 +1348,8 @@ pakete yalnız analiz onlara atıf yaparsa girer. Trace pakette yoktur (oturum
 
 ### Komutlar
 
-Aşağıdaki bayraklar 0.8.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
-örtüşür.
+Aşağıdaki bayraklar 0.9.0'da `kobay --help` ve her alt komutun `--help` çıktısıyla
+örtüşür; ikisi ayrışırsa bir test (`test/sozlesme/yuzey.test.ts`) düşer.
 
 | Komut | Ne yapar |
 | --- | --- |
@@ -1261,7 +1358,7 @@ Aşağıdaki bayraklar 0.8.0'da `kobay --help` ve her alt komutun `--help` çık
 | `demo [--port <port>]` | Paketteki demo uygulamayı başlatır. Varsayılan port 3000; `0` boş birini seçer. |
 | `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi (Windows'ta ayrıca Git Bash'i) denetler. Proje içindeyken `0` ile çıkar (satır düşse bile); proje bulunamazsa `2` ile çıkar. |
 | `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Burada `.kobay/` oluşturur. `--url` bir `http://` ya da `https://` adresi olmalıdır. `--force` var olan bir projenin yalnız config'ini yeniden yazar; yenilerini vermedikçe beynini ve limitlerini korur. `--session-file` girişli bir Playwright `storageState` dosyasını içe alır (bkz. [İçe alınan oturum](#i̇çe-alınan-oturum-captcha-2fa)); `--auth-origin` `--login` ya da `--session-file` ister. |
-| `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Yalnız verdiğin alanları değiştirir; `--base-url` ve `--login-url` `http://` ya da `https://` olmalıdır. `--login` kimlik bilgilerini yeniden girer; `--auth-origin` auth origin listesinin tamamını değiştirir ve `--clear-auth-origins` gibi `--login` ister. |
+| `project update [--url <url>] [--login-url <url>] [--docs <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Yalnız verdiğin alanları değiştirir; `--url` ve `--login-url` `http://` ya da `https://` olmalıdır. `--base-url` ve `--docs-path`, `--url` ve `--docs` için kullanımdan kalkmış adlar olarak çalışmaya devam eder (bkz. [Kararlılık](#kararlılık)). `--login` kimlik bilgilerini yeniden girer; `--auth-origin` auth origin listesinin tamamını değiştirir ve `--clear-auth-origins` gibi `--login` ister. |
 | `project get` | Ayarlar, test sayısı, bir harita olup olmadığı. |
 | `explore [--seed <url>]... [--no-sitemap] [--max-pages <n>] [--depth <n>] [--session-file <path>]` | Uygulamayı keşfeder ve `.kobay/map.json`'ı yeniden yazar. Bayraklar aşağıda. |
 | `test plan generate [--hint <text>]` | Haritadan ve belgelerden test önerir. `--hint` serbest metindir, ör. "invoice flow only". |

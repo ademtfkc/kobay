@@ -460,14 +460,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.8.1
+      - uses: ademtfkc/kobay@v0.9.0
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.8.1` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.9.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -620,7 +620,22 @@ note; a test whose run folder is gone shows as `not run`.
 
 ## Status and limits
 
-**0.8.0.** Usable, not yet smooth. 0.8.0 was measured on a real open-source
+**0.9.0.** The public surface is frozen: the commands, flags, exit codes, JSON
+envelope, MCP tools, Action inputs and outputs and `.kobay/` file names listed
+under [Stability](#stability) do not break in 1.x. A contract test pins the
+CLI flags, MCP tools and fields, envelope fields, exit codes and the Action's
+inputs and outputs. kobay's own JSON records under `.kobay/` (config,
+credentials, map, plan, tests, run results, failure bundles) now carry
+`schemaVersion`. In an older project the first command rewrites `config.json`,
+`credentials.json`, `map.json` and `plan/proposals.json`; test records, run
+results and failure bundles get the field the next time kobay writes them.
+Without write access the migration happens in memory only and the files stay as
+they are. A file from a newer kobay stops the command with exit code `2` and is not
+touched.
+`project update` takes `--url` and `--docs` like `project create`; the old
+names still work with a warning.
+
+0.8.0 was measured on a real open-source
 app (Vikunja v2.7.1): `--login` now works with a `<button type="button">` login
 button; every run checks the saved session first and logs in again when it has
 expired; a session that dies mid-run, or a login refused by a rate limit (HTTP
@@ -706,6 +721,92 @@ What has and has not been exercised, so you can decide before installing:
 - **`test delete` leaves evidence behind.** It removes the test record and its
   generated code, but `failure/<id>/`, `failure-out/<id>/` and old run folders
   stay on disk.
+
+## Stability
+
+From 0.9.0 the public surface is frozen. 1.0.0 will be the same surface with a
+new version number, once 0.9.x has gone at least a week without a breaking change.
+kobay's surface falls into three layers.
+
+**Frozen — does not break in 1.x.**
+
+- CLI: command names and every flag in the [Commands](#commands) table,
+  default values included; the global `--cwd` and `--output`.
+- Exit codes: `0` passed · `1` failed · `2` usage · `3` target unreachable or
+  blocked · `4` brain or engine · `5` login or permission. With several tests,
+  `test run` exits with the highest code; `test report` exits `0` even when
+  tests failed.
+- JSON envelope: `ok`, `exitCode`, `data`, `error.code`, `error.message`,
+  `warnings`, `brain.calls`, `brain.costUsd`, and the documented fields of each
+  command's `data`.
+- Environment variables you set: `KOBAY_LOGIN_USER`, `KOBAY_LOGIN_PASS`,
+  `KOBAY_LOGIN_ORIGIN`, `KOBAY_MCP_ROOTS`, `KOBAY_MAX_BUDGET_USD`,
+  `KOBAY_MAX_BRAIN_CALLS`, `KOBAY_MAX_TOTAL_COST_USD`,
+  `KOBAY_OPENROUTER_MAX_TOKENS`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` /
+  `CODEX_API_KEY`.
+- Variables kobay passes to generated tests: `KOBAY_BASE_URL`, `KOBAY_RUN_DIR`,
+  `KOBAY_REPORT_FILE`, `KOBAY_TEST_TIMEOUT_MS`, `KOBAY_ACTION_TIMEOUT_MS`,
+  `KOBAY_STORAGE_STATE`.
+- GitHub Action: the names and meaning of its 11 inputs and 3 outputs, the
+  artifact name `kobay-report` and the pull request comment marker
+  `<!-- kobay-report -->`.
+- MCP: the names of the 19 tools and their documented fields.
+- `.kobay/` layout: the names of `config.json`, `credentials.json`,
+  `storageState.json`, `map.json`, `plan/proposals.json`,
+  `tests/<id>.json` and `.spec.ts`, `runs/<runId>/result.json`,
+  `failure/<id>/` and `failure-out/<id>/`.
+
+A contract test (`test/sozlesme/yuzey.test.ts`) pins the CLI flags, MCP tools
+and fields, envelope fields, exit codes and the Action's inputs and outputs, and
+checks the Commands table against the CLI and `schemas/plan.schema.json` against
+the validator. Changing any of them makes the test fail.
+
+**Versioned — may change, with a migration.** The inside of the JSON files
+kobay owns in `.kobay/`: `config.json`, `credentials.json`, `map.json`,
+`plan/proposals.json`, `tests/<id>.json`, `runs/<runId>/result.json` and the
+failure bundle's `failure.json` and `meta.json`. Each of them carries a
+`schemaVersion`. `storageState.json` and `pw-report.json` are Playwright's
+formats and the evidence files (`steps`, `console`, `network`) are not
+versioned. A newer kobay reads the older
+format and writes the new one; that is kobay's job, not yours, and it is not a
+breaking change. An older kobay that finds a newer `schemaVersion` stops with
+exit `2` and asks you to upgrade; it does not touch the file. (0.8.x and
+earlier do not know this rule.)
+
+**Internal — may change in any release.** `--brain sahte`,
+`KOBAY_SAHTE_YANIT_DIZINI`, `son-liste.json`, `logs/`, the structure and look of
+the HTML report, the wording of text output (`--output text`) and of error
+messages, brain prompts, exploration heuristics and the generated test
+template (`_fixture.ts`). Parse `--output json`, not text.
+
+**What counts as breaking.** Removing or renaming anything in the frozen
+layer; changing the meaning of an exit code; removing an envelope field or
+changing its type; changing a default behaviour (for example the default of
+`prune`); making an older `.kobay/` unreadable. Not breaking: a new command,
+flag, field, environment variable or MCP tool; anything in the internal layer;
+a fix that reports an error earlier or more clearly with the same exit code.
+
+**Deprecation.** A renamed item keeps working under its old name for all of
+1.x and is removed in 2.0 at the earliest. Each use of an old name prints one
+line to stderr, once per process
+(`kobay: warning: --base-url is deprecated, use --url (removal: 2.0)`); with
+`--output json` the envelope also gets
+`warnings: [{ "code": "DEPRECATED", "message", "replacement" }]`. The same rule
+applies to environment variables, where the new name wins. Over MCP, an unknown
+field is ignored and reported in the response's `warnings` as `UNKNOWN_FIELD`
+rather than rejected. Every deprecation is listed under "Deprecated" in
+[CHANGELOG.md](CHANGELOG.md) and here.
+
+Deprecated now:
+
+| Old name | Use | Since | Removal |
+| --- | --- | --- | --- |
+| `project update --base-url` | `--url` | 0.9.0 | 2.0 at the earliest |
+| `project update --docs-path` | `--docs` | 0.9.0 | 2.0 at the earliest |
+
+**Security exception.** If a security hole cannot be closed any other way, 1.x
+may break a frozen item. CHANGELOG then says "Security" and "Breaking" with the
+reason (as 0.7.0 did when it dropped traces of passing tests).
 
 ## Security model
 
@@ -1258,7 +1359,7 @@ without regenerating it.
 
 ### Commands
 
-The flags below match `kobay --help` and every subcommand's `--help` in 0.8.0.
+The flags below match `kobay --help` and every subcommand's `--help` in 0.9.0; a test (`test/sozlesme/yuzey.test.ts`) fails when the two drift apart.
 
 | Command | What it does |
 | --- | --- |
@@ -1267,7 +1368,7 @@ The flags below match `kobay --help` and every subcommand's `--help` in 0.8.0.
 | `demo [--port <port>]` | Starts the bundled demo app. Default port 3000; `0` picks a free one. |
 | `doctor` | Checks Node, brain CLIs, Chromium, project and target (and Git Bash on Windows). Exits `0` inside a project even when a row fails; exits `2` when no project is found. |
 | `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Creates `.kobay/` here. `--url` must be an `http://` or `https://` address. `--force` rewrites only an existing project's config, keeping its brain and limits unless you pass new ones. `--session-file` imports a logged-in Playwright `storageState` file (see [Imported session](#imported-session-captcha-2fa)); `--auth-origin` requires `--login` or `--session-file`. |
-| `project update [--base-url <url>] [--login-url <url>] [--docs-path <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Changes only the fields you pass; `--base-url` and `--login-url` must be `http://` or `https://`. `--login` re-enters the credentials; `--auth-origin` replaces the whole auth origin list and, like `--clear-auth-origins`, requires `--login`. |
+| `project update [--url <url>] [--login-url <url>] [--docs <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Changes only the fields you pass; `--url` and `--login-url` must be `http://` or `https://`. `--base-url` and `--docs-path` still work as deprecated names for `--url` and `--docs` (see [Stability](#stability)). `--login` re-enters the credentials; `--auth-origin` replaces the whole auth origin list and, like `--clear-auth-origins`, requires `--login`. |
 | `project get` | Settings, test count, whether a map exists. |
 | `explore [--seed <url>]... [--no-sitemap] [--max-pages <n>] [--depth <n>] [--session-file <path>]` | Explores the app and rewrites `.kobay/map.json`. Flags below. |
 | `test plan generate [--hint <text>]` | Proposes tests from the map and docs. `--hint` is free text, e.g. "invoice flow only". |

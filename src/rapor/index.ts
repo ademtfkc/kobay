@@ -9,11 +9,14 @@ import { fileURLToPath } from 'node:url';
 import * as v from 'valibot';
 import {
   AdimSonucuSemasi,
-  HataPaketiSemasi,
-  KobayConfigSemasi,
-  KosuSonucuSemasi,
+  CONFIG_BICIMI,
+  HATA_PAKETI_BICIMI,
+  KOSU_BICIMI,
   PublishCleanupFailed,
-  TestKaydiSemasi,
+  SchemaVersionTooNew,
+  TEST_BICIMI,
+  surumluCoz,
+  type SurumluBicim,
   adresKimligiGizle,
   altYol,
   guvenliKokuBul,
@@ -229,24 +232,30 @@ async function kobayDosyasiOku(dizin: KobayDizini, parcalar: readonly string[]):
   return icerik === null ? { durum: 'guvensiz' } : { durum: 'tamam', deger: icerik };
 }
 
+/**
+ * Sürümlü `.kobay` dosyasını sürüm okuyucusuyla okur (0.9.0 D1). Bu kobay'dan
+ * daha yeni sürümlü dosya "bozuk" sayılmaz: `SchemaVersionTooNew` yukarı
+ * taşınır ki kullanıcı "yükselt" mesajını görsün.
+ */
 async function kobayJsonOku<T>(
   dizin: KobayDizini,
   parcalar: readonly string[],
-  sema: v.GenericSchema<unknown, T>,
+  bicim: SurumluBicim<T>,
 ): Promise<Okuma<T>> {
   const okuma = await kobayDosyasiOku(dizin, parcalar);
   if (okuma.durum !== 'tamam') return okuma;
   try {
-    const sonuc = v.safeParse(sema, JSON.parse(okuma.deger.toString('utf8')) as unknown);
-    return sonuc.success ? { durum: 'tamam', deger: sonuc.output } : { durum: 'bozuk' };
-  } catch {
+    const veri = JSON.parse(okuma.deger.toString('utf8')) as unknown;
+    return { durum: 'tamam', deger: surumluCoz(veri, bicim, ['.kobay', ...parcalar].join('/')) };
+  } catch (hata: unknown) {
+    if (hata instanceof SchemaVersionTooNew) throw hata;
     return { durum: 'bozuk' };
   }
 }
 
 async function testKaydiOku(dizin: KobayDizini, id: string): Promise<TestKaydi> {
   kimlikDogrula(id, 'testId');
-  const okuma = await kobayJsonOku(dizin, ['tests', `${id}.json`], TestKaydiSemasi);
+  const okuma = await kobayJsonOku(dizin, ['tests', `${id}.json`], TEST_BICIMI);
   switch (okuma.durum) {
     case 'yok':
       throw new ReportInputError(`Test not found: ${id}; list the IDs with \`kobay test list\``);
@@ -629,7 +638,7 @@ async function kosununHataPaketi(dizin: KobayDizini, testId: string, runId: stri
   } catch {
     return null;
   }
-  const okuma = await kobayJsonOku(dizin, ['failure', testId, 'failure.json'], HataPaketiSemasi);
+  const okuma = await kobayJsonOku(dizin, ['failure', testId, 'failure.json'], HATA_PAKETI_BICIMI);
   if (okuma.durum !== 'tamam') return null;
   const paket = okuma.deger;
   return paket.runId === runId && paket.result.runId === runId ? paket : null;
@@ -670,7 +679,7 @@ async function testiTopla(
   if (kosuDizini.durum === 'guvensiz') {
     return okunamadi('The run directory is a symlink or not a directory, so its data was not read.');
   }
-  const kayit = await kobayJsonOku(dizin, ['runs', runId, 'result.json'], KosuSonucuSemasi);
+  const kayit = await kobayJsonOku(dizin, ['runs', runId, 'result.json'], KOSU_BICIMI);
   if (kayit.durum !== 'tamam') {
     return okunamadi('The run record (result.json) is missing, unreadable or not valid, so the outcome of this run is unknown.');
   }
@@ -679,7 +688,8 @@ async function testiTopla(
     return okunamadi('The run record belongs to a different test or run, so it was not used.');
   }
 
-  const adimOkuma = await kobayJsonOku(dizin, ['runs', runId, 'steps.json'], v.array(AdimSonucuSemasi));
+  // steps.json kanıttır, sürümlenmez (0.9.0 D1 kapsam dışı): göçü olmayan biçim, dizi kökü olduğu gibi okunur.
+  const adimOkuma = await kobayJsonOku(dizin, ['runs', runId, 'steps.json'], { sema: v.array(AdimSonucuSemasi), gocler: [] });
   // Eksik ya da bozuk steps.json raporu düşürmez: adım tablosu plan adımlarıyla kalır.
   const kosuAdimlari: AdimSonucu[] = adimOkuma.durum === 'tamam' ? adimOkuma.deger : [];
   const gercekKosu = await gercekKosuDizini(dizin, runId);
@@ -760,7 +770,7 @@ export { adresKimligiGizle };
 
 /** Proje adresi `config.json`'dan symlink/sert bağ izlenmeden okunur; okunamazsa `unknown`. */
 async function guvenliBaseUrl(dizin: KobayDizini): Promise<string> {
-  const okuma = await kobayJsonOku(dizin, ['config.json'], KobayConfigSemasi);
+  const okuma = await kobayJsonOku(dizin, ['config.json'], CONFIG_BICIMI);
   return okuma.durum === 'tamam' ? adresKimligiGizle(okuma.deger.baseUrl) : 'unknown';
 }
 

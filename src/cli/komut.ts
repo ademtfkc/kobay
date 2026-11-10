@@ -10,6 +10,7 @@ import {
   SchemaError,
 } from '../depo/index.js';
 import { CIKIS, type CikisKodu } from './cikis.js';
+import type { Uyari } from './uyari.js';
 
 export interface KomutSonucu {
   exitCode: number;
@@ -19,6 +20,8 @@ export interface KomutSonucu {
   metin?: string;
   /** JSON zarfında `data` ile birlikte taşınan hata (gövde bir hata nesnesi değil, satır dizisi olduğunda). */
   hata?: { code: string; message: string };
+  /** Eski ad gibi uyarılar: stderr'e süreç başına bir kez, JSON zarfında `warnings`. */
+  uyarilar?: Uyari[];
 }
 
 export class UsageError extends Error {

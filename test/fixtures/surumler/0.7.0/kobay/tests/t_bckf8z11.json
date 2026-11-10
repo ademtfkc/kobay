@@ -1,0 +1,23 @@
+{
+  "id": "t_bckf8z11",
+  "name": "Login heading is wrong on purpose",
+  "type": "frontend",
+  "createdFrom": "cli",
+  "status": "failed",
+  "planSteps": [
+    {
+      "type": "action",
+      "description": "Open the login page"
+    },
+    {
+      "type": "assertion",
+      "description": "See the welcome heading"
+    }
+  ],
+  "priority": "p2",
+  "url": "/login",
+  "codeVersion": 1,
+  "createdAt": "2026-11-10T10:07:14.917Z",
+  "updatedAt": "2026-11-10T10:07:19.589Z",
+  "lastRunId": "r_20261110130715_kklg"
+}

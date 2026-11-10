@@ -1,0 +1,23 @@
+{
+  "id": "t_yozxaw52",
+  "name": "Login page shows its heading",
+  "type": "frontend",
+  "createdFrom": "plan",
+  "status": "passed",
+  "planSteps": [
+    {
+      "type": "action",
+      "description": "Open the login page"
+    },
+    {
+      "type": "assertion",
+      "description": "See the login heading"
+    }
+  ],
+  "priority": "p1",
+  "url": "/login",
+  "codeVersion": 1,
+  "createdAt": "2026-11-10T10:07:14.635Z",
+  "updatedAt": "2026-11-10T10:07:21.123Z",
+  "lastRunId": "r_20261110130720_8trj"
+}

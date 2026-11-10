@@ -70,6 +70,8 @@ export async function planAccept(a: { cwd: string; all?: boolean; ids?: string[]
     const kabul = oneriler.filter((oneri) => secilenKimlikler.has(oneri.proposalId));
     const kalan = oneriler.filter((oneri) => !secilenKimlikler.has(oneri.proposalId));
     const testler = kabul.map(oneriyiTesteCevir);
+    // Biri daha yeni sürümlü bir kayda denk gelirse hiçbir test yazılmasın, öneriler değişmesin.
+    await dizin.testKayitlariniDenetle(testler.map((test) => test.id));
     await Promise.all(testler.map(async (test) => dizin.testYaz(test)));
     await dizin.onerileriYaz(kalan);
     return basarili(testler, `${testler.length} proposal${testler.length === 1 ? '' : 's'} accepted`);

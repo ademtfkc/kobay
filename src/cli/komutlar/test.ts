@@ -7,6 +7,7 @@ import {
   FileNotFound,
   adresKimligiGizle,
   metindekiKimligiGizle,
+  SchemaError,
   type HaritaFarki,
   type KobayDizini,
   type KosuSonucu,
@@ -381,6 +382,10 @@ export async function testRun(a: {
         'No tests to run; generate proposals with `kobay test plan generate` and accept them with `kobay test plan accept`',
       );
     }
+    // Koşu düşerse hata paketi yeniden yazılır. Seçilen testlerden birinin paketi daha yeni
+    // (ya da geçersiz) sürümlüyse hiçbir test koşmaz, hiçbir şey yazılmaz (çıkış 2; 0.9.0
+    // Karar 4). `--no-analysis` de paketi yazdığı için aynı denetimden geçer.
+    await dizin.hataPaketleriniDenetle(testler.map((test) => test.id));
     const sonuclar: Array<Record<string, unknown>> = [];
     const satirMetinleri: string[] = [];
     let exitCode: CikisKodu = CIKIS.GECTI;
@@ -451,11 +456,16 @@ export async function failureGet(a: { cwd: string; id: string; out?: string; inc
   });
 }
 
-/** Son hata paketindeki harita farkı; paket yok ya da okunamıyorsa bağlam olmadan devam edilir. */
+/**
+ * Son hata paketindeki harita farkı; paket yok ya da yarımsa bağlam olmadan devam edilir.
+ * Daha yeni sürümlü (`SchemaVersionTooNew`) ya da şemaya uymayan paket (`SchemaError`)
+ * yutulmaz: komut çıkış 2 ile durur (0.9.0 Karar 4).
+ */
 async function sonHaritaFarki(dizin: KobayDizini, testId: string): Promise<HaritaFarki | undefined> {
   try {
     return (await dizin.hataPaketiOku(testId)).mapDiff;
-  } catch {
+  } catch (hata: unknown) {
+    if (hata instanceof SchemaError) throw hata;
     return undefined;
   }
 }
@@ -477,8 +487,12 @@ export async function testRefresh(a: { cwd: string; id: string; run?: boolean })
       );
     }
 
+    // Paket her yan etkiden (beyin, harita, test yazımı) ÖNCE denetlenir ve okunur: failure.json
+    // ya da meta.json daha yeni (ya da geçersiz) sürümlüyse hiçbir şey yazılmaz.
+    await dizin.hataPaketleriniDenetle([a.id]);
+    const haritaFarki = await sonHaritaFarki(dizin, a.id);
     const { yeniSayfa, eskiSayfa } = await sayfaKesfiniYenile(dizin, test.url);
-    const [config, haritaFarki] = await Promise.all([dizin.configOku(), sonHaritaFarki(dizin, a.id)]);
+    const config = await dizin.configOku();
     const beyin = beyinOlustur(config.brain, process.env);
     const yeniPlan = await planYenile(
       beyin,

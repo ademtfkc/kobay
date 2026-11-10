@@ -1,0 +1,18 @@
+[
+  {
+    "stepIndex": 0,
+    "description": "Open the login page",
+    "status": "passed",
+    "durationMs": 36,
+    "screenshotPath": "step-0.png",
+    "htmlPath": "step-0.html"
+  },
+  {
+    "stepIndex": 1,
+    "description": "See the login heading",
+    "status": "passed",
+    "durationMs": 32,
+    "screenshotPath": "step-1.png",
+    "htmlPath": "step-1.html"
+  }
+]

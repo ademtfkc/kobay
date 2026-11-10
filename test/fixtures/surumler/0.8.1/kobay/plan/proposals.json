@@ -1,0 +1,22 @@
+[
+  {
+    "proposalId": "p_ae2932",
+    "title": "Records list is visible",
+    "description": "The records page lists records",
+    "priority": "p2",
+    "category": "records",
+    "feature": "records",
+    "type": "frontend",
+    "url": "/records",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Open the records page"
+      },
+      {
+        "type": "assertion",
+        "description": "See the first record"
+      }
+    ]
+  }
+]

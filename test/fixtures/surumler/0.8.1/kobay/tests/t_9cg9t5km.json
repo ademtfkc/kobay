@@ -1,0 +1,23 @@
+{
+  "id": "t_9cg9t5km",
+  "name": "Login page shows its heading",
+  "type": "frontend",
+  "createdFrom": "plan",
+  "status": "passed",
+  "planSteps": [
+    {
+      "type": "action",
+      "description": "Open the login page"
+    },
+    {
+      "type": "assertion",
+      "description": "See the login heading"
+    }
+  ],
+  "priority": "p1",
+  "url": "/login",
+  "codeVersion": 1,
+  "createdAt": "2026-11-10T10:07:24.835Z",
+  "updatedAt": "2026-11-10T10:07:33.153Z",
+  "lastRunId": "r_20261110130731_odva"
+}

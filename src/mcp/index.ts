@@ -33,6 +33,7 @@ import {
 } from '../cli/komutlar/ortak.js';
 import { PermissionError, UsageError, hataBilgisi, type KomutSonucu } from '../cli/komut.js';
 import { CIKIS } from '../cli/cikis.js';
+import { bilinmeyenAlanUyarilari, type Uyari } from '../cli/uyari.js';
 import { KobayDizini, adresKimligiGizle, metindekiKimligiGizle } from '../depo/index.js';
 
 interface McpAyarlari {
@@ -61,27 +62,47 @@ export function mcpGercekYol(yol: string): string {
  * `test_run`/`test_rerun` `blocked` (3) ve `inconclusive` (4) sonucu verdict'li
  * satır dizisiyle döner; beceri ajana bu durumda da verdict'i okumasını söyler.
  */
-function sonucDon(sonuc: KomutSonucu): {
-  content: [{ type: 'text'; text: string }];
+interface AracYaniti {
+  content: Array<{ type: 'text'; text: string }>;
   isError?: true;
-} {
+  /** Yalnız uyarı varsa: eski ad (`DEPRECATED`) ya da yok sayılan alan (`UNKNOWN_FIELD`). */
+  warnings?: Uyari[];
+  [ek: string]: unknown;
+}
+
+function sonucDon(sonuc: KomutSonucu): AracYaniti {
   const aracHatasi = sonuc.exitCode !== CIKIS.GECTI && sonuc.exitCode !== CIKIS.DUSTU;
-  const yanit = {
+  const yanit: AracYaniti = {
     // Yalnız hata zarfında mesaj metni arındırılır; başarılı sonuç gövdesi (makine sözleşmesi) aynen kalır.
     content: [{
       type: 'text' as const,
       text: aracHatasi ? metindekiKimligiGizle(JSON.stringify(sonuc.json) ?? 'null') : JSON.stringify(sonuc.json) ?? 'null',
-    }] as [{ type: 'text'; text: string }],
+    }],
     ...(aracHatasi ? { isError: true as const } : {}),
   };
-  return yanit;
+  return uyariEkle(yanit, sonuc.uyarilar ?? []);
+}
+
+/**
+ * Uyarılar yanıtın `warnings` alanına girer; ajan modeli çoğu istemcide yalnız `content`'i gördüğü için
+ * aynı liste ikinci bir metin bloğunda da verilir. İlk blok (komutun JSON gövdesi) değişmez.
+ */
+function uyariEkle(yanit: AracYaniti, uyarilar: readonly Uyari[]): AracYaniti {
+  if (uyarilar.length === 0) return yanit;
+  const hepsi = [...(yanit.warnings ?? []), ...uyarilar];
+  const ilk = yanit.content[0];
+  return {
+    ...yanit,
+    content: [...(ilk === undefined ? [] : [ilk]), { type: 'text', text: JSON.stringify({ warnings: hepsi }) }],
+    warnings: hepsi,
+  };
 }
 
 /**
  * Aracın kendi denetimlerinden (proje kökü, yol, giriş origin'i) atılan hata da
  * komut hatalarıyla aynı zarfı taşır: `{"error": {"code", "message"}}`.
  */
-function hataDon(hata: unknown): ReturnType<typeof sonucDon> {
+function hataDon(hata: unknown): AracYaniti {
   const { code, message } = hataBilgisi(hata);
   return {
     content: [{ type: 'text', text: JSON.stringify({ error: { code, message: metindekiKimligiGizle(message) } }) }],
@@ -89,7 +110,7 @@ function hataDon(hata: unknown): ReturnType<typeof sonucDon> {
   };
 }
 
-async function aracCalistir(islem: () => Promise<KomutSonucu>): Promise<ReturnType<typeof sonucDon>> {
+async function aracCalistir(islem: () => Promise<KomutSonucu>): Promise<AracYaniti> {
   try {
     return sonucDon(await islem());
   } catch (hata) {
@@ -238,6 +259,24 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     { name: 'kobay', version: KOBAY_SURUMU },
     { instructions: MCP_INSTRUCTIONS },
   );
+  /**
+   * Strict olmayan araçların ortak kaydı (0.9.0 spec Karar 1): bilinmeyen alan reddedilmez ve
+   * işleme girmez, yanıtın `warnings` alanında `UNKNOWN_FIELD` olarak bildirilir. Şema gevşek
+   * (`looseObject`) kurulur ki fazladan alanlar ayıklanmadan önce görülebilsin.
+   * `project_create` ve `prune` bilerek strict kalır (bilinmeyen alan reddedilir).
+   */
+  const gevsekArac = <A extends z.ZodRawShape>(
+    ad: string,
+    ayar: { description: string; annotations: typeof YAZAR | typeof YIKICI; inputSchema: A },
+    isleyici: (girdi: z.output<z.ZodObject<A>>) => Promise<AracYaniti>,
+  ): void => {
+    const sema = z.looseObject(ayar.inputSchema);
+    sunucu.registerTool(ad, { ...ayar, inputSchema: sema }, async (girdi: Record<string, unknown>) => {
+      const bilinmeyen = Object.keys(girdi).filter((alan) => !Object.hasOwn(ayar.inputSchema, alan));
+      const yanit = await isleyici(girdi as z.output<z.ZodObject<A>>);
+      return uyariEkle(yanit, bilinmeyenAlanUyarilari(bilinmeyen));
+    });
+  };
 
   sunucu.registerTool('project_create', {
     description: 'Creates the Kobay directory for a target project, plus optional login credentials.',
@@ -265,7 +304,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     });
   }));
 
-  sunucu.registerTool('project_update', {
+  gevsekArac('project_update', {
     description: 'Updates only the given fields in the existing Kobay project configuration.',
     annotations: YIKICI,
     inputSchema: {
@@ -295,7 +334,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     });
   }));
 
-  sunucu.registerTool('project_get', {
+  gevsekArac('project_get', {
     description: 'Returns the configuration and status summary of the current Kobay project.',
     annotations: YAZAR,
     inputSchema: PROJE_DIZINI_SEMASI,
@@ -318,7 +357,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     ...(olderThanDays === undefined ? {} : { olderThanDays }),
   })));
 
-  sunucu.registerTool('explore', {
+  gevsekArac('explore', {
     description: 'Explores the target app and updates the page map. Pages that redirect to a login form are recorded with requiresLogin and redirectedTo. seeds: extra start URLs on the project origin; a path like /records is resolved against the origin of the target URL, not its subpath (http://h/app + /records = http://h/records). sitemap: read /sitemap.xml (default true). maxPages: map size limit (default 40). depth: link depth (default 3).',
     annotations: YAZAR,
     inputSchema: {
@@ -336,7 +375,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     ...(depth === undefined ? {} : { derinlik: depth }),
   })));
 
-  sunucu.registerTool('plan_generate', {
+  gevsekArac('plan_generate', {
     description: 'Generates test proposals from the exploration data.',
     annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, hint: z.string().optional() },
@@ -345,7 +384,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     ...(hint === undefined ? {} : { hint }),
   })));
 
-  sunucu.registerTool('plan_accept', {
+  gevsekArac('plan_accept', {
     description: 'Accepts all of the generated test proposals, or the selected ones.',
     annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, all: z.boolean().optional(), ids: z.array(z.string()).optional() },
@@ -355,7 +394,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     ...(ids === undefined ? {} : { ids }),
   })));
 
-  sunucu.registerTool('test_create', {
+  gevsekArac('test_create', {
     description: 'Creates a test record from a plan JSON file.',
     annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, planPath: z.string() },
@@ -364,31 +403,31 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     return testCreate({ cwd, planPath: await projeIciYol(cwd, planPath, 'planPath') });
   }));
 
-  sunucu.registerTool('test_list', {
+  gevsekArac('test_list', {
     description: 'Lists the tests saved in the project.',
     annotations: YAZAR,
     inputSchema: PROJE_DIZINI_SEMASI,
   }, async ({ projectDir }) => aracCalistir(async () => testList({ cwd: await projeSec(projectDir) })));
 
-  sunucu.registerTool('test_get', {
+  gevsekArac('test_get', {
     description: 'Returns the given test record.',
     annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string() },
   }, async ({ projectDir, id }) => aracCalistir(async () => testGet({ cwd: await projeSec(projectDir), id })));
 
-  sunucu.registerTool('code_get', {
+  gevsekArac('code_get', {
     description: 'Returns the generated Playwright code of a test; when there is no code, generate it with test_run.',
     annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string() },
   }, async ({ projectDir, id }) => aracCalistir(async () => codeGet({ cwd: await projeSec(projectDir), id })));
 
-  sunucu.registerTool('test_delete', {
+  gevsekArac('test_delete', {
     description: 'Deletes a test record and its generated code.',
     annotations: YIKICI,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string() },
   }, async ({ projectDir, id }) => aracCalistir(async () => testDelete({ cwd: await projeSec(projectDir), id })));
 
-  sunucu.registerTool('test_run', {
+  gevsekArac('test_run', {
     description: 'Generates the code when missing, runs the test, and analyzes a failure; exit 1 = test failed, 3 = target down, 4 = engine.'
       + ' With noAnalysis: true it never calls the brain and runs existing code only; a test without generated code is blocked (exit 3),'
       + ' and a failure gets failure kind unknown.',
@@ -408,7 +447,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     ...(noAnalysis === true ? { noAnalysis: true } : {}),
   })));
 
-  sunucu.registerTool('test_report', {
+  gevsekArac('test_report', {
     description: 'Writes a static HTML report of the selected tests\' latest runs (default .kobay/report/) and, with summary,'
       + ' a Markdown summary with up to maxPrompts fix prompts. Reads only what is on disk; failed tests do not make it an error.'
       + ' Relative out and summary paths resolve against projectDir and must stay inside the project root. Screenshots and failed-run videos are not redacted.',
@@ -438,13 +477,13 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     });
   }));
 
-  sunucu.registerTool('test_rerun', {
+  gevsekArac('test_rerun', {
     description: 'Runs the existing test code again.',
     annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string() },
   }, async ({ projectDir, id }) => aracCalistir(async () => testRerun({ cwd: await projeSec(projectDir), id })));
 
-  sunucu.registerTool('test_refresh', {
+  gevsekArac('test_refresh', {
     description: 'For failureKind product_changed: re-explores the test page, updates the map in place, adapts the plan steps to the new UI, moves the test back to draft, and (unless run is false) regenerates and runs it.',
     annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string(), run: z.boolean().optional() },
@@ -454,7 +493,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     ...(run === undefined ? {} : { run }),
   })));
 
-  sunucu.registerTool('test_result', {
+  gevsekArac('test_result', {
     description: 'Returns the latest run result, or the run history, of a test.',
     annotations: YAZAR,
     inputSchema: { ...PROJE_DIZINI_SEMASI, id: z.string(), history: z.boolean().optional() },
@@ -464,7 +503,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     ...(history === undefined ? {} : { history }),
   })));
 
-  sunucu.registerTool('failure_get', {
+  gevsekArac('failure_get', {
     description: 'Copies the failure bundle of a test into the given directory; without out, .kobay/failure-out/<id> (a fixed path per test, refreshed in place).'
       + ' The Playwright trace.zip contains session cookies in plain text, so it is not copied unless includeTrace is true; the result gives its path.',
     annotations: YAZAR,
@@ -478,7 +517,7 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     return failureGet({ cwd, id, out: hedef, ...(includeTrace === true ? { includeTrace: true } : {}) });
   }));
 
-  sunucu.registerTool('doctor', {
+  gevsekArac('doctor', {
     description: 'Checks the Kobay installation, the target, and the working environment.',
     annotations: YAZAR,
     inputSchema: PROJE_DIZINI_SEMASI,

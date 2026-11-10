@@ -1149,10 +1149,10 @@ describe('hata mesajları eyleme yönlendirir', () => {
     const sonuc = await explore({ cwd });
     expect(sonuc.exitCode).toBe(2);
     expect(sonuc.mesaj).toContain('The address must not contain a username or password: http://[redacted]@localhost:3000');
-    expect(sonuc.mesaj).toContain('kobay project update --base-url <URL>');
+    expect(sonuc.mesaj).toContain('kobay project update --url <URL>');
     expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
     await expect(access(join(cwd, '.kobay', 'map.json'))).rejects.toThrow();
-    await expect(sayfaKesfiniYenile(dizin, 'http://localhost:3000/x')).rejects.toThrow(/kobay project update --base-url <URL>/);
+    await expect(sayfaKesfiniYenile(dizin, 'http://localhost:3000/x')).rejects.toThrow(/kobay project update --url <URL>/);
 
     // Kayıtlı giriş adresi kimlikliyse de aynı ret; öneri --login-url.
     const cwd2 = await geciciDizin('kobay-mesaj-');
@@ -1184,7 +1184,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
     ]) {
       expect(sonuc.exitCode).toBe(2);
       expect(JSON.stringify(sonuc)).toContain('The address must not contain a username or password: http://[redacted]@uygulama.test');
-      expect(JSON.stringify(sonuc)).toContain('kobay project update --base-url <URL>');
+      expect(JSON.stringify(sonuc)).toContain('kobay project update --url <URL>');
       expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
     }
     expect(kosturSahte).not.toHaveBeenCalled();
@@ -1233,7 +1233,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
       await projectUpdate({ cwd, loginUrl: 'http://localhost:3000/giris' }),
     ]) {
       expect(sonuc.exitCode).toBe(2);
-      expect(sonuc.mesaj).toContain('fix it with `kobay project update --base-url <URL>`');
+      expect(sonuc.mesaj).toContain('fix it with `kobay project update --url <URL>`');
       expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
     }
     expect(await readFile(join(cwd, '.kobay', 'config.json'), 'utf8')).not.toContain('codex');
@@ -1271,7 +1271,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
       // Güncellemeden sonra hâlâ kimlikli olan her adres listelenir.
       for (const ad of kalanlar) expect(sonuc.mesaj).toContain(ad);
       if (kalanlar.length === 1) expect(sonuc.mesaj).not.toContain(kalanlar[0] === 'base URL' ? 'login URL' : 'base URL ');
-      expect(sonuc.mesaj).toContain('fix both in one command: `kobay project update --base-url <URL> --login-url <URL>`');
+      expect(sonuc.mesaj).toContain('fix both in one command: `kobay project update --url <URL> --login-url <URL>`');
       expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
     }
     const yapilandirma = await readFile(join(cwd, '.kobay', 'config.json'), 'utf8');
@@ -1287,7 +1287,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
     await dizin.haritaYaz({ baseUrl: 'http://admin:Hunter2Pass@localhost:3000', loggedIn: false, exploredAt: '2026-09-17T00:00:00.000Z', pages: [] });
     const sonuc = await planGenerate({ cwd });
     expect(sonuc.exitCode).toBe(2);
-    expect(sonuc.mesaj).toContain('fix it with `kobay project update --base-url <URL>`');
+    expect(sonuc.mesaj).toContain('fix it with `kobay project update --url <URL>`');
     expect(JSON.stringify(sonuc)).not.toContain('Hunter2Pass');
     await expect(dizin.onerileriOku()).resolves.toEqual([]);
   });
@@ -1340,7 +1340,9 @@ describe('hata mesajları eyleme yönlendirir', () => {
       login: { username: 'u', password: 'p' }, authOrigins: ['https://sso.test'],
       beyin: { adaptor: 'claude', model: 'claude-opus-5-5', effort: 'high' }, force: true,
     })).exitCode).toBe(0);
-    const ham = JSON.parse(await readFile(join(cwd, '.kobay', 'config.json'), 'utf8')) as Record<string, unknown>;
+    // `schemaVersion` dosyanın sürüm zarfıdır (Katman B iç biçimi), config gövdesi değil; `project get` onu göstermez.
+    const { schemaVersion, ...ham } = JSON.parse(await readFile(join(cwd, '.kobay', 'config.json'), 'utf8')) as Record<string, unknown>;
+    expect(schemaVersion).toBe(1);
     expect(ham).toHaveProperty('authOrigins');
     expect(ham).toHaveProperty('docsPath');
     const al = await projectGet({ cwd });
@@ -1353,11 +1355,11 @@ describe('hata mesajları eyleme yönlendirir', () => {
     sahteler.hedefAyakta = true;
     for (const [config, beklenen] of [
       [{ baseUrl: 'http://admin:Hunter2Pass@localhost:3000' },
-        '✗ target — http://[redacted]@localhost:3000 contains a username or password; fix it with `kobay project update --base-url <URL>`'],
+        '✗ target — http://[redacted]@localhost:3000 contains a username or password; fix it with `kobay project update --url <URL>`'],
       [{ baseUrl: 'http://localhost:3000', loginUrl: 'http://admin:Hunter2Pass@localhost:3000/giris' },
         '✗ target — login URL http://[redacted]@localhost:3000/giris contains a username or password; fix it with `kobay project update --login-url <URL>`'],
       [{ baseUrl: 'http://admin:Hunter2Pass@localhost:3000', loginUrl: 'http://admin:Hunter2Pass@localhost:3000/giris' },
-        '✗ target — http://[redacted]@localhost:3000 and login URL http://[redacted]@localhost:3000/giris contain a username or password; fix both in one command: `kobay project update --base-url <URL> --login-url <URL>`'],
+        '✗ target — http://[redacted]@localhost:3000 and login URL http://[redacted]@localhost:3000/giris contain a username or password; fix both in one command: `kobay project update --url <URL> --login-url <URL>`'],
     ] as const) {
       const cwd = await geciciDizin('kobay-doctor-');
       await KobayDizini.ac(cwd, { ...config, beyin: { adaptor: 'sahte' } });
