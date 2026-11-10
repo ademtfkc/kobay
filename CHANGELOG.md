@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   429 note) also when the page settles after the 1 s URL wait. Before, a slow
   machine could report it as a plain rejected login. No session was written in
   either case.
+- `kobay test refresh` now rejects a page whose main frame moved to another
+  origin while kobay was reading it, even if it came back, and reports the
+  origin error instead of Playwright's "Execution context was destroyed". A
+  silent SSO round-trip in that short window also fails the refresh
+  (closed-safe); run it again.
 
 ## [0.8.0] - 2026-11-09
 

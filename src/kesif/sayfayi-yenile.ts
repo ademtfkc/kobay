@@ -1,7 +1,7 @@
 import { access } from 'node:fs/promises';
-import { chromium, type BrowserContext, type Page } from '@playwright/test';
+import { chromium, type BrowserContext, type Frame, type Page } from '@playwright/test';
 import { authOriginleriDogrula, type Harita, type Kimlik, type OturumDurumu, type Sayfa } from '../depo/index.js';
-import { DURULMA, istekIzle, sayfaDurulsun, sinirli } from './gezgin.js';
+import { DURULMA, istekIzle, PageNotRespondingError, sayfaDurulsun, sinirli } from './gezgin.js';
 import { girisFormuBul } from './giris.js';
 import {
   girisKorumasiBul,
@@ -115,6 +115,13 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
   // Giriş yalnız yönlendirme olduğunda denenir; hedef sayfadaki bir parola
   // alanı (örn. "şifre değiştir" formu) giriş sanılmasın.
   // Ayrı giriş sitesine (SSO) yönlendirmede yol aynı olsa da origin farklıdır; o da yönlendirmedir.
+  const kokenDisi = (adres: string): boolean => {
+    try {
+      return new URL(adres).origin !== hedefOrigin;
+    } catch {
+      return true;
+    }
+  };
   const yerindeMi = (): boolean => {
     const adres = new URL(sayfa.url());
     return adres.origin === hedefOrigin && adres.pathname === beklenenYol;
@@ -154,12 +161,12 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
       }
     }
 
+    // Başka kökene yönlenmede oturum suçlanmaz; varılan adres (jeton taşıyabilir) yazılmaz.
+    const baskaKoken = (): Error =>
+      new Error(`Page could not be refreshed: asked for ${beklenenYol}, the page moved to another origin`);
     const varilan = new URL(sayfa.url());
     if (!(await kabulEdilir())) {
-      // Başka kökene yönlenmede oturum suçlanmaz; varılan adres (jeton taşıyabilir) yazılmaz.
-      if (varilan.origin !== hedefOrigin) {
-        throw new Error(`Page could not be refreshed: asked for ${beklenenYol}, the page moved to another origin`);
-      }
+      if (varilan.origin !== hedefOrigin) throw baskaKoken();
       // Yeniden giriş reddedildiyse sayfanın gösterdiği uyarı (maskeli, etiketli) mesaja eklenir.
       const not = giris?.basarili === false ? girisSayfaMesajiNotu(giris.sayfaMesaji) : '';
       throw new Error(
@@ -167,11 +174,44 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
       );
     }
     const maske = haritaMaskesi(oturum === undefined ? [] : oturumDegerleri(oturum), secenekler.kimlik?.password);
-    // Ana iş parçacığı kilitlenen sayfa yenilemeyi asılı bırakmaz.
-    const hamOzet = await sinirli(sayfaOzeti(sayfa, hedefOrigin), sayfaZamanAsimiMs, 'page summary');
-    const ozet = maske.bos ? hamOzet : sayfaMetinleriniGizle(hamOzet, maske);
-    await girisKorumasiSonDenetim(context);
-    return ozet;
+    // Özet penceresinde ana çerçevede yabancı kökenli bir belge bir kez bile yerleştiyse (sonra hedefe
+    // dönse de) özet reddedilir: son URL'ye bakmak A → yabancı → A dönüşünü kaçırır. Kapalı güvenli:
+    // bu pencerede sessiz SSO dönüşü de yenilemeyi düşürür.
+    let yabanciGoruldu = false;
+    let belgeDegisti: () => void = () => undefined;
+    const belgeDegisimi = new Promise<void>((coz) => { belgeDegisti = coz; });
+    const gezinmeyiDinle = (cerceve: Frame): void => {
+      if (cerceve !== sayfa.mainFrame()) return;
+      if (kokenDisi(cerceve.url())) yabanciGoruldu = true;
+      belgeDegisti();
+    };
+    const yabanciyaGecti = (): boolean => yabanciGoruldu || kokenDisi(sayfa.url());
+    sayfa.on('framenavigated', gezinmeyiDinle);
+    try {
+      let hamOzet: Sayfa;
+      try {
+        // Ana iş parçacığı kilitlenen sayfa yenilemeyi asılı bırakmaz.
+        hamOzet = await sinirli(sayfaOzeti(sayfa, hedefOrigin), sayfaZamanAsimiMs, 'page summary');
+      } catch (hata: unknown) {
+        // Durulmadan sonra gelen istemci yönlendirmesi özeti yarıda keserse Playwright "Execution context
+        // was destroyed" verir; bu hata `sayfa.url()` yeni belgeye geçmeden birkaç ms önce gelir. Yeni
+        // belgenin yerleşmesi (tavanlı) beklenir, karar yine köken denetimine gider.
+        if (!(hata instanceof PageNotRespondingError)) {
+          let zamanlayici: NodeJS.Timeout | undefined;
+          await Promise.race([belgeDegisimi, new Promise<void>((coz) => { zamanlayici = setTimeout(coz, DURULMA.iptalTavaniMs); })]);
+          clearTimeout(zamanlayici);
+        }
+        if (yabanciyaGecti()) throw baskaKoken();
+        throw hata;
+      }
+      const ozet = maske.bos ? hamOzet : sayfaMetinleriniGizle(hamOzet, maske);
+      await girisKorumasiSonDenetim(context);
+      // Dönüşten hemen önce: özet sırasında ya da sonra başka kökene geçildiyse özet atılır (keşifteki gibi).
+      if (yabanciyaGecti()) throw baskaKoken();
+      return ozet;
+    } finally {
+      sayfa.off('framenavigated', gezinmeyiDinle);
+    }
   } catch (hata: unknown) {
     // Çalışma hatası (ör. `/login/<jeton>` yoluna yönlenme mesajı) da oturum değerlerinden arınır.
     if (oturum !== undefined && hata instanceof Error) {

@@ -76,6 +76,18 @@ const SAYAN_SAYFALAR: Record<string, string> = {
 const YABANCIYA_GIDEN = (hedef: string) => `<!doctype html><title>Go</title><button>x</button><script>
   setTimeout(() => { location.href = ${JSON.stringify(hedef)}; }, 60);
 </script>`;
+/**
+ * Durulmadan SONRA, özet okunurken başka kökene geçen sayfa: kobay bağlantı adresini okuduğu anda
+ * yönlenir (CI'da yavaş makinede 60 ms'lik zamanlayıcının durulma penceresinden sonra ateşlenmesinin
+ * zamanlamadan bağımsız kopyası). Bağlantı okuması (`evaluateAll`) yarıda kesilir: bağlam yok hatası.
+ */
+const OZETTE_YABANCIYA = (hedef: string) => `<!doctype html><title>Go</title><a href="/x">x</a><script>
+  const asil = Object.getOwnPropertyDescriptor(HTMLAnchorElement.prototype, 'href');
+  Object.defineProperty(HTMLAnchorElement.prototype, 'href', { configurable: true, get() {
+    location.href = ${JSON.stringify(hedef)};
+    return asil.get.call(this);
+  } });
+</script>`;
 /** Yabancı kökendeki belge: içine gözlemci kurulursa (kobay script'i çalışırsa) sunucuya haber verir. */
 const YABANCI_BELGE = `<!doctype html><title>Foreign</title><script>
   const asil = MutationObserver.prototype.observe;
@@ -116,6 +128,14 @@ beforeAll(async () => {
       asiliYanitlar.push(() => yanit.end());
       return;
     }
+    if ((istek.url ?? '').startsWith('/yavas-geri-don')) {
+      // Yavaş yabancı belge hemen hedef kökene geri gönderir (A → yabancı → A).
+      setTimeout(() => {
+        yanit.writeHead(200, { 'content-type': 'text/html' });
+        yanit.end(`<!doctype html><title>Back</title><script>location.replace(${JSON.stringify(`${kok}/sabit`)});</script>`);
+      }, 1_000);
+      return;
+    }
     if ((istek.url ?? '').startsWith('/fetchli')) {
       yanit.writeHead(200, { 'content-type': 'text/html' });
       yanit.end("<!doctype html><title>F</title><script>fetch('/asili-belge');</script>");
@@ -152,6 +172,11 @@ beforeAll(async () => {
     else if (yol === '/gec-cizim') yanit.end(GEC_CIZIM);
     else if (SAYAN_SAYFALAR[yol] !== undefined) yanit.end(sayanGozcu(SAYAN_SAYFALAR[yol]));
     else if (yol === '/yabanciya') yanit.end(YABANCIYA_GIDEN(`${yabanciKok}/belge`));
+    else if (yol === '/ozette-yabanciya') yanit.end(OZETTE_YABANCIYA(`${yabanciKok}/belge`));
+    else if (yol === '/ozette-bos') yanit.end(OZETTE_YABANCIYA('about:blank'));
+    // Yabancı yanıt 1 s gecikir: yönlenme özet sırasında başlar, Playwright sonraki okumayı yeni belge
+    // yerleşene dek bekletir; yabancı belge hedef kökene geri gönderir.
+    else if (yol === '/ozette-yavas-donen') yanit.end(OZETTE_YABANCIYA(`${yabanciKok}/yavas-geri-don`));
     else if (yol === '/yabanciya-asili') yanit.end(YABANCIYA_GIDEN(`${yabanciKok}/asili-belge`));
     else if (yol === '/donuk') yanit.end(DONUK);
     else if (yol === '/gec-yabanci') {
@@ -388,6 +413,28 @@ describe('durulma beklemesi: Codex 2. tur', () => {
       .rejects.toThrow(/could not be refreshed.*another origin/);
     await new Promise((coz) => setTimeout(coz, 300));
     expect(yabanciGozlem).toBe(0);
+  }, 30_000);
+
+  /** Yenileme köken hatasıyla reddedilir ve yabancı belgede kobay'ın bekleme kodu çalışmaz. */
+  const yenilemeKokenHatasi = async (url: string): Promise<void> => {
+    yabanciGozlem = 0;
+    const dizin = await geciciDizinAc('kobay-durulma-ozette-yabanci-');
+    await expect(sayfayiYenile({ baseUrl: kok, url, storageStateYolu: join(dizin, 'yok.json') }))
+      .rejects.toThrow(/could not be refreshed.*another origin/);
+    await new Promise((coz) => setTimeout(coz, 300));
+    expect(yabanciGozlem).toBe(0);
+  };
+
+  it('P1-1 (a): durulmadan sonra özet yarıda kesilirse (bağlam yok) köken hatası verir', async () => {
+    await yenilemeKokenHatasi('/ozette-yabanciya');
+  }, 30_000);
+
+  it('P1-1 (b): özet sırasında yabancıya yönelip hedef kökene dönen belge yine köken hatası verir', async () => {
+    await yenilemeKokenHatasi('/ozette-yavas-donen');
+  }, 30_000);
+
+  it('P1-1 (c): ağ isteği olmayan gezinme (about:blank) özeti keserse yeni belge beklenir, köken hatası verir', async () => {
+    await yenilemeKokenHatasi('/ozette-bos');
   }, 30_000);
 });
 
