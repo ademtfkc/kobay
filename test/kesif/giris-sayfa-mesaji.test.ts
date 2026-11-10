@@ -259,6 +259,40 @@ beforeAll(async () => {
           yanit.end(sayfa(form(`http://localhost:${port}/sso-429`)));
           return;
         }
+        // Gerileme: gönderim tıklamadan sonra başlar (tıklama gezinmeyi beklemez) ve 429 yanıtı URL
+        // bütçesinden (1 sn) sonra gelir; geç yerleşen belge SSO origin'inde kalır.
+        // Gerileme: aynı köken, başka adres. Gönderim tıklamadan sonra başlar, ret sayfası URL
+        // bütçesinden (1 sn) sonra yeni adreste yerleşir; geç gezinme başarı sayılmamalı.
+        if (yol === '/gec-ret-baska') {
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.end(sayfa(form('/gec-ret-sonuc')
+            + '<script>document.querySelector(\'form\').addEventListener(\'submit\',(e)=>{e.preventDefault();'
+            + 'setTimeout(()=>{e.target.submit();},200);});</script>'));
+          return;
+        }
+        if (yol === '/gec-ret-sonuc') {
+          setTimeout(() => {
+            yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+            yanit.end(sayfa(`<div role="alert">Late wrong credentials</div>${form('/gec-ret-sonuc')}`));
+          }, 1_500);
+          return;
+        }
+        if (yol === '/sso-gec') {
+          const adres = sunucu?.address();
+          const port = typeof adres === 'object' && adres !== null ? adres.port : 0;
+          yanit.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+          yanit.end(sayfa(form(`http://localhost:${port}/sso-gec-429`)
+            + '<script>document.querySelector(\'form\').addEventListener(\'submit\',(e)=>{e.preventDefault();'
+            + 'setTimeout(()=>{e.target.submit();},200);});</script>'));
+          return;
+        }
+        if (yol === '/sso-gec-429') {
+          setTimeout(() => {
+            yanit.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '45' });
+            yanit.end(sayfa('<p>Too Many Requests</p>'));
+          }, 1_500);
+          return;
+        }
         if (yol === '/sso-429') {
           yanit.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '45' });
           yanit.end(sayfa('<p>Too Many Requests</p>'));
@@ -572,6 +606,31 @@ describe('A6: giriş reddinde sayfa uyarısı (gerçek Chromium)', () => {
       expect((hata as Error).message).toContain('Login did not return to the app origin');
       expect((hata as Error).message).toContain('HTTP 429');
       expect((hata as Error).message).not.toContain(PAROLA);
+    } finally {
+      await baglam.close();
+    }
+  });
+
+  it('URL bütçesinden sonra app origin\'inde başka adrese yerleşen ret sayfası başarı sayılmaz', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    const sonuc = await girisDene(`${appOrigin}/gec-ret-baska`);
+    expect(sonuc.basarili).toBe(false);
+  });
+
+  it('P2-3: URL bütçesinden sonra SSO origin\'inde yerleşen 429 belgesi de LoginDidNotReturnError verir', async (context) => {
+    if (!tarayiciMumkun(context)) return;
+    if (tarayici === undefined) throw new Error('tarayıcı yok');
+    const yabanci = `http://localhost:${new URL(appOrigin).port}`;
+    const baglam = await tarayici.newContext({ serviceWorkers: 'block' });
+    try {
+      const sekme = await baglam.newPage();
+      await sekme.goto(`${appOrigin}/sso-gec`, { waitUntil: 'domcontentloaded' });
+      const giris = await girisFormuBul(sekme);
+      if (giris === null) throw new Error('form yok');
+      const kimlik: Kimlik = { username: KULLANICI, password: PAROLA, origin: appOrigin, authOrigins: [yabanci] };
+      const hata = await girisiGonder(sekme, giris, kimlik, appOrigin, [yabanci], 1_000, 1_000, 5_000).then(() => null, (e: unknown) => e);
+      expect(hata).toBeInstanceOf(LoginDidNotReturnError);
+      expect((hata as Error).message).toContain('HTTP 429');
     } finally {
       await baglam.close();
     }

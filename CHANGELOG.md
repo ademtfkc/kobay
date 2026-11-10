@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-09
+
+### Fixed
+
+- On Windows, two runs started at the same time in a fresh project no longer end
+  as `inconclusive` (env) with `EPERM`. Both runs wrote the shared
+  `.kobay/playwright.config.ts` and `.kobay/tests/_fixture.ts` at once and the
+  second rename onto the same file failed. Workspace setup is now queued per
+  project inside one process, and atomic writes retry a busy rename (and the
+  read before it) on `EPERM`/`EACCES`/`EBUSY` for up to 2 seconds before
+  failing with the original error.
+- README.tr: the five in-page links to the imported-session section now
+  resolve.
+- A login that goes through an allowed SSO origin and is answered there with
+  HTTP 429 now fails with "Login did not return to the app origin" (with the
+  429 note) also when the page settles after the 1 s URL wait. Before, a slow
+  machine could report it as a plain rejected login. No session was written in
+  either case.
+- `kobay test refresh` now rejects a page whose main frame moved to another
+  origin while kobay was reading it, even if it came back, and reports the
+  origin error instead of Playwright's "Execution context was destroyed". A
+  silent SSO round-trip in that short window also fails the refresh
+  (closed-safe); run it again.
+
 ## [0.8.0] - 2026-11-09
 
 ### Fixed
@@ -1223,7 +1247,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/ademtfkc/kobay/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ademtfkc/kobay/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/ademtfkc/kobay/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/ademtfkc/kobay/compare/v0.5.0...v0.6.0
