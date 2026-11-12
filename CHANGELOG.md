@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-13
+
+### Fixed
+
+- `test run` (and MCP `test_run`): what the run prints now matches what
+  `test result` and `test report` show afterwards when the brain fails
+  part-way; `test list` shows the test's lifecycle state (a draft whose code
+  could not be generated stays `draft`).
+  - A brain error during code generation (for example `cost_cap`) used to
+    leave nothing on disk: the run printed `inconclusive`, the report then said
+    `not run`. The `inconclusive` result is now written as the test's latest
+    run, with the reason. A draft stays `draft`, so the next run generates the
+    code. The JSON row gains `notRun: true`, and `runId` when the record could
+    be attached (not when another kobay run updated the test meanwhile).
+  - A test that ran and failed, whose failure analysis then hit a brain error,
+    used to print `inconclusive` while `test list` said `failed`. It is now
+    `failed` everywhere, with failure kind `unknown` (`not analysed` in text and
+    in the report) and a failure bundle written without analysis, as with
+    `--no-analysis`. The JSON row gains `analysisError: { code, message }`. The
+    exit code stays `4`, as in 0.9.0, because a brain error happened.
+  - If writing that bundle also fails, the row keeps `failed` and its
+    `runId` and gains `bundleError: { code, message }`; it no longer turns into
+    `inconclusive` without a `runId`. If the bundle was written but the
+    failure kind could not be saved to the run result, the row gains
+    `resultError: { code, message }` and has no `failureKind`, as on disk.
+  - A `kobay:` failure that kobay classifies locally (no brain needed) keeps
+    its kind (`test_bug`, `env`) and gets no `analysisError`, even after the
+    total cost limit was reached.
+- `test run --all` after the total cost limit (`KOBAY_MAX_TOTAL_COST_USD`)
+  refuses a call before it starts: the long limit message is printed once,
+  not once per test, and that run makes no more brain calls. Tests that still
+  need code generation are not attempted and are reported as `inconclusive`
+  (not run because the total cost limit was reached; exit `4`). Tests that
+  already have code still run, and a failure gets a bundle without analysis,
+  like `--no-analysis`. The text output ends with a short summary: how many
+  tests did not run, spent against the total limit, the per-call `claude`
+  reservation, and the `kobay test run <ids>` command for the remaining tests.
+  When `claude` stops at its own per-call limit (`KOBAY_MAX_BUDGET_USD`), only
+  that test is affected and the run goes on to the next test, as in 0.9.0; its
+  line names the per-call limit.
+- `test run` no longer overwrites a test record that another kobay run updated
+  while this run was working on other tests: the not-run record is written only
+  if the test record is still the one this run read.
+- README "Cost and data": explains that each `claude` call reserves the whole
+  per-call budget, so about the total limit minus one call is usable.
+
+- README: the `doctor` row of the Commands table now says that `doctor` exits
+  `2` without printing rows when `config.json`, `credentials.json`, `map.json`
+  or `plan/proposals.json` in `.kobay/` has a newer `schemaVersion`.
+  The behaviour is the one 0.9.0 shipped; only the documentation was missing.
+- README and the 0.9.0 entry below: over MCP, the summary `UNKNOWN_FIELD`
+  warning for more than 10 unknown fields has no `field`. Every other
+  `UNKNOWN_FIELD` entry has one. The behaviour is the one 0.9.0 shipped.
+
 ## [0.9.0] - 2026-11-10
 
 ### Added
@@ -25,7 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`[{ "code": "UNKNOWN_FIELD", "message", "field" }]`) and in a second text
   block. The first text block (the tool result) does not change. At most 10
   fields are listed (names cut at 64 characters); the rest are counted in one
-  `and N more unknown fields were ignored` warning, so the response stays small.
+  `and N more unknown fields were ignored` warning (without `field`), so the
+  response stays small.
   `project_create` and `prune` stay strict and still reject unknown fields.
 - A kobay that finds a `.kobay/` file with a newer `schemaVersion` than it
   supports stops with exit code 2 and the error code `SchemaVersionTooNew`
@@ -1312,7 +1367,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/ademtfkc/kobay/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/ademtfkc/kobay/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/ademtfkc/kobay/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/ademtfkc/kobay/compare/v0.7.0...v0.8.0

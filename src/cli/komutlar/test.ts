@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { KODSUZ_ENGEL_ONEKI, hataAnalizEt } from '../../analiz/index.js';
+import { ANALIZ_ATLANDI_BEYIN, KODSUZ_ENGEL_ONEKI, hataAnalizEt } from '../../analiz/index.js';
 import { failureKindEtiketi } from '../../rapor/istem.js';
-import { beyinOlustur } from '../../beyin/index.js';
+import { BrainError, BrainRuntimeError, beyinOlustur, beyinSinirlari } from '../../beyin/index.js';
+import { gizliDegerleriMaskele } from '../../beyin/ortak.js';
 import {
   FileNotFound,
   adresKimligiGizle,
@@ -178,14 +179,22 @@ function ilkSatir(metin: string): string | undefined {
  * düşen testte sınıf (`failureKind`) ve sonraki komut, sonuçsuz koşuda motor
  * hatasının ilk satırı buraya eklenir.
  */
-export function kosuSatiriMetni(satir: Record<string, unknown>, errorMessage?: string, rootCauseHypothesis?: string): string {
+export function kosuSatiriMetni(
+  satir: Record<string, unknown>,
+  errorMessage?: string,
+  rootCauseHypothesis?: string,
+  /** Analiz atlandıysa kısa sebep (hangi sınır ya da hangi beyin hatası). */
+  analizAtlamaNedeni?: string,
+): string {
   const id = String(satir.id);
   const verdict = String(satir.verdict);
   let metin = `${verdict} ${id}`;
   if (typeof satir.failureKind === 'string') metin += ` — ${failureKindEtiketi(satir.failureKind, rootCauseHypothesis)}`;
 
   let aciklama: string | undefined;
-  if (typeof satir.error === 'string') aciklama = satir.error;
+  // Koşmayan test: kısa gerekçe (`errorMessage`); uzun beyin mesajı JSON satırında ve özette kalır.
+  if (satir.notRun === true && errorMessage !== undefined) aciklama = errorMessage;
+  else if (typeof satir.error === 'string') aciklama = satir.error;
   else if (typeof satir.error === 'object' && satir.error !== null) {
     const bilgi = satir.error as { message?: unknown };
     aciklama = typeof bilgi.message === 'string' ? bilgi.message : JSON.stringify(satir.error);
@@ -193,8 +202,23 @@ export function kosuSatiriMetni(satir: Record<string, unknown>, errorMessage?: s
     aciklama = ilkSatir(errorMessage);
   }
   if (aciklama !== undefined) metin += ` — ${metindekiKimligiGizle(aciklama)}`;
-
-  if (verdict === 'failed') metin += `\n  failure bundle: kobay test failure get ${id}`;
+  if (typeof satir.analysisError === 'object' && satir.analysisError !== null) {
+    metin += ` — failure analysis skipped: ${metindekiKimligiGizle(analizAtlamaNedeni ?? 'brain error')}`;
+  }
+  const paketHatasi = typeof satir.bundleError === 'object' && satir.bundleError !== null
+    ? (satir.bundleError as { message?: unknown }).message
+    : undefined;
+  const sonucHatasi = typeof satir.resultError === 'object' && satir.resultError !== null
+    ? (satir.resultError as { message?: unknown }).message
+    : undefined;
+  if (sonucHatasi !== undefined) {
+    metin += ` — the run result could not be updated with the failure kind: ${metindekiKimligiGizle(ilkSatir(String(sonucHatasi)) ?? 'unknown error')}`;
+  }
+  if (paketHatasi !== undefined) {
+    metin += ` — the failure bundle could not be written: ${metindekiKimligiGizle(ilkSatir(String(paketHatasi)) ?? 'unknown error')}`;
+  } else if (verdict === 'failed') {
+    metin += `\n  failure bundle: kobay test failure get ${id}`;
+  }
   return metin;
 }
 
@@ -220,12 +244,110 @@ async function eskiKosulariBuda(dizin: KobayDizini, testId: string, runId: strin
   }
 }
 
+function beyinHatasiMi(hata: unknown): hata is BrainError | BrainRuntimeError {
+  return hata instanceof BrainError || hata instanceof BrainRuntimeError;
+}
+
+function maliyetTavaniMi(hata: unknown): hata is BrainRuntimeError {
+  return hata instanceof BrainRuntimeError && hata.sebep === 'cost_cap';
+}
+
+/**
+ * Toplam tavan çağrıdan ÖNCE reddetti mi? Bu koşuyu durduran tek durum budur: defter bir kez
+ * reddedince sonraki çağrıları da başlamadan reddeder (para harcanmaz). `claude`'un kendi çağrı
+ * başı durdurması (`error_max_budget_usd`) da `cost_cap`'tir ama yalnız o testi etkiler.
+ */
+function toplamTavanReddiMi(hata: unknown): hata is BrainRuntimeError {
+  return maliyetTavaniMi(hata) && hata.toplamTavanReddi === true;
+}
+
+const TOPLAM_TAVAN_AYARI = 'KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd';
+
+/** Tavan bu koşuda zaten dolduysa, beyin isteyen sonraki testlere verilen kısa gerekçe. */
+function tavanDoluHatasi(): BrainRuntimeError {
+  return new BrainRuntimeError(
+    'cost_cap',
+    `the total cost limit (${TOPLAM_TAVAN_AYARI}) was reached earlier in this run, so no brain call was made`,
+    { toplamTavanReddi: true },
+  );
+}
+
+/** İnsan satırı için analiz atlama sebebi: hangi sınır ya da hangi beyin hatası. */
+function analizAtlamaNedeni(hata: BrainError | BrainRuntimeError): string {
+  if (toplamTavanReddiMi(hata)) return `total cost limit reached (${TOPLAM_TAVAN_AYARI})`;
+  return ilkSatir(hataBilgisi(hata).message) ?? 'brain error';
+}
+
+/** Koşu başında okunan kayıt hâlâ diskteki mi? Başka bir koşu bu arada yazdıysa değişmiştir. */
+async function kayitDegismediMi(dizin: KobayDizini, test: TestKaydi): Promise<boolean> {
+  let simdiki: TestKaydi;
+  try {
+    simdiki = await dizin.testOku(test.id);
+  } catch (hata: unknown) {
+    if (hata instanceof FileNotFound) return false;
+    throw hata;
+  }
+  return simdiki.lastRunId === test.lastRunId && simdiki.status === test.status
+    && simdiki.codeVersion === test.codeVersion && simdiki.updatedAt === test.updatedAt;
+}
+
+/**
+ * Test hiç koşmadı (kod üretimi beyin hatasıyla düştü ya da toplam tavan doluydu): sonuç yine
+ * diske yazılır ki `test report` ve `test result` koşunun bastığı `inconclusive`'i göstersin.
+ * `--no-analysis` engel kaydıyla aynı kalıp: taslak taslak kalır (sonraki koşu kodu üretsin),
+ * yalnız `lastRunId` bu kayda bağlanır. Taslak olmayan (kodu silinmiş) test, motorun sonuçsuz
+ * koşusunda olduğu gibi `unknown` olur.
+ *
+ * `test` koşu başında okundu; döngü o arada başka testleri koşturmuş olabilir. Test kayıtları için
+ * kilit yok: yazmadan hemen önce kayıt yeniden okunur ve yalnız değişmediyse yazılır. Paralel bir
+ * koşu testi bu arada güncellediyse (ör. `passed`) onun sonucu ezilmez; `degisti: true` döner.
+ */
+async function kosulmadiKaydet(
+  dizin: KobayDizini, test: TestKaydi, mesaj: string,
+): Promise<{ runId: string } | { degisti: true }> {
+  if (!(await kayitDegismediMi(dizin, test))) return { degisti: true };
+  const an = new Date().toISOString();
+  const kayit: KosuSonucu = {
+    testId: test.id,
+    runId: yeniRunId(),
+    status: 'unknown',
+    verdict: 'inconclusive',
+    startedAt: an,
+    finishedAt: an,
+    codeVersion: test.codeVersion,
+    errorMessage: gizliDegerleriMaskele(mesaj),
+  };
+  await dizin.kosuDizini(kayit.runId);
+  await dizin.kosuSonucuYaz(kayit);
+  // İkinci bakış pencereyi iki dosya yazımından tek yazıma daraltır; bağlanmayan kayıt zararsızdır.
+  if (!(await kayitDegismediMi(dizin, test))) return { degisti: true };
+  await dizin.testYaz({ ...test, lastRunId: kayit.runId, ...(test.status === 'draft' ? {} : { status: 'unknown' as const }) });
+  await eskiKosulariBuda(dizin, test.id, kayit.runId);
+  return { runId: kayit.runId };
+}
+
+const KAYIT_DEGISTI_NOTU = 'another kobay run updated this test meanwhile, so its record was left as that run wrote it';
+
+interface TekTestSonucu {
+  exitCode: CikisKodu;
+  satir: Record<string, unknown>;
+  errorMessage?: string;
+  rootCauseHypothesis?: string;
+  analizAtlamaNedeni?: string;
+  /** Bu testte toplam tavan çağrıyı başlamadan reddetti: koşunun geri kalanında beyin çağrılmaz. */
+  tavanHatasi?: BrainRuntimeError;
+  /** Test toplam maliyet tavanı yüzünden hiç koşmadı. */
+  tavandanKosmadi?: boolean;
+  /** Test koştu ve düştü, analiz toplam maliyet tavanı yüzünden yapılmadı. */
+  tavandanAnalizsiz?: boolean;
+}
+
 async function tekTestKostur(
   dizin: KobayDizini,
   test: TestKaydi,
-  secenek: { rerun: boolean; analizYok: boolean },
-): Promise<{ exitCode: CikisKodu; satir: Record<string, unknown>; errorMessage?: string; rootCauseHypothesis?: string }> {
-  const { rerun, analizYok } = secenek;
+  secenek: { rerun: boolean; analizYok: boolean; tavanDolu: boolean },
+): Promise<TekTestSonucu> {
+  const { rerun, analizYok, tavanDolu } = secenek;
   try {
     const config = await dizin.configOku();
     // Kimlikli kayıtlı adresle hiçbir şey yazılmaz, kod üretilmez, tarayıcı açılmaz (exit 2).
@@ -284,13 +406,50 @@ async function tekTestKostur(
       };
     }
     if (!rerun && !analizYok && (mevcutKod === null || test.status === 'draft')) {
-      const harita = await haritaSagla(dizin);
-      const beyin = beyinOlustur(config.brain, process.env);
-      const uretim = await kodUret(beyin, test, harita, {
-        projeKoku: dizin.projeKoku,
-        kobayKoku: dizin.kok,
-        logDizini: dizin.yol('logs'),
-      });
+      // Kod üretimi beyin ister. Toplam tavan bu koşuda dolduysa hiç denenmez; üretim beyin
+      // hatasıyla düşerse test koşmadan biter. İki durumda da sonuç diske yazılır (`kosulmadiKaydet`).
+      let uretim: Awaited<ReturnType<typeof kodUret>> | undefined;
+      let uretimHatasi: BrainError | BrainRuntimeError | undefined;
+      if (tavanDolu) {
+        uretimHatasi = tavanDoluHatasi();
+      } else {
+        try {
+          const harita = await haritaSagla(dizin);
+          const beyin = beyinOlustur(config.brain, process.env);
+          uretim = await kodUret(beyin, test, harita, {
+            projeKoku: dizin.projeKoku,
+            kobayKoku: dizin.kok,
+            logDizini: dizin.yol('logs'),
+          });
+        } catch (hata: unknown) {
+          if (!beyinHatasiMi(hata)) throw hata;
+          uretimHatasi = hata;
+        }
+      }
+      if (uretim === undefined) {
+        const hata = uretimHatasi ?? tavanDoluHatasi();
+        const bilgi = hataBilgisi(hata);
+        const toplam = toplamTavanReddiMi(hata);
+        const kayit = await kosulmadiKaydet(
+          dizin, test, `Not run: the test code could not be generated (${bilgi.message})`,
+        );
+        // İnsan satırı: toplam tavanda kısa (uzun mesaj koşu sonundaki özette bir kez); çağrı başı
+        // durdurma ve öteki beyin hataları 0.9.0'daki gibi mesajın ilk satırıyla.
+        const neden = toplam
+          ? `total cost limit reached (${TOPLAM_TAVAN_AYARI}); the test code was not generated`
+            + `${test.status === 'draft' ? ' (the test stays draft)' : ''}`
+          : ilkSatir(bilgi.message) ?? bilgi.message;
+        return {
+          exitCode: hataCikisKodu(hata),
+          satir: {
+            id: test.id, name: test.name, verdict: 'inconclusive' as Verdict,
+            ...('runId' in kayit ? { runId: kayit.runId } : {}), notRun: true, error: bilgi,
+          },
+          errorMessage: `not run: ${neden}${'degisti' in kayit ? `; ${KAYIT_DEGISTI_NOTU}` : ''}`,
+          ...(toplam && !tavanDolu ? { tavanHatasi: hata } : {}),
+          ...(toplam ? { tavandanKosmadi: true } : {}),
+        };
+      }
       await dizin.kodYaz(test.id, uretim.kod);
       guncelTest = {
         ...test,
@@ -320,32 +479,77 @@ async function tekTestKostur(
     }
     let sonKosuSonucu = kosu.sonuc;
     let analizHipotezi: string | undefined;
+    let analizHatasi: BrainError | BrainRuntimeError | undefined;
+    let paketHatasi: unknown;
+    let sonucHatasi: unknown;
     if (kosu.sonuc.verdict === 'failed') {
       // `--no-analysis`: beyin hiç kurulmaz; paket yine yazılır, sınıf yerelden ya da `unknown`.
-      const beyin = analizYok ? null : beyinOlustur(config.brain, process.env);
-      const paket = await hataAnalizEt(beyin, dizin, guncelTest, kosu.sonuc, kosu.adimlar, {
-        logDizini: dizin.yol('logs'),
-      });
-      // Analiz sınıfı result.json'a da işlenir; `test result` failureKind'ı analizden değil koşudan okur.
-      analizHipotezi = paket.failure.rootCauseHypothesis;
-      sonKosuSonucu = { ...kosu.sonuc, failureKind: paket.failure.failureKind };
-      await dizin.kosuSonucuYaz(sonKosuSonucu);
+      // Toplam tavan bu koşuda dolduysa beyin kurulmaz; yerel sınıflama (`kobay:` öneki) yine önce
+      // denenir, tutmazsa paket gerekçesiyle analizsiz yazılır. Analiz sırasında gelen beyin hatası
+      // koşuyu `inconclusive`'e çevirmez: koşu gerçekten düştü ve diske `failed` yazıldı.
+      const tavandanBeyinsiz = !analizYok && tavanDolu;
+      const beyin = analizYok || tavanDolu ? null : beyinOlustur(config.brain, process.env);
+      // İki yazım aşaması ayrı: (1) hata paketi, (2) result.json'a sınıfın işlenmesi. Beyin hatasından
+      // sonra biri düşerse koşunun `failed`'i ve runId'si korunur; satır diskte ne varsa onu söyler.
+      // Beyinle ilgisiz yazım hataları eskisi gibi dışarı çıkar.
+      let paket: Awaited<ReturnType<typeof hataAnalizEt>> | undefined;
+      try {
+        paket = await hataAnalizEt(beyin, dizin, guncelTest, kosu.sonuc, kosu.adimlar, {
+          logDizini: dizin.yol('logs'),
+          ...(tavandanBeyinsiz ? { beyinHatasi: tavanDoluHatasi().message } : {}),
+          ...(beyin === null ? {} : { beyinHatasindaAnalizsiz: (hata: BrainError | BrainRuntimeError) => { analizHatasi = hata; } }),
+        });
+      } catch (hata: unknown) {
+        if (analizHatasi === undefined && !tavandanBeyinsiz) throw hata;
+        paketHatasi = hata;
+        // Paket yok ama analiz tavan yüzünden zaten yapılmayacaktı: atlandığı yine söylenir.
+        if (analizHatasi === undefined) analizHatasi = tavanDoluHatasi();
+      }
+      if (paket !== undefined) {
+        // `analysisError` yalnız analiz gerçekten atlandıysa (paket beyin-hatası işaretini taşıyorsa).
+        const atlandi = paket.failure.rootCauseHypothesis === ANALIZ_ATLANDI_BEYIN;
+        if (!atlandi) analizHatasi = undefined;
+        else if (tavandanBeyinsiz) analizHatasi = tavanDoluHatasi();
+        // Analiz sınıfı result.json'a da işlenir; `test result` failureKind'ı analizden değil koşudan okur.
+        const siniflanmis = { ...kosu.sonuc, failureKind: paket.failure.failureKind };
+        try {
+          await dizin.kosuSonucuYaz(siniflanmis);
+          sonKosuSonucu = siniflanmis;
+          analizHipotezi = paket.failure.rootCauseHypothesis;
+        } catch (hata: unknown) {
+          if (analizHatasi === undefined) throw hata;
+          // Paket yayımlandı ama result.json eski hâliyle (sınıfsız `failed`) kaldı: satır da sınıfsız.
+          sonucHatasi = hata;
+        }
+      }
     }
     // Budama en sonda: düşen koşunun hata paketi artık yazıldı, kanıt dizini
     // silinse bile analiz tamamlanmış olur — ama bu koşu zaten korunuyor.
     await eskiKosulariBuda(dizin, test.id, sonKosuSonucu.runId);
+    const analizTavani = toplamTavanReddiMi(analizHatasi) ? analizHatasi : undefined;
+    let exitCode = verdictCikisi(sonKosuSonucu.verdict);
+    // Analiz beyin hatasıyla düştüyse çıkış 0.9.0'daki gibi motor (4) kalır; verdict diskteki `failed`.
+    if (analizHatasi !== undefined) exitCode = hataCikisKodu(analizHatasi);
+    if (paketHatasi !== undefined) exitCode = Math.max(exitCode, hataCikisKodu(paketHatasi)) as CikisKodu;
+    if (sonucHatasi !== undefined) exitCode = Math.max(exitCode, hataCikisKodu(sonucHatasi)) as CikisKodu;
     return {
-      exitCode: verdictCikisi(sonKosuSonucu.verdict),
+      exitCode,
       satir: {
         id: test.id,
         name: test.name,
         verdict: sonKosuSonucu.verdict,
         runId: sonKosuSonucu.runId,
         ...(sonKosuSonucu.failureKind === undefined ? {} : { failureKind: sonKosuSonucu.failureKind }),
+        ...(analizHatasi === undefined ? {} : { analysisError: hataBilgisi(analizHatasi) }),
+        ...(paketHatasi === undefined ? {} : { bundleError: hataBilgisi(paketHatasi) }),
+        ...(sonucHatasi === undefined ? {} : { resultError: hataBilgisi(sonucHatasi) }),
       },
       // Yalnız insan satırı için; JSON çıktısına girmez.
       ...(sonKosuSonucu.errorMessage === undefined ? {} : { errorMessage: sonKosuSonucu.errorMessage }),
       ...(analizHipotezi === undefined ? {} : { rootCauseHypothesis: analizHipotezi }),
+      ...(analizHatasi === undefined ? {} : { analizAtlamaNedeni: analizAtlamaNedeni(analizHatasi) }),
+      ...(analizTavani !== undefined && !tavanDolu ? { tavanHatasi: analizTavani } : {}),
+      ...(analizTavani === undefined ? {} : { tavandanAnalizsiz: true }),
     };
   } catch (hata: unknown) {
     const bilgi = hataBilgisi(hata);
@@ -389,11 +593,27 @@ export async function testRun(a: {
     const sonuclar: Array<Record<string, unknown>> = [];
     const satirMetinleri: string[] = [];
     let exitCode: CikisKodu = CIKIS.GECTI;
+    // Toplam maliyet tavanı çağrıyı başlamadan reddettiyse (defterin ön reddi) bu koşuda beyin bir
+    // daha denenmez: kodu olan testler `--no-analysis` gibi analizsiz koşar, kod üretimi isteyenler
+    // koşmaz. `claude`'un kendi çağrı başı durdurması (KOBAY_MAX_BUDGET_USD) yalnız o testi etkiler;
+    // döngü 0.9.0'daki gibi sürer. Mandal bu çağrıya özgü: sonraki bir `test run` (aynı MCP süreci
+    // dahil) yeniden dener, defter de tavan doluysa çağrıyı yine başlamadan reddeder.
+    let tavanHatasi: BrainRuntimeError | undefined;
+    const kosmayanlar: string[] = [];
+    const analizsizler: string[] = [];
     for (const test of testler) {
-      const sonuc = await tekTestKostur(dizin, test, { rerun: a.rerun === true, analizYok: a.noAnalysis === true });
+      const sonuc = await tekTestKostur(dizin, test, {
+        rerun: a.rerun === true, analizYok: a.noAnalysis === true, tavanDolu: tavanHatasi !== undefined,
+      });
+      tavanHatasi ??= sonuc.tavanHatasi;
+      if (sonuc.tavandanKosmadi === true) kosmayanlar.push(test.id);
+      if (sonuc.tavandanAnalizsiz === true) analizsizler.push(test.id);
       sonuclar.push(sonuc.satir);
-      satirMetinleri.push(kosuSatiriMetni(sonuc.satir, sonuc.errorMessage, sonuc.rootCauseHypothesis));
+      satirMetinleri.push(kosuSatiriMetni(sonuc.satir, sonuc.errorMessage, sonuc.rootCauseHypothesis, sonuc.analizAtlamaNedeni));
       exitCode = Math.max(exitCode, sonuc.exitCode) as CikisKodu;
+    }
+    if (tavanHatasi !== undefined) {
+      satirMetinleri.push('', ...tavanOzeti(tavanHatasi, kosmayanlar, analizsizler, (await dizin.configOku()).brain.adaptor));
     }
     return {
       exitCode,
@@ -402,6 +622,43 @@ export async function testRun(a: {
       mesaj: satirMetinleri.join('\n'),
     };
   });
+}
+
+function usd(deger: number): string {
+  return `$${deger.toFixed(2)}`;
+}
+
+/**
+ * Toplam maliyet tavanı dolan koşunun insan özeti: tavan mesajı (bir kez), koşmayan ve analizsiz kalan
+ * testler, harcama/sınır ve `claude` çağrı rezervasyonu, kalan kimliklerle devam komutu.
+ */
+function tavanOzeti(hata: BrainRuntimeError, kosmayanlar: string[], analizsizler: string[], adaptor: string): string[] {
+  const satirlar = [hata.detay ?? hata.message];
+  if (kosmayanlar.length > 0) {
+    satirlar.push(`${kosmayanlar.length} test${kosmayanlar.length === 1 ? '' : 's'} did not run because the total cost limit was reached: ${kosmayanlar.join(' ')}`);
+  }
+  if (analizsizler.length > 0) {
+    satirlar.push(`Failure analysis skipped because the total cost limit was reached: ${analizsizler.join(' ')}`);
+  }
+  const sinir = beyinSinirlari(process.env);
+  if (sinir !== undefined) {
+    let harcama = `Spent ${usd(sinir.harcananUsd)} of the ${usd(sinir.toplamSinirUsd)} total cost limit (${TOPLAM_TAVAN_AYARI}).`;
+    if (adaptor === 'claude') {
+      const rezervasyon = Math.min(sinir.claudeCagriButcesiUsd, sinir.toplamSinirUsd);
+      harcama += ` A call starts only if its full budget fits in what is left: each claude call reserves up to the per-call budget (${usd(rezervasyon)},`
+        + ` KOBAY_MAX_BUDGET_USD or brain.maxBudgetUsd), so a run can use about ${usd(Math.max(0, sinir.toplamSinirUsd - rezervasyon))}`
+        + ' of the total (the limit minus one call) before calls are refused.';
+    }
+    satirlar.push(harcama);
+  }
+  // Defter süreç başınadır: yeni bir kobay süreci sıfırdan sayar. Tavan mesajı onay istediği için
+  // devam komutu da onaydan sonraya bağlanır.
+  if (kosmayanlar.length > 0) {
+    satirlar.push('Once the user approves more spending, continue with the remaining tests in a new kobay process'
+      + ` (its spending counter starts at zero): kobay test run ${kosmayanlar.join(' ')}`);
+  }
+  if (analizsizler.length > 0) satirlar.push(`To also analyse the failures, run them again: kobay test run ${analizsizler.join(' ')}`);
+  return satirlar;
 }
 
 export async function testRerun(a: { cwd: string; id: string }): Promise<KomutSonucu> {

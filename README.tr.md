@@ -459,14 +459,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.9.0
+      - uses: ademtfkc/kobay@v0.9.1
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.9.0` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.9.1` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -619,6 +619,12 @@ okunamayan bir test bir notla `inconclusive` görünür; koşu klasörü silinmi
 test `not run` görünür.
 
 ## Durum ve sınırlar
+
+**0.9.1.** Yama sürümü. `test run`, beyin yarıda hata verdiğinde artık bir sonuç
+kaydeder; böylece koşu çıktısı, `test result` ve rapor aynı şeyi söyler
+(`test list` taslağı yine `draft` gösterir; o arada başka bir koşunun güncellediği
+test o koşunun sonucunu korur). Toplam maliyet sınırından sonra beyni çağırmayı bırakır: test başına
+bir mesaj yerine tek mesaj ve bir özet.
 
 **0.9.0.** Genel yüzey donduruldu: [Kararlılık](#kararlılık) bölümünde
 listelenen komutlar, bayraklar, çıkış kodları, JSON zarfı, MCP araçları, Action
@@ -787,7 +793,8 @@ satır yazar
 `warnings: [{ "code": "DEPRECATED", "message", "replacement" }]` da eklenir.
 Ortam değişkenlerinde de kural aynıdır; yeni ad önceliklidir. MCP'de bilinmeyen
 alan reddedilmez; yok sayılır ve yanıtın `warnings` alanında `UNKNOWN_FIELD`
-olarak bildirilir. Her kullanımdan kaldırma [CHANGELOG.md](CHANGELOG.md)'de
+olarak bildirilir: her alan için adı `field`'da olan bir girdi, en çok 10;
+kalanlar `field` taşımayan tek bir son girdide sayılır. Her kullanımdan kaldırma [CHANGELOG.md](CHANGELOG.md)'de
 "Deprecated" başlığında ve burada listelenir.
 
 Şu an kullanımdan kalkmış olanlar:
@@ -1356,7 +1363,7 @@ Aşağıdaki bayraklar 0.9.0'da `kobay --help` ve her alt komutun `--help` çık
 | `setup [--brain <b>] [--model <m>] [--effort <e>]` | Varsayılan beyni `~/.kobay/config.json`'a yazar (`claude`, `codex`, `openrouter`). |
 | `install-browser [--with-deps]` | Uyan Chromium'u kurar; `--with-deps` Linux sistem kütüphanelerini ekler. |
 | `demo [--port <port>]` | Paketteki demo uygulamayı başlatır. Varsayılan port 3000; `0` boş birini seçer. |
-| `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi (Windows'ta ayrıca Git Bash'i) denetler. Proje içindeyken `0` ile çıkar (satır düşse bile); proje bulunamazsa `2` ile çıkar. |
+| `doctor` | Node'u, beyin CLI'larını, Chromium'u, projeyi ve hedefi (Windows'ta ayrıca Git Bash'i) denetler. Proje içindeyken `0` ile çıkar (satır düşse bile); proje bulunamazsa `2` ile çıkar; `.kobay/` içindeki `config.json`, `credentials.json`, `map.json` ya da `plan/proposals.json` daha yeni `schemaVersion` taşıyorsa satır basmadan `2` ile çıkar (`SchemaVersionTooNew`). |
 | `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Burada `.kobay/` oluşturur. `--url` bir `http://` ya da `https://` adresi olmalıdır. `--force` var olan bir projenin yalnız config'ini yeniden yazar; yenilerini vermedikçe beynini ve limitlerini korur. `--session-file` girişli bir Playwright `storageState` dosyasını içe alır (bkz. [İçe alınan oturum](#i̇çe-alınan-oturum-captcha-2fa)); `--auth-origin` `--login` ya da `--session-file` ister. |
 | `project update [--url <url>] [--login-url <url>] [--docs <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Yalnız verdiğin alanları değiştirir; `--url` ve `--login-url` `http://` ya da `https://` olmalıdır. `--base-url` ve `--docs-path`, `--url` ve `--docs` için kullanımdan kalkmış adlar olarak çalışmaya devam eder (bkz. [Kararlılık](#kararlılık)). `--login` kimlik bilgilerini yeniden girer; `--auth-origin` auth origin listesinin tamamını değiştirir ve `--clear-auth-origins` gibi `--login` ister. |
 | `project get` | Ayarlar, test sayısı, bir harita olup olmadığı. |
@@ -1477,7 +1484,17 @@ nedenini mesajında taşır: `timeout`, `cli_missing`, `schema`,
 bir paket var) · `blocked` (uygulamaya ulaşılamadı) · `inconclusive` (henüz kod
 yok, ya da bir beyin veya motor hatası). Playwright testi hiç çalıştıramazsa —
 bir rapor hatası ya da sıfır test koşması — sonuç `failureKind: env` ve çıkış
-kodu `4` ile `inconclusive` olur. Asla `passed` değil.
+kodu `4` ile `inconclusive` olur. Asla `passed` değil. Kodu üretilemediği için
+(bir beyin hatası ya da maliyet limiti) koşmayan testin `test run` satırında
+`notRun: true` bulunur; sonuç yine diske yazılır, `test result` ve `test report`
+aynı `inconclusive`'i gösterir. Tek istisna: o arada başka bir kobay koşusu aynı
+testi güncellediyse kayıt teste bağlanmaz, satırda `runId` olmaz ve test o
+koşunun yazdığını korur. Koşu düşüp analizi bir beyin hatasına takılırsa
+satırda `analysisError` (`{ code, message }`) bulunur: karar `failed` kalır,
+hata türü `unknown`, çıkış kodu `4` olur. Paket de yazılamadıysa satırda ayrıca
+`bundleError` (`{ code, message }`) bulunur ve `runId` korunur. Paket yazılıp
+hata türü koşu sonucuna kaydedilemediyse satırda `resultError`
+(`{ code, message }`) bulunur ve diskteki gibi `failureKind` olmaz.
 
 **Hata türleri**, düşen bir testin paketinde:
 
@@ -1539,6 +1556,18 @@ bir kez uyarır. `OPENAI_API_KEY` ya da `CODEX_API_KEY` tanımlıysa `codex exec
 ChatGPT aboneliğin yerine API hesabından faturalayabilir; kobay bir kez uyarır.
 Ve `test run --all` kodu olmayan her test için kod üretir ve her hatayı analiz
 eder — önce birkaç öneri kabul et.
+
+**`test run` sırasında toplam limit dolunca.** Her `claude` çağrısı başlamadan
+önce çağrı başı bütçesinin tamamını (`KOBAY_MAX_BUDGET_USD`, varsayılan $1)
+ayırır; bu yüzden bir koşu yaklaşık toplam limitin bir çağrı eksiğini
+kullanabilir: `KOBAY_MAX_TOTAL_COST_USD=3` ile yaklaşık $2'de durur. Toplam limit
+bir çağrıyı reddedince o koşu beyni bir daha çağırmaz. Kodu henüz olmayan testler denenmez ve `inconclusive`
+döner (maliyet limiti yüzünden koşmadı); kodu olan testler yine koşar, düşen
+test `--no-analysis`'teki gibi analizsiz bir paket alır. Limit mesajı bir kez
+yazılır, ardından harcamayı ve koşmayan testler için `kobay test run <id'ler>`
+komutunu veren bir özet gelir. Sayaç tek bir sürece aittir: yeni bir `kobay`
+süreci sıfırdan başlar. `claude` bunun yerine kendi çağrı başı limitinde durursa
+yalnız o test etkilenir, koşu sonraki testle sürer.
 
 **Makinenden ne çıkar.** Tarayıcı, uygulama ve test koşuları yerelde kalır. Şunlar
 seçtiğin beyne gider (`claude` ile Anthropic, `codex` ile OpenAI, ya da OpenRouter

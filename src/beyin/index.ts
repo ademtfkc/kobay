@@ -3,7 +3,7 @@ import type { BeyinAyari } from '../depo/index.js';
 import { ClaudeBeyni } from './claude.js';
 import { CodexBeyni } from './codex.js';
 import { OpenRouterBeyni } from './openrouter.js';
-import { BeyinButcesi, type BeyinKullanimSayaci } from './ortak.js';
+import { BeyinButcesi, type BeyinKullanimSayaci, type BeyinSinirlari } from './ortak.js';
 import { SahteBeyin } from './sahte.js';
 
 export interface BeyinIstegi {
@@ -49,12 +49,19 @@ export type BeyinCalismaHataSebebi =
 export class BrainRuntimeError extends Error {
   readonly sebep: BeyinCalismaHataSebebi;
   readonly detay?: string;
+  /**
+   * Yalnız `cost_cap`: çağrı başlamadan, toplam tavan (bilinen + ayrılmış harcama) yetmediği için
+   * reddedildi. `claude`'un kendi çağrı başı durdurması (`error_max_budget_usd`) ya da çağrı
+   * sonrası tavan aşımı bunu taşımaz. Yüzeyde görünmez (hata JSON'u yine `{code, message}`).
+   */
+  readonly toplamTavanReddi?: true;
 
-  constructor(sebep: BeyinCalismaHataSebebi, detay?: string) {
+  constructor(sebep: BeyinCalismaHataSebebi, detay?: string, secenek?: { toplamTavanReddi?: boolean }) {
     super(`Brain error: ${sebep}${detay === undefined || detay === '' ? '' : ` — ${detay}`}`);
     this.name = 'BrainRuntimeError';
     this.sebep = sebep;
     if (detay !== undefined) this.detay = detay;
+    if (secenek?.toplamTavanReddi === true) this.toplamTavanReddi = true;
   }
 }
 
@@ -100,6 +107,11 @@ export function beyinOlustur(ayar: BeyinAyari, env: NodeJS.ProcessEnv = process.
 /** Süreçteki beyin defterinin birikmiş kullanımı; defter henüz yoksa sıfır. */
 export function beyinKullanimi(env: NodeJS.ProcessEnv = process.env): BeyinKullanimSayaci {
   return surecButceleri.get(env)?.kullanim() ?? { cagri: 0, bilinenMaliyetUsd: 0, maliyetiBilinmeyenCagri: 0 };
+}
+
+/** Süreç defterinin sınırları ve tavanın saydığı harcama; defter henüz yoksa `undefined`. */
+export function beyinSinirlari(env: NodeJS.ProcessEnv = process.env): BeyinSinirlari | undefined {
+  return surecButceleri.get(env)?.sinirlar();
 }
 
 /** İki okuma arasındaki kullanım: çağrı yoksa `undefined`; bir çağrının bile maliyeti bilinmiyorsa maliyet `null`. */

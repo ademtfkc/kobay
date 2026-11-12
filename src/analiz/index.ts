@@ -1,7 +1,7 @@
 import { access, readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, join, type PlatformPath } from 'node:path';
-import type { Beyin } from '../beyin/index.js';
+import { BrainError, BrainRuntimeError, type Beyin } from '../beyin/index.js';
 import { gizliDegerleriMaskele, jsonGizliDegerleriMaskele } from '../beyin/ortak.js';
 import type {
   AdimSonucu,
@@ -556,6 +556,17 @@ export function domTemizle(html: string, maxKarakter = 30_000): string {
 export const ANALIZ_ATLANDI = 'analysis skipped (--no-analysis)';
 
 /**
+ * Koşu düştü ama analiz beyin hatası (ör. `cost_cap`) yüzünden yapılamadı: paket yine
+ * analizsiz yazılır; beyin hatasının metni `recommendedFixTarget.rationale`'a girer.
+ */
+export const ANALIZ_ATLANDI_BEYIN = 'analysis skipped (brain error)';
+
+/** Paketin analizi atlanmış mı (`--no-analysis` ya da beyin hatası)? */
+export function analizAtlandiMi(rootCauseHypothesis: string | undefined): boolean {
+  return rootCauseHypothesis === ANALIZ_ATLANDI || rootCauseHypothesis === ANALIZ_ATLANDI_BEYIN;
+}
+
+/**
  * `--no-analysis` koşusunda kodsuz/taslak test için diske yazılan engel kaydının
  * hata metni öneki. Rapor istemi bu önekten engelin "uygulamaya ulaşılamadı"
  * değil "kod yok" olduğunu anlar.
@@ -567,13 +578,40 @@ export const KODSUZ_ENGEL_ONEKI = 'kobay --no-analysis: ';
  * ürünü metin alanları sabit. Kanıt listesi boş başlar; düşen adımın ekran
  * görüntüsü ve DOM'u yerel kanıt olarak yine eklenir.
  */
-function analizsizSonuc(): BeyindenGelenHataAnalizi {
+function analizsizSonuc(beyinHatasi?: string): BeyindenGelenHataAnalizi {
+  if (beyinHatasi !== undefined) {
+    return {
+      rootCauseHypothesis: ANALIZ_ATLANDI_BEYIN,
+      failureKind: 'unknown',
+      recommendedFixTarget: {
+        kind: 'unknown',
+        reference: ANALIZ_ATLANDI_BEYIN,
+        rationale: gizliDegerleriMaskele(beyinHatasi).slice(0, 2000),
+      },
+      evidence: [],
+    };
+  }
   return {
     rootCauseHypothesis: ANALIZ_ATLANDI,
     failureKind: 'unknown',
     recommendedFixTarget: { kind: 'unknown', reference: ANALIZ_ATLANDI, rationale: ANALIZ_ATLANDI },
     evidence: [],
   };
+}
+
+/** Beyin analizi; `hataBildir` verildiyse beyin hatası analizsiz sonuca döner ve bildirilir. */
+async function beyinleAnalizEt(
+  beyin: Beyin,
+  hataBildir: ((hata: BrainError | BrainRuntimeError) => void) | undefined,
+  istek: Parameters<Beyin['sor']>[0],
+): Promise<{ json: BeyindenGelenHataAnalizi }> {
+  try {
+    return await beyin.sor<BeyindenGelenHataAnalizi>(istek);
+  } catch (hata: unknown) {
+    if (hataBildir === undefined || !(hata instanceof BrainError || hata instanceof BrainRuntimeError)) throw hata;
+    hataBildir(hata);
+    return { json: analizsizSonuc(hata.message) };
+  }
 }
 
 /**
@@ -587,7 +625,16 @@ export async function hataAnalizEt(
   test: TestKaydi,
   sonuc: KosuSonucu,
   adimlar: AdimSonucu[],
-  s?: { logDizini?: string },
+  s?: {
+    logDizini?: string;
+    /** Yalnız `beyin` null iken: analiz beyin hatası yüzünden atlandı; metin pakete gerekçe olarak yazılır. */
+    beyinHatasi?: string;
+    /**
+     * Verilirse beyin hatası (BrainError / BrainRuntimeError) fırlatılmaz: bu çağrıya bildirilir ve
+     * paket aynı kanıtla analizsiz (`ANALIZ_ATLANDI_BEYIN`) yazılır. Ön hazırlık bir kez yapılır.
+     */
+    beyinHatasindaAnalizsiz?: (hata: BrainError | BrainRuntimeError) => void;
+  },
 ): Promise<HataPaketi> {
   if (sonuc.status !== 'failed' && sonuc.verdict !== 'failed') {
     throw new Error('Failure analysis only runs for a failed run');
@@ -640,7 +687,7 @@ export async function hataAnalizEt(
   // Beyin yoksa (`--no-analysis`) analiz alanları sabit metinle doldurulur; çağrı yapılmaz.
   const beyinYaniti = yerelSiniflama !== null
     ? { json: yerelSiniflama }
-    : beyin === null ? { json: analizsizSonuc() } : await beyin.sor<BeyindenGelenHataAnalizi>({
+    : beyin === null ? { json: analizsizSonuc(s?.beyinHatasi) } : await beyinleAnalizEt(beyin, s?.beyinHatasindaAnalizsiz, {
     gorev: `analysis-${test.id}`,
     sistem: analizSistemIstemiOlustur(),
     kullanici: analizKullaniciIstemiOlustur({

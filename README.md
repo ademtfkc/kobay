@@ -460,14 +460,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.9.0
+      - uses: ademtfkc/kobay@v0.9.1
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.9.0` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.9.1` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -619,6 +619,13 @@ or hard links: linked data is left out. A test whose run record cannot be read s
 note; a test whose run folder is gone shows as `not run`.
 
 ## Status and limits
+
+**0.9.1.** A patch release. `test run` now records a result when the brain fails
+part-way, so the run output, `test result` and the report agree (`test list`
+keeps showing a draft as `draft`; a test another run updated meanwhile keeps
+that run's result).
+After the total cost limit it stops calling the brain: one message and a
+summary instead of one message per test.
 
 **0.9.0.** The public surface is frozen: the commands, flags, exit codes, JSON
 envelope, MCP tools, Action inputs and outputs and `.kobay/` file names listed
@@ -794,7 +801,8 @@ line to stderr, once per process
 `warnings: [{ "code": "DEPRECATED", "message", "replacement" }]`. The same rule
 applies to environment variables, where the new name wins. Over MCP, an unknown
 field is ignored and reported in the response's `warnings` as `UNKNOWN_FIELD`
-rather than rejected. Every deprecation is listed under "Deprecated" in
+rather than rejected: one entry per field with its name in `field`, at most 10;
+the rest are counted in one last entry that has no `field`. Every deprecation is listed under "Deprecated" in
 [CHANGELOG.md](CHANGELOG.md) and here.
 
 Deprecated now:
@@ -1366,7 +1374,7 @@ The flags below match `kobay --help` and every subcommand's `--help` in 0.9.0; a
 | `setup [--brain <b>] [--model <m>] [--effort <e>]` | Writes the default brain to `~/.kobay/config.json` (`claude`, `codex`, `openrouter`). |
 | `install-browser [--with-deps]` | Installs the matching Chromium; `--with-deps` adds Linux system libraries. |
 | `demo [--port <port>]` | Starts the bundled demo app. Default port 3000; `0` picks a free one. |
-| `doctor` | Checks Node, brain CLIs, Chromium, project and target (and Git Bash on Windows). Exits `0` inside a project even when a row fails; exits `2` when no project is found. |
+| `doctor` | Checks Node, brain CLIs, Chromium, project and target (and Git Bash on Windows). Exits `0` inside a project even when a row fails; exits `2` when no project is found, and exits `2` without printing rows when `config.json`, `credentials.json`, `map.json` or `plan/proposals.json` in `.kobay/` has a newer `schemaVersion` (`SchemaVersionTooNew`). |
 | `project create --url <url> [--docs <path>] [--login \| --session-file <path>] [--login-url <url>] [--auth-origin <origin>]... [--force] [--brain <b>] [--model <m>] [--effort <e>]` | Creates `.kobay/` here. `--url` must be an `http://` or `https://` address. `--force` rewrites only an existing project's config, keeping its brain and limits unless you pass new ones. `--session-file` imports a logged-in Playwright `storageState` file (see [Imported session](#imported-session-captcha-2fa)); `--auth-origin` requires `--login` or `--session-file`. |
 | `project update [--url <url>] [--login-url <url>] [--docs <path>] [--login [--auth-origin <origin>]... \| [--clear-auth-origins]] [--brain <b>] [--model <m>] [--effort <e>]` | Changes only the fields you pass; `--url` and `--login-url` must be `http://` or `https://`. `--base-url` and `--docs-path` still work as deprecated names for `--url` and `--docs` (see [Stability](#stability)). `--login` re-enters the credentials; `--auth-origin` replaces the whole auth origin list and, like `--clear-auth-origins`, requires `--login`. |
 | `project get` | Settings, test count, whether a map exists. |
@@ -1487,7 +1495,20 @@ carries the reason in its message: `timeout`, `cli_missing`, `schema`,
 exists) · `blocked` (the app was unreachable) · `inconclusive` (no code yet, or a
 brain or engine error). If Playwright cannot run the test at all — a report
 error, or zero tests executed — the result is `inconclusive` with
-`failureKind: env` and exit code `4`. Never `passed`.
+`failureKind: env` and exit code `4`. Never `passed`. A `test run` row has
+`notRun: true` when the test did not run because its code could not be
+generated (a brain error or the cost limit); the result is still written to
+disk, so `test result` and `test report` show the same `inconclusive`. The one
+exception: if another kobay run updated the same test meanwhile, the record is
+not attached, the row has no `runId`, and the test keeps what that run wrote.
+A failed
+row has `analysisError` (`{ code, message }`) when the run failed but its
+analysis hit a brain error: the verdict stays `failed`, the failure kind is
+`unknown` and the exit code is `4`. If the bundle could not be written either,
+the row also has `bundleError` (`{ code, message }`) and keeps its `runId`. If
+the bundle was written but the failure kind could not be saved to the run
+result, the row has `resultError` (`{ code, message }`) and no `failureKind`,
+as on disk.
 
 **Failure kinds**, on a failed test's bundle:
 
@@ -1546,6 +1567,19 @@ makes no call if the price cannot be determined. If `ANTHROPIC_API_KEY` is set,
 once. If `OPENAI_API_KEY` or `CODEX_API_KEY` is set, `codex exec` may bill your
 API account instead of your ChatGPT plan; kobay warns once. And `test run --all` generates code for every test that has none and
 analyses every failure — accept a few proposals first.
+
+**When the total limit is reached during `test run`.** Each `claude` call
+reserves its whole per-call budget (`KOBAY_MAX_BUDGET_USD`, $1 by default)
+before it starts, so a run can use about the total limit minus one call: with
+`KOBAY_MAX_TOTAL_COST_USD=3` it stops at about $2. Once the total limit refuses
+a call, that run makes no more brain calls. Tests that still need code are not attempted and come back
+`inconclusive` (not run because of the cost limit); tests with code still run,
+and a failure gets a bundle without analysis, as with `--no-analysis`. The
+limit message is printed once, followed by a summary with the spending and the
+`kobay test run <ids>` command for the tests that did not run. The counter
+belongs to one process: a new `kobay` process starts again at zero. When
+`claude` stops at its own per-call limit instead, only that test is affected
+and the run goes on with the next one.
 
 **What leaves your machine.** The browser, the app and the test runs stay local.
 These go to the brain you chose (Anthropic via `claude`, OpenAI via `codex`, or

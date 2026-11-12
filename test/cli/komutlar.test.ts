@@ -760,6 +760,41 @@ describe('CLI komut fonksiyonları', () => {
     expect(sonuc.metin).toContain('✗ target');
   });
 
+  it('doctor daha yeni sürümlü config.json karşısında satır basmaz, exit 2 verir, dosyaya dokunmaz', async () => {
+    // README Commands tablosunun doctor satırı bu davranışı anlatır (0.9.1).
+    const cwd = await geciciDizin('kobay-doctor-yeni-surum-');
+    await projectCreate({ cwd, url: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
+    const yol = join(cwd, '.kobay', 'config.json');
+    const yeni = `${JSON.stringify({ ...JSON.parse(await readFile(yol, 'utf8')) as object, schemaVersion: 999 }, null, 2)}\n`;
+    await writeFile(yol, yeni);
+    const { main } = await import('../../src/cli/index.js');
+    const { Readable } = await import('node:stream');
+    // Gerçek CLI yolu: çıkış kodu ve iki akışın tamamı yakalanır.
+    const kosu = async (...argumanlar: string[]): Promise<{ kod: number; cikti: string; hata: string }> => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const cikti = metinTopla(stdout);
+      const hata = metinTopla(stderr);
+      const kod = await main(['node', 'kobay', '--cwd', cwd, ...argumanlar], { input: Readable.from([]), stdout, stderr });
+      return { kod, cikti: cikti.oku(), hata: hata.oku() };
+    };
+
+    const metin = await kosu('doctor');
+    expect(metin.kod).toBe(2);
+    expect(metin.cikti).toBe('');
+    expect(metin.hata).toContain('schemaVersion 999');
+    expect(metin.hata).not.toMatch(/^[✓✗] /m);
+
+    const json = await kosu('--output', 'json', 'doctor');
+    expect(json.kod).toBe(2);
+    const satirlar = json.cikti.trim().split('\n');
+    expect(satirlar).toHaveLength(1);
+    const zarf = JSON.parse(satirlar[0] ?? '') as { ok: boolean; error: { code: string }; data?: unknown };
+    expect(zarf).toMatchObject({ ok: false, error: { code: 'SchemaVersionTooNew' } });
+    expect(zarf.data).toBeUndefined();
+    expect(await readFile(yol, 'utf8')).toBe(yeni);
+  });
+
   it('doctor JSON çıktısında ok:true satırlar öneri taşımaz', async () => {
     const cwd = await geciciDizin('kobay-doctor-json-');
     await projectCreate({ cwd, url: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });

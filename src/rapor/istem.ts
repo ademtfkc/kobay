@@ -1,4 +1,4 @@
-import { ANALIZ_ATLANDI, KODSUZ_ENGEL_ONEKI } from '../analiz/index.js';
+import { ANALIZ_ATLANDI, ANALIZ_ATLANDI_BEYIN, KODSUZ_ENGEL_ONEKI, analizAtlandiMi } from '../analiz/index.js';
 import type { FailureKind } from '../depo/index.js';
 import type { RaporAdimi, RaporTesti } from './html.js';
 
@@ -80,9 +80,15 @@ function paketVar(test: RaporTesti): boolean {
 /**
  * `--no-analysis` (genelde CI) koşusu: paket var ama analiz yok ve paket istemi
  * okuyan geliştiricinin makinesinde değil (CI artifact'i yalnız HTML rapor).
+ * Beyin hatasıyla analizi atlanan yerel koşu buna girmez: onun paketi bu makinede.
  */
 function analizsizMi(test: RaporTesti): boolean {
   return test.verdict === 'failed' && test.failure?.rootCauseHypothesis === ANALIZ_ATLANDI;
+}
+
+/** Yerel koşu düştü ama analiz beyin hatası (ör. maliyet limiti) yüzünden yapılmadı; paket yerelde. */
+function beyinHatasiylaAnalizsizMi(test: RaporTesti): boolean {
+  return test.verdict === 'failed' && test.failure?.rootCauseHypothesis === ANALIZ_ATLANDI_BEYIN;
 }
 
 /** `--no-analysis` koşusunda kodu olmadığı (ya da taslak olduğu) için engellenen test. */
@@ -212,8 +218,11 @@ function durumCumlesi(test: RaporTesti): string {
       : `kobay test ${test.id} was blocked${kosu}: the app could not be reached.`;
     case 'inconclusive': return `kobay test ${test.id} has no usable result${kosu}.`;
     default: {
-      if (analizsizMi(test)) {
-        return `kobay test ${test.id} failed${kosu}. It ran without analysis (\`--no-analysis\`, for example in CI),`
+      if (analizsizMi(test) || beyinHatasiylaAnalizsizMi(test)) {
+        const neden = beyinHatasiylaAnalizsizMi(test)
+          ? 'because the brain call for the analysis failed or a brain limit was reached'
+          : '(`--no-analysis`, for example in CI)';
+        return `kobay test ${test.id} failed${kosu}. It ran without analysis ${neden},`
           + ` so the failure kind is \`${ANALIZSIZ_ETIKETI}\`.`;
       }
       const tur = test.failureKind === undefined
@@ -230,7 +239,11 @@ export function duzeltmeIstemi(test: RaporTesti, baglam: IstemBaglami): string {
   const kanitAdimi = paketVar(test)
     ? [`Get the evidence: \`kobay test failure get ${id} --output json\`, then read`
       + ` \`.kobay/failure-out/${id}/failure.json\` (\`failure.rootCauseHypothesis\`,`
-      + ' `failure.recommendedFixTarget`, `failure.evidence`) and the failing step\'s screenshot there.']
+      + ' `failure.recommendedFixTarget`, `failure.evidence`) and the failing step\'s screenshot there.'
+      + (beyinHatasiylaAnalizsizMi(test)
+        ? ' The analysis was skipped (`failure.recommendedFixTarget.rationale` says why), so read the evidence yourself,'
+          + ` or run \`kobay test run ${id} --output json\` again to get it analysed.`
+        : '')]
     : analizsizMi(test)
       ? [`Its failure bundle is not on this machine. Reproduce it: \`kobay test rerun ${id} --output json\` runs the`
         + ' test again; if it fails, kobay analyses it and `kobay test failure get ' + id + ' --output json` then'
@@ -300,7 +313,7 @@ export const ANALIZSIZ_ETIKETI = 'not analysed';
  * `--output json` ve MCP yanıtı `failureKind: 'unknown'` olarak kalır.
  */
 export function failureKindEtiketi(failureKind: string | undefined, rootCauseHypothesis: string | undefined): string | undefined {
-  return rootCauseHypothesis === ANALIZ_ATLANDI ? ANALIZSIZ_ETIKETI : failureKind;
+  return analizAtlandiMi(rootCauseHypothesis) ? ANALIZSIZ_ETIKETI : failureKind;
 }
 
 /**

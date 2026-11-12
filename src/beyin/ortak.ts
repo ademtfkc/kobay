@@ -21,6 +21,13 @@ export interface HamBeyinYaniti extends BeyinKullanimi {
   ham: string;
 }
 
+/** Süreç defterinin o anki sınırları ve tavanın saydığı harcama (yalnız okuma). */
+export interface BeyinSinirlari {
+  harcananUsd: number;
+  toplamSinirUsd: number;
+  claudeCagriButcesiUsd: number;
+}
+
 /** Süreç boyunca biriken beyin kullanımı; rezervasyon değil, sağlayıcının bildirdiği gerçek maliyet. */
 export interface BeyinKullanimSayaci {
   /** Sağlayıcıya gitmiş ve kapanmış çağrılar (başarılı ya da başarısız); hiç başlamayan çağrı sayılmaz. */
@@ -146,6 +153,18 @@ export class BeyinButcesi {
     };
   }
 
+  /**
+   * Tavan özet satırı için okuma (`test run` maliyet tavanı özeti); bütçe hesabına dokunmaz.
+   * `harcananUsd` tavanın kullandığı toplamdır (tavan mesajındaki "Spent" ile aynı).
+   */
+  sinirlar(): BeyinSinirlari {
+    return {
+      harcananUsd: this.toplamMaliyetUsd,
+      toplamSinirUsd: this.azamiMaliyetUsd,
+      claudeCagriButcesiUsd: this.claudeCagriButcesiUsd,
+    };
+  }
+
   private kullanimIsle(maliyetUsd: number | undefined): void {
     this.kapananCagri += 1;
     if (maliyetUsd === undefined || !Number.isFinite(maliyetUsd) || maliyetUsd < 0) this.maliyetiBilinmeyenCagri += 1;
@@ -181,6 +200,7 @@ export class BeyinButcesi {
           + `the call needs up to ${azamiMaliyetUsd.toFixed(4)} USD. Spent ${this.toplamMaliyetUsd.toFixed(4)} USD. `
           + `Limit ${this.azamiMaliyetUsd.toFixed(4)} USD. `
           + insanOnayiNotu('KOBAY_MAX_TOTAL_COST_USD or brain.maxTotalCostUsd'),
+        { toplamTavanReddi: true },
       );
     }
     this.cagriSayisi += 1;
