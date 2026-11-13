@@ -293,6 +293,7 @@ describe('test run when the total cost cap is reached (0.9.1)', () => {
     expect(await listeDurumlari(cwd)).toEqual({ [A]: 'draft', [B]: 'passed' });
   });
 
+  // Six real Playwright runs, four of them waiting out a 3 s heading check: ~16 s locally, more on loaded CI runners.
   it('a run that fails and then hits the cap in analysis stays failed everywhere; tests with code still run, drafts are not attempted', async (context) => {
     if (!playwrightMumkun(context) || demo === undefined) return;
     const { cwd, dizin } = await proje(demo.url);
@@ -399,5 +400,5 @@ describe('test run when the total cost cap is reached (0.9.1)', () => {
     expect(paket.failure.rootCauseHypothesis).toBe(ANALIZ_ATLANDI_BEYIN);
     expect(paket.failure.failureKind).toBe('unknown');
     expect(paket.failure.recommendedFixTarget.rationale).toContain('cost_cap');
-  });
+  }, 120_000);
 });
