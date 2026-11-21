@@ -10,6 +10,7 @@ import {
   SchemaError,
 } from '../depo/index.js';
 import { CIKIS, type CikisKodu } from './cikis.js';
+import { degerdekiUrlSorgulariniGizle, urlSorgulariniGizle } from '../ortak/url-sirlari.js';
 import type { Uyari } from './uyari.js';
 
 export interface KomutSonucu {
@@ -22,6 +23,11 @@ export interface KomutSonucu {
   hata?: { code: string; message: string };
   /** Eski ad gibi uyarılar: stderr'e süreç başına bir kez, JSON zarfında `warnings`. */
   uyarilar?: Uyari[];
+  /**
+   * Gövde URL sorgu maskesinden GEÇMEZ (spec 2026-11-13 A, Codex P2-5). Yalnız `test code get`:
+   * kod kullanıcının dosyasıdır (spec/test kaydı istisnası); maskeli kod geri yazılırsa sorgu bozulurdu.
+   */
+  hamCikti?: true;
 }
 
 export class UsageError extends Error {
@@ -46,13 +52,18 @@ export class TargetUnreachableError extends Error {
   }
 }
 
+/*
+ * Spec 2026-11-13 A: komut çıktısındaki her adresin sorgu değerleri ve fragment'i maskelenir (hedef
+ * adres dahil; `config.json`/`map.json` diskte ham kalır). Maske burada, sonuç kurulurken uygulanır ki
+ * CLI ile MCP aynı gövdeyi görsün; CLI yazıcısı (`ciktiYaz`) ayrıca bütün zarfı bir kez daha geçirir.
+ */
 export function basarili(json: unknown, mesaj?: string): KomutSonucu {
-  return { exitCode: CIKIS.GECTI, json, ...(mesaj === undefined ? {} : { mesaj }) };
+  return { exitCode: CIKIS.GECTI, json: degerdekiUrlSorgulariniGizle(json), ...(mesaj === undefined ? {} : { mesaj: urlSorgulariniGizle(mesaj) }) };
 }
 
 /** İnsan modunda yalnız verilen metni basar; JSON modunda yalnız json çıkar. */
 export function basariliMetin(json: unknown, metin: string): KomutSonucu {
-  return { exitCode: CIKIS.GECTI, json, metin };
+  return { exitCode: CIKIS.GECTI, json: degerdekiUrlSorgulariniGizle(json), metin: urlSorgulariniGizle(metin) };
 }
 
 /** Beyin hata kodlarını (`cli_yok`, `sema`…) eyleme yönlendiren İngilizce mesaja çevirir. */
@@ -80,7 +91,8 @@ function beyinMesaji(hata: BrainError): string {
 
 export function hataBilgisi(hata: unknown): { code: string; message: string } {
   if (hata instanceof BrainError) return { code: hata.name, message: beyinMesaji(hata) };
-  if (hata instanceof Error) return { code: hata.name, message: hata.message };
+  // Hata metni hedef adresi ya da Playwright'ın gezinme adresini taşıyabilir (CLI ve MCP zarfı).
+  if (hata instanceof Error) return { code: hata.name, message: urlSorgulariniGizle(hata.message) };
   return { code: 'UnknownError', message: 'Unknown error' };
 }
 

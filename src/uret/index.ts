@@ -435,6 +435,20 @@ function adimEslesmeleriniBul(kod: string): Array<{ sira: string; baslik: string
 
 const IZINLI_IMPORT = "import { test, expect } from './_fixture';";
 
+/**
+ * URL sorgu ya da fragment değerindeki maske yer tutucusu: `?q=[redacted]`, `&b=[redacted]`,
+ * `#[redacted]`, kodlanmış `%5Bredacted%5D`, kasadan bağımsız. Codex P2-4: kodlanmış URL değerindeki
+ * ayraçlar da (`%3F`, `%26`, `%23`, anahtar sonunda `%3D`) tanınır (`?next=%2Fcb%3Fcode%3D[redacted]`).
+ * Düz metindeki `[redacted]` (`getByText('[redacted]')`, yorum) URL değeri değildir, kabul edilir.
+ */
+const MASKELI_URL_DEGERI = new RegExp(
+  '(?:[?&#]|%3F|%26|%23)'
+    // Anahtar: ayraç ve boşluk olmayan karakterler; ayraç olmayan yüzde dizileri (`%5F`) anahtara dahil.
+    + '(?:(?:[^\\s\'"`=&#?%]|%(?!3D|26|23|3F)[0-9A-F]{2})*(?:=|%3D))?'
+    + '(?:\\[|%5B)redacted(?:\\]|%5D)',
+  'i',
+);
+
 export function statikHata(kod: string, test: TestKaydi, harita: Harita): string | null {
   const importSatirlari = kod.match(/^\s*import\b.*$/gm) ?? [];
   if (importSatirlari.length !== 1 || importSatirlari[0] !== IZINLI_IMPORT) {
@@ -446,6 +460,14 @@ export function statikHata(kod: string, test: TestKaydi, harita: Harita): string
 
   const guvenlikHatasi = yasakliKodHatasi(kod, IZINLI_IMPORT.length);
   if (guvenlikHatasi !== null) return guvenlikHatasi;
+
+  // Spec 2026-11-13 A (Codex P2-4): istem beyne URL sorgu değerleri maskeli gider; beyin `[redacted]`
+  // yazdıysa gerçek değeri bilemez. Böyle kod kabul edilmez, diske yazılmaz.
+  if (MASKELI_URL_DEGERI.test(kod)) {
+    return 'the generated code contains a redacted URL value ([redacted]): kobay hides URL query values from the brain,'
+      + ' so write page.goto without that query, or, if the page needs it, edit'
+      + ` .kobay/tests/${test.id}.spec.ts by hand and put the real value in.`;
+  }
 
   const testDeseni = new RegExp(
     `^test\\(\\s*(['"])${alintiIcinKac(test.name)}\\1\\s*,\\s*async\\s*\\(\\s*\\{\\s*page\\s*\\}\\s*\\)\\s*=>`,

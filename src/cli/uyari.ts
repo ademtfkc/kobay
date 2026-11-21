@@ -1,5 +1,6 @@
 import type { Writable } from 'node:stream';
 import { metindekiKimligiGizle } from '../depo/adres.js';
+import { urlSorgulariniGizle } from '../ortak/url-sirlari.js';
 
 /**
  * Makine okunur uyarı (JSON zarfı ve MCP yanıtının `warnings` alanı). Kodlar genel yüzeydir:
@@ -71,7 +72,7 @@ export function uyarilariYaz(uyarilar: readonly Uyari[] | undefined, stderr: Wri
     const satir = uyariSatiri(uyari);
     if (yazilanSatirlar.has(satir)) continue;
     yazilanSatirlar.add(satir);
-    stderr.write(`${metindekiKimligiGizle(satir)}\n`);
+    stderr.write(`${urlSorgulariniGizle(metindekiKimligiGizle(satir))}\n`);
   }
 }
 

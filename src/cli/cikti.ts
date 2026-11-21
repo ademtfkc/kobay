@@ -1,5 +1,6 @@
 import type { Writable } from 'node:stream';
 import { metindekiKimligiGizle } from '../depo/adres.js';
+import { degerdekiUrlSorgulariniGizle, urlSorgulariniGizle } from '../ortak/url-sirlari.js';
 import type { KomutSonucu } from './komut.js';
 import { uyarilariYaz, type Uyari } from './uyari.js';
 
@@ -117,7 +118,15 @@ function insanCiktisi(veri: unknown): string {
 
 /** Doğrudan stderr'e düşen uyarılar da insan çıktısı gibi adres kimliğinden arındırılır. */
 export function uyariYaz(metin: string, stderr: Writable = process.stderr): void {
-  stderr.write(metindekiKimligiGizle(metin));
+  stderr.write(gosterimMaskesiTam(metin));
+}
+
+/**
+ * İnsan çıktısının son süzgeci: adresin kullanıcı bilgisi ve (spec 2026-11-13 A) her adresin sorgu
+ * değerleri ile fragment'i. Hedef adres de çıktıda maskeli; diskteki `config.json` ham kalır.
+ */
+function gosterimMaskesiTam(metin: string): string {
+  return urlSorgulariniGizle(metindekiKimligiGizle(metin));
 }
 
 const MIKRO = 1_000_000;
@@ -175,7 +184,8 @@ export function ciktiYaz(
   // Uyarı satırı iki modda da stderr'e gider (stdout makine çıktısı temiz kalır); süreç başına bir kez.
   uyarilariYaz(sonuc.uyarilar, stderr);
   if (json) {
-    const zarf = ciktiZarfi(sonuc);
+    // Makine çıktısında da URL sorguları maskeli (spec 2026-11-13 A); alan yapısı değişmez.
+    const zarf = sonuc.hamCikti === true ? ciktiZarfi(sonuc) : degerdekiUrlSorgulariniGizle(ciktiZarfi(sonuc));
     const brain = beyin === undefined ? undefined : { calls: beyin.calls, costUsd: gecerliMaliyet(beyin.costUsd) };
     stdout.write(`${JSON.stringify(brain === undefined ? zarf : { ...zarf, brain })}\n`);
     return;
@@ -185,13 +195,15 @@ export function ciktiYaz(
 }
 
 function insanCiktisiYaz(sonuc: KomutSonucu, stdout: Writable, stderr: Writable): void {
-  // İnsan modunda basılan her metin (hata mesajı ve kayıt dökümü dahil) adres kimliğinden arındırılır;
-  // `--output json` yukarıda aynen çıkar, makine sözleşmesi değişmez.
+  // `hamCikti` (yalnız `test code get`): kod her biçimde diskteki haliyle basılır, hiçbir süzgeç yok.
+  const gosterimMaskesi = sonuc.hamCikti === true ? (metin: string): string => metin : gosterimMaskesiTam;
+  // İnsan modunda basılan her metin (hata mesajı ve kayıt dökümü dahil) adres kimliğinden ve URL
+  // sorgularından arındırılır; `--output json` yukarıda yalnız URL sorgu maskesinden geçer.
   if (sonuc.metin !== undefined) {
-    if (sonuc.exitCode === 0) stdout.write(`${metindekiKimligiGizle(sonuc.metin)}\n`);
-    else stderr.write(`${metindekiKimligiGizle(sonuc.metin)}\n`);
+    if (sonuc.exitCode === 0) stdout.write(`${gosterimMaskesi(sonuc.metin)}\n`);
+    else stderr.write(`${gosterimMaskesi(sonuc.metin)}\n`);
     return;
   }
-  if (sonuc.mesaj !== undefined) stderr.write(`${metindekiKimligiGizle(sonuc.mesaj)}\n`);
-  if (sonuc.exitCode === 0) stdout.write(metindekiKimligiGizle(insanCiktisi(sonuc.json)));
+  if (sonuc.mesaj !== undefined) stderr.write(`${gosterimMaskesi(sonuc.mesaj)}\n`);
+  if (sonuc.exitCode === 0) stdout.write(gosterimMaskesi(insanCiktisi(sonuc.json)));
 }

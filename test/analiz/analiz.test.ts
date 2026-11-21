@@ -206,6 +206,63 @@ describe('hataAnalizEt', () => {
     stderr.mockRestore();
   });
 
+  it('spec 2026-11-13 A (Codex P2-2): haritada olmayan sırlı test adresi stderr uyarısına ham basılmaz', async () => {
+    const { dizin, beyin, carilerTesti } = await carilerHazirla(beyinYanit, { dom: '<h1>Cariler</h1>' });
+    const sirli = { ...carilerTesti, url: 'http://u:SECRET_AN_PASS@uygulama.test/missing?code=SECRET_AN_CODE#t=SECRET_AN_FRAG' };
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await hataAnalizEt(beyin, dizin, sirli, sonuc, [
+        { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
+      ]);
+      const yazilan = stderr.mock.calls.map((cagri) => String(cagri[0])).join('');
+      // Sahte test olmasın: uyarı gerçekten basıldı.
+      expect(yazilan).toContain('Test page is not in the explore map');
+      expect(yazilan).not.toContain('SECRET_AN');
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('kör kabul P2-2: sırlı adım açıklaması paketin steps.json ve failure.json dosyalarına ham yazılmaz', async () => {
+    const { dizin, beyin } = await hazirDizin();
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await hataAnalizEt(beyin, dizin, test, sonuc, [
+        { stepIndex: 0, description: 'Open http://uygulama.test/cb?code=SECRET_PADIM_0', status: 'passed', durationMs: 5 },
+        { stepIndex: 1, description: 'Check http://uygulama.test/cb?code=SECRET_PADIM_1', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
+      ]);
+    } finally {
+      stderr.mockRestore();
+    }
+    const paketDizini = dizin.yol('failure', test.id);
+    const metinler = await Promise.all((await readdir(paketDizini)).filter((ad) => ad.endsWith('.json')).map((ad) => readFile(join(paketDizini, ad), 'utf8')));
+    // Sahte test olmasın: açıklama pakete gerçekten yazıldı (maskeli).
+    expect(metinler.join('\n')).toContain('cb?code=[redacted]');
+    expect(metinler.join('\n')).not.toContain('SECRET_PADIM');
+  });
+
+  it('Codex P2-3: beyin yanıtındaki sırlı adres ve sır failure.json\'a ham yazılmaz', async () => {
+    const { dizin, beyin } = await hazirDizin({
+      ...beyinYanit,
+      rootCauseHypothesis: 'Redirect went to https://app.test/cb?code=SECRET_BY_CODE#t=SECRET_BY_FRAG and failed.',
+      recommendedFixTarget: {
+        kind: 'code',
+        reference: 'https://u:SECRET_BY_PASS@app.test/login',
+        rationale: 'Header was Authorization: Bearer SECRET_BY_BEARER_0123456789.',
+      },
+      evidence: [{ kind: 'screenshot', stepIndex: 1, summary: 'Shows https://app.test/x?token=SECRET_BY_KANIT.' }],
+    });
+    const paket = await hataAnalizEt(beyin, dizin, test, sonuc, [
+      { stepIndex: 1, description: 'Başlığı doğrula', status: 'failed', errorMessage: 'Başlık bulunamadı', durationMs: 10 },
+    ]);
+    const yazilan = await readFile(join(dizin.yol('failure', test.id), 'failure.json'), 'utf8');
+    // Sahte test olmasın: beyin metni pakete gerçekten yazıldı (maskeli).
+    expect(yazilan).toContain('https://app.test/cb?code=[redacted]');
+    expect(yazilan).toContain('Shows https://app.test/x?token=[redacted]');
+    expect(yazilan).not.toContain('SECRET_BY');
+    expect(JSON.stringify(paket.failure)).not.toContain('SECRET_BY');
+  });
+
   it('model metinlerinden iç harita alan adlarını ayıklar', async () => {
     const { dizin, beyin } = await hazirDizin({
       ...beyinYanit,

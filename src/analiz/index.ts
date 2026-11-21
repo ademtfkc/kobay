@@ -140,6 +140,20 @@ async function ekDosyasiHazirla(kaynak: string, hedefAd: string): Promise<EkDosy
   return { kaynak, hedefAd, icerik };
 }
 
+/**
+ * Codex P2-3: beyin yanıtı (gerekçe, öneri, kanıt özeti) maskeli girdiden üretilse de model bir adresi
+ * ya da sırrı yeniden yazabilir. `failure.json`'a gitmeden önce her dize değeri girdilerle aynı
+ * URL/sır maskesinden geçer (savunma; yerel eklenen metinler de dahil).
+ */
+function failureMaskele<T>(deger: T): T {
+  if (typeof deger === 'string') return gizliDegerleriMaskele(deger) as T;
+  if (Array.isArray(deger)) return deger.map((oge: unknown) => failureMaskele(oge)) as T;
+  if (typeof deger === 'object' && deger !== null) {
+    return Object.fromEntries(Object.entries(deger).map(([anahtar, oge]) => [anahtar, failureMaskele(oge as unknown)])) as T;
+  }
+  return deger;
+}
+
 async function istegeBagliOku(yol: string): Promise<string | null> {
   try {
     return await readFile(yol, 'utf8');
@@ -160,7 +174,8 @@ function jsonDizisiOku<T>(metin: string | null): T[] {
 }
 
 function analizUyarisiYaz(mesaj: string): void {
-  process.stderr.write(`[kobay analysis] ${mesaj}\n`);
+  // Uyarı test adresini taşır (spec 2026-11-13 A): sorgu, fragment ve kullanıcı bilgisi maskelenir.
+  process.stderr.write(`[kobay analysis] ${gizliDegerleriMaskele(mesaj)}\n`);
 }
 
 function urlYolu(adres: string, baseUrl: string): string | null {
@@ -664,12 +679,15 @@ export async function hataAnalizEt(
     }));
   const adimlariTemizle = adimlar.map((adim) => ({
     ...adim,
+    // Adım açıklaması plandan gelir; sırlı adres taşıyabilir (spec 2026-11-13 A).
+    description: gizliDegerleriMaskele(adim.description),
     ...(adim.errorMessage === undefined ? {} : {
       errorMessage: gizliDegerleriMaskele(hataMesajiniTemizle(adim.errorMessage)),
     }),
   }));
   const maskeliDusenAdim: AdimSonucu = {
     ...dusenAdim,
+    description: gizliDegerleriMaskele(dusenAdim.description),
     ...(dusenAdim.errorMessage === undefined ? {} : {
       errorMessage: gizliDegerleriMaskele(hataMesajiniTemizle(dusenAdim.errorMessage)),
     }),
@@ -730,13 +748,13 @@ export async function hataAnalizEt(
   // `runs/<runId>/trace.zip`'te kalır; budama paketin gösterdiği koşuyu korur, kopyalayan isterse
   // (`--include-trace`) oradan alır.
 
-  const failure = ortakFixtureOnerisiniDuzelt(oturumKanitsizEnvDuzelt(kodDuzeltmeIpucuEkle(yerelHaritaEmniyeti(
+  const failure = failureMaskele(ortakFixtureOnerisiniDuzelt(oturumKanitsizEnvDuzelt(kodDuzeltmeIpucuEkle(yerelHaritaEmniyeti(
     { ...beyinYaniti.json, evidence: kanitlar },
     haritaFarki,
     maskeliDusenAdim.stepIndex,
     maskeliHataMetni,
     maskeliKod,
-  ), maskeliHataMetni), maskeliDom, maskeliHataMetni, agHatalari), test.id);
+  ), maskeliHataMetni), maskeliDom, maskeliHataMetni, agHatalari), test.id));
   const temizSonuc = sonuc.errorMessage === undefined ? sonuc : {
     ...sonuc,
     errorMessage: gizliDegerleriMaskele(hataMesajiniTemizle(sonuc.errorMessage)),

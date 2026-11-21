@@ -544,3 +544,71 @@ test('fixture evidence', async ({ page }) => {
       .toBe("export * from \"/tmp/kobay/dist/kos/fixture.js\";\n");
   });
 });
+
+describe('spec 2026-11-13 A (Codex P2-4): maskeli istemden gelen [redacted] kodu', () => {
+  it('haritada yalnız /search?q=required varken beynin [redacted] değerli kodu reddedilir, dosyaya yazılmaz', async () => {
+    const { beyinOlustur } = await import('../../src/beyin/index.js');
+    const kok = await geciciKobay();
+    const yanitlar = await geciciDizinAc('kobay-uret-yanit-');
+    const logDizini = await geciciDizinAc('kobay-uret-log-');
+    const taban = 'http://ornek.test';
+    const sorguluHarita: Harita = {
+      baseUrl: `${taban}/search?q=required`,
+      loggedIn: true,
+      exploredAt: '2026-09-17T00:00:00.000Z',
+      pages: [{ url: `${taban}/search?q=required`, title: 'Arama', headings: ['Arama'], links: [], forms: [], buttons: [], menu: [] }],
+    };
+    const maskeliKod = dogruKod(taban).replace(`'${taban}/liste'`, "'/search?q=[redacted]'");
+    await yazAtomik(join(yanitlar, 'generate-t_ab12cd34.json'), JSON.stringify({ code: maskeliKod }));
+    const beyin = beyinOlustur({ adaptor: 'sahte' }, { KOBAY_SAHTE_YANIT_DIZINI: yanitlar });
+    await expect(kodUret(beyin, testKaydi(), sorguluHarita, { projeKoku: kok, kobayKoku: kok, logDizini }))
+      .rejects.toThrow('the generated code contains a redacted URL value');
+    await expect(access(join(kok, 'tests', 't_ab12cd34.spec.ts'))).rejects.toThrow();
+    // Beyin gerçek değeri hiç görmedi: istem maskeliydi.
+    const { readdir } = await import('node:fs/promises');
+    const gunlukler = await Promise.all((await readdir(logDizini)).map((ad) => readFile(join(logDizini, ad), 'utf8')));
+    expect(gunlukler.join('\n')).toContain('q=[redacted]');
+    expect(gunlukler.join('\n')).not.toContain('q=required');
+  });
+
+  it('statik kapı (Codex tur 2): yalnız URL sorgu/fragment değerindeki yer tutucu reddedilir; kodlanmış ve büyük harfli de', () => {
+    const taban = 'http://ornek.test';
+    const ile = (eski: string, yeni: string): string => dogruKod(taban).replace(eski, yeni);
+    const hedef = `'${taban}/liste'`;
+    for (const kabul of [
+      ile("page.getByRole('heading', { name: 'Liste' })", "page.getByText('[redacted]')"),
+      ile(`    await page.goto(${hedef});`, `    // UI displays [redacted]\n    await page.goto(${hedef});`),
+    ]) expect(statikHata(kabul, testKaydi(), harita(taban)), kabul).toBeNull();
+    for (const deger of ['?q=[redacted]', '?q=%5Bredacted%5D', '?q=%5bREDACTED%5d', '?q=[REDACTED]', '#[redacted]', '?a=1&b=[redacted]']) {
+      const ret = ile(hedef, `'${taban}/liste${deger}'`);
+      expect(statikHata(ret, testKaydi(), harita(taban)), deger).toMatch(/redacted URL value/);
+    }
+  });
+
+  it('statik kapı (Codex P2-4): yüzde-kodlu ayraçlı (%3F, %26, %23, %3D) URL değerindeki yer tutucu da reddedilir', () => {
+    const taban = 'http://ornek.test';
+    const ile = (eski: string, yeni: string): string => dogruKod(taban).replace(eski, yeni);
+    const hedef = `'${taban}/liste'`;
+    for (const deger of [
+      '?next=https%3A%2F%2Fx.test%2Fcb%3Fcode%3D%5Bredacted%5D',
+      '/https%3A%2F%2Fx.test%2Fcb%3Fcode%3D[redacted]',
+      '?next=%2Fcb%3Fa%3D1%26token%3D[redacted]',
+      '?next=%2Fcb%23[redacted]',
+      '/cb%23%5Bredacted%5D',
+      '?next=%2fcb%3fcode%3d[REDACTED]',
+    ]) {
+      const ret = ile(hedef, `'${taban}/liste${deger}'`);
+      expect(statikHata(ret, testKaydi(), harita(taban)), deger).toMatch(/redacted URL value/);
+    }
+    // Kontrol: düz metindeki yer tutucu (yüzde işaretli metin dahil) hâlâ kabul edilir.
+    for (const kabul of [
+      ile("page.getByRole('heading', { name: 'Liste' })", "page.getByText('[redacted]')"),
+      ile("page.getByRole('heading', { name: 'Liste' })", "page.getByText('100%25 [redacted]')"),
+    ]) expect(statikHata(kabul, testKaydi(), harita(taban)), kabul).toBeNull();
+  });
+
+  it('statik kapı: koddaki [redacted] kullanıcıya ne yapacağını söyler', () => {
+    const kod = dogruKod('http://ornek.test').replace("'http://ornek.test/liste'", "'http://ornek.test/liste?id=[redacted]'");
+    expect(statikHata(kod, testKaydi(), harita('http://ornek.test'))).toMatch(/redacted URL value.*\.kobay\/tests\/t_ab12cd34\.spec\.ts/);
+  });
+});

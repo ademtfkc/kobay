@@ -18,6 +18,7 @@ import {
   oturumKokenleriniDenetle,
 } from '../kesif/oturum-dosyasi.js';
 import {
+  girisDogrulanamadiHatasi,
   girisiGonder,
   girisSayfaMesajiNotu,
   hizSiniriOnerisi,
@@ -27,6 +28,7 @@ import {
   oturumDurumunuSil,
   oturumDurumunuYaz,
 } from '../kesif/oturum.js';
+import { urlSorgulariniGizle } from '../ortak/url-sirlari.js';
 
 /**
  * Koşu öncesi ve sonrası oturum yoklaması (0.8.0 Ş1 P1-2).
@@ -86,10 +88,27 @@ async function yokla(sayfa: Page, baseUrl: string, loginUrl: string | undefined)
   return girisEkranindaMi(sayfa, new URL(baseUrl).origin, loginUrl);
 }
 
-function hataMetni(hata: unknown, context: BrowserContext | undefined): string {
+/**
+ * Playwright gezinme hatası (`page.goto: net::ERR_… at <adres>`) adresi sorgu dizgisiyle taşır (OAuth
+ * `code`, dönen `sid`, imzalı bağlantı). Bu hatalarda Playwright metni taşınmaz: sabit cümle ve
+ * yalnız katı desene uyan Chromium ağ hata kodu (` (net::ERR_NAME_NOT_RESOLVED)`); kod yoksa yalnız cümle.
+ */
+const GEZINME_HATASI = /^(?:page|frame)\.(?:goto|reload|waitForURL|waitForNavigation):/;
+function gezinmeHatasiMetni(ham: string): string | null {
+  if (!GEZINME_HATASI.test(ham)) return null;
+  const kod = /^[a-zA-Z.]+: (net::ERR_[A-Z_]+)(?= |$)/m.exec(ham)?.[1];
+  const zamanAsimi = /^[a-zA-Z.]+: Timeout \d+ms exceeded/.test(ham);
+  return `the app page could not be opened${kod === undefined ? (zamanAsimi ? ' (page load timed out)' : '') : ` (${kod})`}`;
+}
+
+/** Yeniden giriş hatasının kullanıcıya giden tek satırı (dışa açık: yedek maske ayrıca test edilir, M14). */
+export function hataMetni(hata: unknown, context: BrowserContext | undefined): string {
   const ham = hata instanceof Error ? hata.message : String(hata);
+  const gezinme = gezinmeHatasiMetni(ham);
+  if (gezinme !== null) return gezinme;
   const koruma = context === undefined ? undefined : girisKorumasiBul(context);
-  return (koruma === undefined ? ham : koruma.metniGizle(ham)).split('\n')[0] ?? '';
+  // Kalan metinde de adresin sorgu değerleri ve fragment'i maskelenir (spec 2026-11-13 A).
+  return urlSorgulariniGizle((koruma === undefined ? ham : koruma.metniGizle(ham)).split('\n')[0] ?? '');
 }
 
 /** Hız sınırında önerilen komut: test kimliği biliniyorsa onun rerun'ı. */
@@ -194,7 +213,8 @@ async function yenidenGir(
     // yolunda) ve orada yine bir giriş formu var. Başka yoldaki parola alanı (zorunlu
     // `/account/change-password`) ret değildir.
     let girisEkraninda = false;
-    if (giris.basarili) {
+    // Doğrulanamayan girişte de bakılır: 401 sonrası giriş formuna dönen (PRG) giriş kesin rettir.
+    if (giris.basarili || giris.dogrulanamadi !== undefined) {
       await sayfa.waitForLoadState('networkidle', { timeout: OTURUM_YOKLAMA_AG_MS }).catch(() => undefined);
       const yol = new URL(sayfa.url()).pathname;
       const girisYolu = yol === formYolu || (config.loginUrl !== undefined && new URL(config.loginUrl).pathname === yol);
@@ -210,6 +230,17 @@ async function yenidenGir(
         mesaj: `${bas} was refused by the app's rate limit (HTTP 429 Too Many Requests); this does not mean the saved`
           + ' credentials are wrong, and kobay kept them and the session file.'
           + ` ${hizSiniriOnerisi(giris.hizSiniri, yenidenKosKomutu(testId))}`,
+      };
+    }
+    // P2-1: giriş isteği hiç yanıt almadıysa (`durum` yok) giriş formunda kalmak ret kanıtı değildir:
+    // adresi değişmeyen SPA'da form zaten yerindedir. Yalnız yanıt alan (4xx/5xx) giriş forma dönünce kesin ret.
+    if (giris.dogrulanamadi !== undefined && (!girisEkraninda || giris.dogrulanamadi.durum === undefined)) {
+      // 0.9.2 B: doğrulanamayan giriş (4xx/5xx, yanıtsız ya da düşen giriş isteği) kesin ret değildir:
+      // 429 gibi oturum dosyası ve kimlik silinmez, yeni oturum yazılmaz; koşu yine durur.
+      return {
+        tur: 'hata',
+        mesaj: `${bas} failed: ${girisDogrulanamadiHatasi(giris.dogrulanamadi.durum).message}`
+          + ' kobay kept the saved credentials and the session file.',
       };
     }
     if (!giris.basarili || girisEkraninda) {

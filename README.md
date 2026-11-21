@@ -460,14 +460,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.9.1
+      - uses: ademtfkc/kobay@v0.9.2
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Input | Default | Meaning |
 | --- | --- | --- |
-| `version` | `0.9.1` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
+| `version` | `0.9.2` | `@ademtfkc/kobay` version to install: pinned to the release the action ships with; set `latest` to follow npm. A path to a local `.tgz` also works. |
 | `node-version` | `22` | Node.js for `actions/setup-node`. |
 | `working-directory` | `.` | The project root that holds `.kobay/`; passed as `--cwd`. |
 | `tests` | empty | Space-separated test IDs; empty runs `--all`. |
@@ -620,6 +620,12 @@ note; a test whose run folder is gone shows as `not run`.
 
 ## Status and limits
 
+**0.9.2.** A security patch. Every query value, fragment and `user:password@`
+part of an absolute URL is masked as `[redacted]` in kobay's output, run files, report and brain
+prompt (Playwright's own raw run files excepted). A login that kobay cannot
+verify (HTTP 403/5xx without a rejection message, no answer, a cancelled
+request) now stops with exit code `5` and keeps the older session file.
+
 **0.9.1.** A patch release. `test run` now records a result when the brain fails
 part-way, so the run output, `test result` and the report agree (`test list`
 keeps showing a draft as `draft`; a test another run updated meanwhile keeps
@@ -692,6 +698,25 @@ What has and has not been exercised, so you can decide before installing:
   the credentials. A
   JavaScript-driven login is covered only by the network guard, not by the
   form-origin check.
+- **Login success is judged conservatively.** If the login request or its
+  redirects (fetch/XHR included) get an HTTP 4xx/5xx, `explore` stops with
+  `Login could not be verified` (exit code `5`) even when the page then moves
+  on, and no session is saved. An app that answers a good login with an error
+  status needs `--session-file`. In an app that changes the address without
+  waiting for the login response, a login request that fails, is cancelled or
+  gets no answer within about 7 s ends the same way. When the address does not
+  change (a single-page app that logs in with fetch), a login request that
+  fails, is cancelled or gets no answer within about 12 s also ends with
+  `Login could not be verified`, and the older session file is kept; a login
+  request that got HTTP 401 or 422 is a rejection. A login that ends without an error status on a
+  page with a password form still counts as success (a forced password change
+  looks the same). kobay may miss or mismatch the login request when the
+  password is not sent as plain text (base64, client-side encryption), when the
+  form submits inside an iframe or popup, when the page sends the password on
+  input/change events, or when a beacon carries the password after login. If
+  the app gets HTTP 419 or 403 on the login request and retries by itself (CSRF
+  refresh), kobay goes by the first refusal and says `Login could not be
+  verified`; use `--session-file` for such an app.
 - **The plan's credential filter errs on the safe side.** With a login
   configured, it can drop a useful invalid-login proposal whose fake value looks
   real to it: `Enter 'wrong_password_qa' in the Password field` is dropped as
@@ -958,6 +983,31 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
   traces from `.kobay/failure/` and the traces of passed runs. It does not
   touch an old copy in `.kobay/failure-out/<id>/`; the next `test failure get`
   for that test replaces it without the trace.
+- **URL query values are masked in output, not in your own files.** Every
+  query value and fragment of an absolute URL (`?code=[redacted]&state=[redacted]`,
+  key names kept, whatever the key) and the `user:password@` part are masked in
+  command output (text, JSON, MCP), run results, the failure bundle,
+  `network.json`, `console.json`, brain logs, the prompt sent to the brain and
+  the HTML report. Kept raw, because they are your input or needed to run:
+  `.kobay/config.json`, `.kobay/map.json`, test records and code under
+  `.kobay/tests/` (so `test code get` prints the code as it is on disk; text
+  output adds one trailing newline, JSON and MCP give it byte for byte), the
+  brain's test proposals in `.kobay/plan/proposals.json` (stored as the brain
+  returned them; the brain wrote them from the masked prompt), and
+  local run evidence in `.kobay/runs/<run-id>/`: the step DOM snapshots
+  (`step-N.html`; their copies in the failure bundle are masked) and
+  Playwright's own raw output (`trace.zip`, `pw-report.json`, `pw/`). Not
+  detected: secrets in a URL path (`/reset/<token>`), a bare query or the
+  fragment of a relative address (`/cb?SECRET`, `/cb#SECRET`; its `key=value`
+  pairs are masked), double-encoded URLs
+  (`%253F`), and JSON-escaped `&` (`\u0026`) or `\/` inside a URL. The mask
+  errs on the safe side: text that only looks like a URL (`Order#id=42`, a
+  Playwright `Received: "a?b=c"`) and inline `data:` content can also show
+  `[redacted]`.
+- **Pages that need a query value.** The brain never sees query values, so it
+  cannot write them; generated code that contains `[redacted]` is refused with
+  an error. If a page only works with a query (`/search?q=…`), edit the test
+  code in `.kobay/tests/<id>.spec.ts` by hand and put the real value in.
 - **HTML report screenshots and videos are not redacted.** `test report` masks
   and escapes every text it writes, but copies step screenshots and failed-run
   videos as they are. Do not publish a report before looking at them. `.kobay/report/` is git-ignored; if you write

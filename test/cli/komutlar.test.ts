@@ -1241,7 +1241,8 @@ describe('hata mesajları eyleme yönlendirir', () => {
     const al = await projectGet({ cwd });
     expect(al.exitCode).toBe(0);
     expect(al.json).toMatchObject({
-      config: { baseUrl: 'http://[redacted]@localhost:3000', loginUrl: 'http://[redacted]@localhost:3000/giris?x=1' },
+      // Spec 2026-11-13 A: sorgu değeri de çıktıda maskeli (anahtar adı kalır).
+      config: { baseUrl: 'http://[redacted]@localhost:3000', loginUrl: 'http://[redacted]@localhost:3000/giris?x=[redacted]' },
     });
     const cikti = (json: boolean): { stdout: string; stderr: string } => {
       const stdout = new PassThrough();
@@ -1254,7 +1255,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
     expect(insan.stdout).toContain('http://[redacted]@localhost:3000');
     const makine = cikti(true);
     expect(makine.stdout + makine.stderr).not.toContain('Hunter2Pass');
-    expect(makine.stdout).toContain('http://[redacted]@localhost:3000/giris?x=1');
+    expect(makine.stdout).toContain('http://[redacted]@localhost:3000/giris?x=[redacted]');
     const gecersiz = await projectUpdate({ cwd, url: 'http://admin:Hunter2Pass@' });
     expect(gecersiz.mesaj ?? '').not.toContain('Hunter2Pass');
   });
@@ -1366,7 +1367,7 @@ describe('hata mesajları eyleme yönlendirir', () => {
     expect(await beyinGunlukleri()).not.toEqual([]);
   });
 
-  it('kimliksiz config project get --output json içinde ham config ile birebir aynı kalır', async () => {
+  it('kimliksiz config project get --output json içinde ham config ile birebir aynı kalır (yalnız adres sorgu değerleri maskeli)', async () => {
     const cwd = await geciciDizin('kobay-mesaj-');
     await mkdir(join(cwd, 'docs'), { recursive: true });
     await writeFile(join(cwd, 'docs', 'rehber.md'), '# Rehber\n');
@@ -1380,8 +1381,12 @@ describe('hata mesajları eyleme yönlendirir', () => {
     expect(schemaVersion).toBe(1);
     expect(ham).toHaveProperty('authOrigins');
     expect(ham).toHaveProperty('docsPath');
+    // Spec 2026-11-13 A (Gökhan kararı): config.json'da ham kalan sorgu değerleri çıktıda maskelenir.
+    expect(ham).toMatchObject({ baseUrl: 'http://localhost:3000/app?x=1', loginUrl: 'https://sso.test/giris?r=1' });
     const al = await projectGet({ cwd });
-    expect((al.json as { config: unknown }).config).toStrictEqual(ham);
+    expect((al.json as { config: unknown }).config).toStrictEqual({
+      ...ham, baseUrl: 'http://localhost:3000/app?x=[redacted]', loginUrl: 'https://sso.test/giris?r=[redacted]',
+    });
   });
 
   it('doctor kimlikli kayıtlı adresi yoklamaz, hedef satırı düzeltmeyi söyler', async () => {

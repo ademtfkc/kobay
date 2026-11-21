@@ -122,6 +122,35 @@ export class LoginSubmitTimeoutError extends LoginFormOriginError {
   }
 }
 
+/**
+ * 0.9.2 B: giriş isteği (ya da ona bağlı yönlendirme zinciri, fetch/XHR dahil) HTTP 4xx/5xx aldı
+ * ama sayfa yine de değişti (formsuz hata sayfası, JavaScript yönlendirmesi, SPA rotası). Uygulama
+ * bilgisi olmadan bu başarı sayılamaz: oturum yazılmaz, harita yazılmaz. Giriş hatası sınıfındadır
+ * (CLI'da çıkış kodu 5). Mesaj yalnız durum kodunu taşır (adres ve sayfa metni yok).
+ */
+export class LoginNotVerifiedError extends LoginFormOriginError {
+  constructor(mesaj: string) {
+    super(mesaj);
+    this.name = 'LoginNotVerifiedError';
+  }
+}
+
+/**
+ * `GirisSonucu.dogrulanamadi` için çağıranın fırlattığı hata. `durum` yoksa giriş isteği karar
+ * anında hâlâ yanıtsızdı.
+ */
+export function girisDogrulanamadiHatasi(durum: number | undefined): LoginNotVerifiedError {
+  const neden = durum === undefined
+    ? 'got no usable response (it failed, was cancelled, or did not answer in time)'
+    : `got HTTP ${durum}`;
+  return new LoginNotVerifiedError(
+    `Login could not be verified: the login request ${neden}, so kobay did not count it as a`
+      + ' successful login; the session was not saved. Check the username, the password, and the login URL.'
+      + ' If this app answers a successful login with an error status, import a session instead'
+      + ' (`kobay explore --session-file <file>`).',
+  );
+}
+
 /** Kayıtlı kimlik ile hedef origin uyuşmadığında fırlatılır; parola hiç yazılmamıştır. */
 export class CredentialOriginError extends Error {
   constructor(mesaj: string) {
@@ -194,6 +223,14 @@ export interface GirisSonucu {
   basarili: boolean;
   sayfaMesaji?: GirisSayfaMesaji;
   hizSiniri?: GirisHizSiniri;
+  /**
+   * 0.9.2 B: sayfa değişti (eskiden başarı sayılırdı) ama giriş isteği ya da yönlendirme zinciri
+   * 4xx/5xx aldı (429 hariç; o `hizSiniri`) ya da karar anında hâlâ yanıtsızdı (`durum` yok); ya da
+   * adres aynı kaldı, giriş isteği 403/5xx aldı ve sayfa ret gerekçesi göstermedi.
+   * `basarili` her zaman false; çağıran yeni oturum yazmaz, eski oturum dosyasını silmez
+   * (geçici 500/WAF 403 geçerli oturumu yok etmesin), `girisDogrulanamadiHatasi` ile biter.
+   */
+  dogrulanamadi?: { durum?: number };
 }
 
 /** `Retry-After` başlığının kabul edilen en büyük değeri (sn); üstü ya da okunamayanı yok sayılır. */
@@ -266,6 +303,21 @@ export const GIRIS_ISTEGI_BEKLEME_MS = 5_000;
 interface HizSiniriIzi {
   acik: boolean;
   hiz?: GirisHizSiniri;
+  /**
+   * Giriş isteğinin (zincir ayakları dahil) ilk 4xx/5xx durumu (429 hariç). Yalnız giriş isteği
+   * sayılır: sonraki asset/analitik istekleri parolayı taşımaz, karara girmez.
+   */
+  ret?: number;
+  /**
+   * Yanıtı gelmeden başarısız olan ya da iptal edilen giriş isteği (zincir ayakları dahil) görüldü.
+   * `bekleyen`den silinir ama sonucu bilinmez: karara "doğrulanamadı" diye girer.
+   */
+  dustu: boolean;
+  /**
+   * P2-1: bir giriş isteği (zincir ayakları dahil) yönlendirme olmayan bir yanıt (2xx/4xx/5xx)
+   * aldı. Aynı adreste kalan girişte "sunucu yanıt verdi, ret olabilir" ile "hiç yanıt yok"u ayırır.
+   */
+  yanitAldi: boolean;
   /** Yanıtı (başlıkları) henüz gelmemiş giriş istekleri (zincir ayakları dahil). */
   bekleyen: Set<Request>;
   /**
@@ -329,7 +381,7 @@ export async function girisiGonder(
   // Yönlendirme zinciri (`POST /session` → 302 → `GET /rate-limit` = 429): koşullar zincirin
   // BAŞLANGIÇ isteğine (parola, yöntem, izinli küme) uygulanır; her ayak ana çerçevede ve izinli
   // kümede olmalı.
-  const iz: HizSiniriIzi = { acik: false, bekleyen: new Set(), gezinmeler: new Set(), gezinmeDurumu: new WeakMap() };
+  const iz: HizSiniriIzi = { acik: false, dustu: false, yanitAldi: false, bekleyen: new Set(), gezinmeler: new Set(), gezinmeDurumu: new WeakMap() };
   const girisIstegiMi = (istek: Request): boolean => {
     try {
       if (istek.frame() !== sayfa.mainFrame()) return false;
@@ -364,7 +416,8 @@ export async function girisiGonder(
     if (!belgeAcanDurumMu(iz.gezinmeDurumu.get(istek))) iz.gezinmeler.delete(istek);
   };
   const istekDustu = (istek: Request): void => {
-    iz.bekleyen.delete(istek);
+    // Yanıtsız düşen giriş isteği (ağ hatası, iptal): sonucu bilinmez, başarı sayılmaz.
+    if (iz.bekleyen.delete(istek)) iz.dustu = true;
     iz.gezinmeler.delete(istek);
   };
   // Ana çerçeve yeni belgeye (ya da aynı belgede) gezindi: bekleyen gezinme yerleşti.
@@ -377,7 +430,14 @@ export async function girisiGonder(
     // Yanıt başlıkları geldi: durum belli, gövdenin bitmesi beklenmez (bitmeyen ret gövdesi).
     iz.bekleyen.delete(yanit.request());
     if (iz.gezinmeler.has(yanit.request())) iz.gezinmeDurumu.set(yanit.request(), yanit.status());
-    if (!iz.acik || yanit.status() !== 429 || !girisIstegiMi(yanit.request())) return;
+    const yonlendirme = yanit.status() >= 300 && yanit.status() < 400;
+    if (!iz.acik || yonlendirme || !girisIstegiMi(yanit.request())) return;
+    iz.yanitAldi = true;
+    if (yanit.status() < 400) return;
+    if (yanit.status() !== 429) {
+      iz.ret ??= yanit.status();
+      return;
+    }
     const sn = retryAfterCoz(yanit.headers()['retry-after']);
     if (iz.hiz === undefined || (sn !== undefined && (iz.hiz.retryAfterSn ?? -1) < sn)) {
       iz.hiz = sn === undefined ? {} : { retryAfterSn: sn };
@@ -392,7 +452,15 @@ export async function girisiGonder(
   try {
     const sonuc = await girisiGonderIc(sayfa, form, kimlik, hedefOrigin, authOrigins, urlBeklemeMs, donusBeklemeMs, tiklamaBeklemeMs, iz);
     // İç karardan sonra gelen 429 da girişi başarısız yapar (her iki çağıran için).
-    return iz.hiz === undefined ? sonuc : { ...sonuc, basarili: false, hizSiniri: iz.hiz };
+    if (iz.hiz !== undefined) {
+      const kalan: GirisSonucu = { ...sonuc, basarili: false, hizSiniri: iz.hiz };
+      delete kalan.dogrulanamadi;
+      return kalan;
+    }
+    // İç karardan sonra gelen 4xx/5xx de başarıyı kapatır; iç ret (sayfa mesajlı) olduğu gibi kalır.
+    if (sonuc.basarili && iz.ret !== undefined) return { basarili: false, dogrulanamadi: { durum: iz.ret } };
+    if (sonuc.basarili && iz.dustu) return { basarili: false, dogrulanamadi: {} };
+    return sonuc;
   } catch (hata: unknown) {
     if (hata instanceof Error) {
       // 429'dan sonra gelen hata (ör. dönüş yok) kendi sınıfıyla kalır; 429 bilgisi nota girer.
@@ -576,7 +644,16 @@ async function girisiGonderIc(
   await istekleriBekle(hizIzi.bekleyen, GIRIS_ISTEGI_BEKLEME_MS);
   // Giriş isteğinin kendisi 429 aldıysa URL değişse de (form `action` 429 sayfasına gitti) giriş
   // başarılı sayılmaz: oturum yazılmaz, ret yolu (hız sınırı) çalışır.
-  const girisBasarili = urlDegisti && donulmeyenOrigin === null && hizIzi.hiz === undefined;
+  // 0.9.2 B: giriş isteği ya da ona bağlı yönlendirme zinciri 4xx/5xx aldıysa (429 hariç) URL değişse
+  // de giriş doğrulanamaz. URL değişmediyse (aynı adreste bant) bu kural devreye girmez: eski ret
+  // yolu sayfanın gerekçesini okur. Tavan dolduğunda giriş isteği hâlâ yanıtsızsa sonucu bilinmez:
+  // o da başarı sayılmaz (geç gelen 401 kaçmasın).
+  const yanitsiz = hizIzi.bekleyen.size > 0 || hizIzi.dustu;
+  const dogrulanamadi = urlDegisti && donulmeyenOrigin === null && hizIzi.hiz === undefined
+    && (hizIzi.ret !== undefined || yanitsiz);
+  // Not: 2xx ile biten zincirin indiği sayfada parola formu olması ret sayılmaz (zorunlu parola
+  // değiştirme sayfası başarılı giriştir; bkz. test/kos/oturum-tazele.test.ts "tur 3", "B2").
+  const girisBasarili = urlDegisti && donulmeyenOrigin === null && hizIzi.hiz === undefined && !dogrulanamadi;
   // Tarayıcıya bir gidiş-dönüş (en iyi çaba): tarayıcının bu yanıttan önce yaydığı istek/commit
   // olayları (pencere sonunda başlamış bir yönlendirme ayağı dahil) aynı sıralı bağlantıdan önce
   // gelir ve `denetle` evreyi kapatmadan işlenir. Playwright'ın kendi içinde ertelediği olaylar
@@ -600,8 +677,25 @@ async function girisiGonderIc(
     );
   }
   if (kesilemeyenBelgeYondirmeleri.length > 0) throw yonlendirmeRetHatasi(kesilemeyenBelgeYondirmeleri);
+  if (dogrulanamadi) return { basarili: false, dogrulanamadi: hizIzi.ret === undefined ? {} : { durum: hizIzi.ret } };
+  // P2-1: adres aynı kaldı ve hiçbir giriş isteği yanıt almadı (karar tavanında hâlâ bekliyor, ağ
+  // hatasıyla düştü ya da sayfa iptal etti): sunucu kimliği reddetmedi, sonucu bilinmez. Kesin ret
+  // değil "doğrulanamadı" (eski oturum dosyası kalır). Sayfanın bu anda gösterdiği metin (ör. "Network
+  // error") ret gerekçesi sayılmaz. Bir giriş isteği yanıt aldıysa (401 bandı, 200 + hata JSON'u) ya
+  // da hiç giriş isteği görülmediyse eski ret yolu sürer.
+  if (!urlDegisti && hizIzi.hiz === undefined && !hizIzi.yanitAldi && yanitsiz) {
+    return { basarili: false, dogrulanamadi: {} };
+  }
   // URL değişmediyse giriş büyük olasılıkla sunucuda reddedildi; sayfanın gerekçesi okunur.
   const sayfaMesaji = urlDegisti ? undefined : await girisSayfaMesaji(sayfa, koruma, oncekiSatirlar);
+  // 0.9.2 B tur 4: adres aynı kaldı (form kendi adresine POST eder: Django/Laravel/Devise) ama giriş
+  // isteği 5xx ya da 403 (sunucu arızası, WAF) aldı ve sayfa ret gerekçesi göstermedi: kimlik reddi
+  // kanıtlanmadı, "doğrulanamadı" (eski oturum dosyası kalır). 401/422 kimliğe özgüdür, bant varsa
+  // her kodda kesin ret sürer.
+  if (!urlDegisti && sayfaMesaji === undefined && hizIzi.hiz === undefined && hizIzi.ret !== undefined
+    && (hizIzi.ret === 403 || hizIzi.ret >= 500)) {
+    return { basarili: false, dogrulanamadi: { durum: hizIzi.ret } };
+  }
   return sayfaMesaji === undefined ? { basarili: girisBasarili } : { basarili: girisBasarili, sayfaMesaji };
 }
 

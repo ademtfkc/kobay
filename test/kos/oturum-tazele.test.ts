@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { dirname, join } from 'node:path';
@@ -52,6 +52,12 @@ const durum = {
   formHiz302: false,
   /** P2-3 tur 3: SPA önce `pushState('/dashboard')`, giriş POST'u 3 sn sonra 429 döner. */
   gecHiz: false,
+  /** 0.9.2 B: klasik form `action="/session500"` POST'u 500 + formsuz sayfa döner (URL değişir). */
+  formHata500: false,
+  /** 0.9.2 B tur 4: form kendi adresine (`/login`) POST eder, 500 + bantsız sayfa döner (URL aynı). */
+  ayniHata500: false,
+  /** P2-1: SPA girişinin `/api/login` isteğinin bağlantısı yanıtsız kopar (adres değişmez, form yerinde kalır). */
+  girisDusur: false,
 };
 let yabanciOrigin = '';
 
@@ -82,6 +88,8 @@ const PROFIL = '<h1>Your profile</h1><form onsubmit="event.preventDefault()"><in
 const FORM_HIZ = '<h1>Sign in</h1><form action="/session" method="post"><input name="u" type="text"><input name="p" type="password">'
   + '<button type="submit">Log in</button></form>';
 const FORM_HIZ_302 = FORM_HIZ.replace('action="/session"', 'action="/session302"');
+const FORM_HATA_500 = FORM_HIZ.replace('action="/session"', 'action="/session500"');
+const AYNI_HATA_500 = FORM_HIZ.replace('action="/session"', 'action="/login"');
 /** SPA: tıklamada hemen `pushState`, giriş isteği geç yanıtlanır (429). */
 const GEC_HIZ = '<h1>Sign in</h1><form id="gf"><input id="u" type="text"><input id="p" type="password">'
   + '<button type="button" id="giris">Login</button></form><script>document.querySelector("#giris").addEventListener("click", () => {'
@@ -116,6 +124,7 @@ beforeAll(async () => {
   sunucu = createServer((istek, yanit) => {
     const yol = new URL(istek.url ?? '/', 'http://x').pathname;
     const token = cerezToken(istek.headers.cookie);
+    if (yol === '/api/login' && istek.method === 'POST' && durum.girisDusur) { istek.socket.destroy(); return; }
     if (yol === '/api/login' && istek.method === 'POST') {
       let govde = '';
       istek.on('data', (parca: Buffer) => { govde += parca.toString(); });
@@ -143,6 +152,14 @@ beforeAll(async () => {
       yanit.writeHead(429, { 'content-type': 'text/html', 'retry-after': '30' }).end('<!doctype html><h1>Too Many Requests</h1>');
       return;
     }
+    if (yol === '/login' && istek.method === 'POST' && durum.ayniHata500) {
+      yanit.writeHead(500, { 'content-type': 'text/html' }).end('<!doctype html><h1>Server error</h1>');
+      return;
+    }
+    if (yol === '/session500' && istek.method === 'POST') {
+      yanit.writeHead(500, { 'content-type': 'text/html' }).end('<!doctype html><h1>Server error</h1>');
+      return;
+    }
     if (yol === '/session302' && istek.method === 'POST') { yanit.writeHead(302, { location: '/rate-limit' }).end(); return; }
     if (yol === '/rate-limit') {
       yanit.writeHead(429, { 'content-type': 'text/html', 'retry-after': '30' }).end('<!doctype html><h1>Too Many Requests</h1>');
@@ -161,7 +178,7 @@ beforeAll(async () => {
       return;
     }
     if (yol === '/api/yanlis') { durum.yanlisDugme += 1; yanit.writeHead(200).end(); return; }
-    const giris = durum.kilitli ? KILITLI : durum.formHiz ? FORM_HIZ : durum.formHiz302 ? FORM_HIZ_302 : durum.gecHiz ? GEC_HIZ : `${durum.prg ? '<script>window.PRG = 1</script>' : ''}`
+    const giris = durum.kilitli ? KILITLI : durum.formHiz ? FORM_HIZ : durum.formHiz302 ? FORM_HIZ_302 : durum.gecHiz ? GEC_HIZ : durum.formHata500 ? FORM_HATA_500 : durum.ayniHata500 ? AYNI_HATA_500 : `${durum.prg ? '<script>window.PRG = 1</script>' : ''}`
       + `${durum.sahteHizSiniri ? '<script>window.SAHTE429 = 1</script>' : ''}${durum.sifreDegistir ? '<script>window.SIFRE = 1</script>' : ''}${durum.profil ? '<script>window.PROFIL = 1</script>' : ''}${GIRIS}`;
     const sayfalar: Record<string, string> = { '/login': giris, '/cerceve-post': CERCEVE_POST, '/account/change-password': SIFRE_DEGISTIR, '/account/profile': PROFIL };
     const govde = yol === '/' ? ana() : sayfalar[yol] ?? '<h1>yok</h1>';
@@ -199,6 +216,9 @@ beforeEach(() => {
   durum.formHiz = false;
   durum.formHiz302 = false;
   durum.gecHiz = false;
+  durum.formHata500 = false;
+  durum.ayniHata500 = false;
+  durum.girisDusur = false;
 });
 
 function mumkun(context: TestContext): boolean {
@@ -303,6 +323,35 @@ describe('P1-2: kayıtlı kimlikle koşu öncesi yeniden giriş (gerçek Chromiu
     await expect(access(dizin.storageStateYolu())).rejects.toThrow();
   });
 
+  it('spec 2026-11-13 A: yeniden girişte sayfa açılamazsa mesaj sabit cümle + net::ERR_ kodu; adres ve sorgusu yok', async (context) => {
+    if (!mumkun(context)) return;
+    // Kök yanıt verir (hedef ayakta), sırlı `/cb` adresi bağlantıyı yanıtsız keser: goto net::ERR_EMPTY_RESPONSE.
+    const kesen = createServer((istek, yanit) => {
+      if ((istek.url ?? '/').startsWith('/cb')) { istek.socket.destroy(); return; }
+      yanit.writeHead(200, { 'content-type': 'text/html' });
+      yanit.end('<!doctype html><title>ok</title>');
+    });
+    const port = await new Promise<number>((coz) => {
+      kesen.listen(0, '127.0.0.1', () => {
+        const a = kesen.address();
+        coz(typeof a === 'object' && a !== null ? a.port : 0);
+      });
+    });
+    try {
+      const sirliBase = `http://127.0.0.1:${port}/cb?code=SECRET_TAZELE_CODE&sid=SECRET_TAZELE_SID`;
+      const dizin = await KobayDizini.ac(await geciciDizinAc('kobay-oturum-'), { baseUrl: sirliBase, beyin: { adaptor: 'sahte' } });
+      await dizin.kimlikYaz({ username: KULLANICI, password: PAROLA, origin: `http://127.0.0.1:${port}` });
+      await Promise.all([dizin.testYaz(TEST), dizin.kodYaz(TEST.id, kod())]);
+      const { sonuc } = await kostur(dizin, TEST, { baseUrl: sirliBase, testZamanAsimiMs: 20_000 });
+      expect(sonuc).toMatchObject({ verdict: 'inconclusive', failureKind: 'env' });
+      expect(sonuc.errorMessage).toContain('Logging in before the run failed: the app page could not be opened (net::ERR_EMPTY_RESPONSE)');
+      for (const yasak of ['SECRET_', 'page.goto', '/cb', String(port)]) expect(sonuc.errorMessage).not.toContain(yasak);
+    } finally {
+      kesen.closeAllConnections();
+      await new Promise((coz) => { kesen.close(coz); });
+    }
+  });
+
   it('P2-1: PRG ret (`/login?error=bad`, URL değişir) başarı sayılmaz: env, oturum dosyası kalmaz', async (context) => {
     if (!mumkun(context)) return;
     const dizin = await proje(true);
@@ -335,6 +384,63 @@ describe('P1-2: kayıtlı kimlikle koşu öncesi yeniden giriş (gerçek Chromiu
     durum.hizSiniri = false;
     expect((await kos(dizin)).sonuc.verdict).toBe('passed');
     expect(durum.girisSayisi).toBe(1);
+  });
+
+  it('0.9.2 B: yeniden giriş 500 + formsuz sayfa (doğrulanamadı): env, eski oturum dosyası bayt bayt kalır', async (context) => {
+    if (!mumkun(context)) return;
+    const dizin = await proje(true);
+    const eski = JSON.stringify({
+      cookies: [{ name: 'eski', value: 'SENTINEL-tazele-31337', domain: '127.0.0.1', path: '/', expires: -1,
+        httpOnly: false, secure: false, sameSite: 'Lax' }],
+      origins: [],
+    });
+    const ozet = (metin: string): string => createHash('sha256').update(metin).digest('hex');
+    await writeFile(dizin.storageStateYolu(), eski);
+    durum.formHata500 = true;
+    const { sonuc } = await kos(dizin);
+    expect(sonuc).toMatchObject({ verdict: 'inconclusive', failureKind: 'env' });
+    expect(sonuc.errorMessage).toContain('Login could not be verified: the login request got HTTP 500');
+    expect(sonuc.errorMessage).not.toContain(PAROLA);
+    expect(ozet(await readFile(dizin.storageStateYolu(), 'utf8'))).toBe(ozet(eski));
+  });
+
+  it('0.9.2 B tur 4: yeniden giriş aynı adrese POST + 500 bantsız: env, eski oturum dosyası bayt bayt kalır', async (context) => {
+    if (!mumkun(context)) return;
+    const dizin = await proje(true);
+    const eski = JSON.stringify({
+      cookies: [{ name: 'eski', value: 'SENTINEL-tazele-ayni-31337', domain: '127.0.0.1', path: '/', expires: -1,
+        httpOnly: false, secure: false, sameSite: 'Lax' }],
+      origins: [],
+    });
+    const ozet = (metin: string): string => createHash('sha256').update(metin).digest('hex');
+    await writeFile(dizin.storageStateYolu(), eski);
+    durum.ayniHata500 = true;
+    const { sonuc } = await kos(dizin);
+    expect(sonuc).toMatchObject({ verdict: 'inconclusive', failureKind: 'env' });
+    expect(sonuc.errorMessage).toContain('Login could not be verified: the login request got HTTP 500');
+    expect(ozet(await readFile(dizin.storageStateYolu(), 'utf8'))).toBe(ozet(eski));
+  });
+
+  it('P2-1: yeniden giriş aynı adreste (SPA fetch) yanıtsız düşer, form yerinde kalır: env, kimlik ve eski oturum bayt bayt kalır', async (context) => {
+    if (!mumkun(context)) return;
+    const dizin = await proje(true);
+    const eski = JSON.stringify({
+      cookies: [{ name: 'eski', value: 'SENTINEL-tazele-dustu-31337', domain: '127.0.0.1', path: '/', expires: -1,
+        httpOnly: false, secure: false, sameSite: 'Lax' }],
+      origins: [],
+    });
+    const ozet = (metin: string): string => createHash('sha256').update(metin).digest('hex');
+    await writeFile(dizin.storageStateYolu(), eski);
+    const kimlikYolu = join(dirname(dizin.storageStateYolu()), 'credentials.json');
+    const kimlikOnce = await readFile(kimlikYolu, 'utf8');
+    durum.girisDusur = true;
+    const { sonuc } = await kos(dizin);
+    expect(sonuc).toMatchObject({ verdict: 'inconclusive', failureKind: 'env' });
+    expect(sonuc.errorMessage).toContain('Login could not be verified: the login request got no usable response');
+    expect(sonuc.errorMessage).toContain('kobay kept the saved credentials and the session file.');
+    expect(sonuc.errorMessage).not.toContain(PAROLA);
+    expect(ozet(await readFile(dizin.storageStateYolu(), 'utf8'))).toBe(ozet(eski));
+    expect(await readFile(kimlikYolu, 'utf8')).toBe(kimlikOnce);
   });
 
   it('P2-3: form action POST\'u 429 sayfasına giderse (URL değişir) giriş başarılı sayılmaz: env, dosya aynen kalır', async (context) => {

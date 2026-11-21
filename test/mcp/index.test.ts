@@ -13,11 +13,15 @@ import { mcpSunucusuOlustur } from '../../src/mcp/index.js';
 import { baslat } from '../kobay-demo/sunucu.mjs';
 import { geciciDizinAc } from '../yardimci/gecici-dizin.js';
 
-async function bagliMcp(cwd: string, env?: NodeJS.ProcessEnv): Promise<{ istemci: Client; kapat: () => Promise<void> }> {
+/**
+ * `icKatman`: transport sargısını (son sınır maskesi) atlayıp düşük düzey sunucuya bağlanır; yalnız
+ * `sonucDon`/`hataDon`/`uyariEkle` maskelerini ayrı sınamak için.
+ */
+async function bagliMcp(cwd: string, env?: NodeJS.ProcessEnv, icKatman = false): Promise<{ istemci: Client; kapat: () => Promise<void> }> {
   const sunucu = mcpSunucusuOlustur({ cwd, ...(env === undefined ? {} : { env }) });
   const istemci = new Client({ name: 'kobay-test', version: '0.1.0' });
   const [sunucuTasima, istemciTasima] = InMemoryTransport.createLinkedPair();
-  await Promise.all([sunucu.connect(sunucuTasima), istemci.connect(istemciTasima)]);
+  await Promise.all([icKatman ? sunucu.server.connect(sunucuTasima) : sunucu.connect(sunucuTasima), istemci.connect(istemciTasima)]);
   return {
     istemci,
     kapat: async () => {
@@ -242,6 +246,64 @@ describe('MCP sunucusu', () => {
       await baglanti.kapat();
     }
   });
+  it('project_create/project_get yanıtında adresin sorgu değerleri ve fragment\'i maskeli; config.json ham (spec 2026-11-13 A)', async () => {
+    const cwd = await geciciDizinAc('kobay-mcp-');
+    const baglanti = await bagliMcp(cwd);
+    try {
+      const url = 'http://localhost:3000/?code=SECRET_MCP_CODE&sid=SECRET_MCP_SID#t=SECRET_MCP_FRAG';
+      const olustur = await baglanti.istemci.callTool({ name: 'project_create', arguments: { url } });
+      expect(olustur.isError).not.toBe(true);
+      const getir = await baglanti.istemci.callTool({ name: 'project_get', arguments: {} });
+      for (const yanit of [olustur, getir]) expect(JSON.stringify(yanit)).not.toContain('SECRET_MCP');
+      expect(JSON.parse((getir.content[0] as { text: string }).text)).toMatchObject({
+        config: { baseUrl: 'http://localhost:3000/?code=[redacted]&sid=[redacted]#t=[redacted]' },
+      });
+      expect(await readFile(join(cwd, '.kobay', 'config.json'), 'utf8')).toContain('SECRET_MCP_CODE');
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+  it.each([false, true])('Codex P2-3: araç gövdesi, uyarı ve hata metni sır taşımaz (iç katman: %s)', async (icKatman) => {
+    const cwd = await geciciDizinAc('kobay-mcp-');
+    const baglanti = await bagliMcp(cwd, { KOBAY_LOGIN_ORIGIN: 'http://localhost:3000' }, icKatman);
+    try {
+      const sirliUrl = 'http://localhost:3000/?code=SECRET_MCPI_CODE';
+      expect((await baglanti.istemci.callTool({ name: 'project_create', arguments: { url: sirliUrl } })).isError).not.toBe(true);
+      const alan = 'http://u:SECRET_MCPI_PASS@h/?code=SECRET_MCPI_CODE';
+      const gevsek = await baglanti.istemci.callTool({ name: 'project_get', arguments: { [alan]: 1 } });
+      expect(JSON.stringify(gevsek)).toContain('UNKNOWN_FIELD');
+      expect(JSON.stringify(gevsek)).toContain('code=[redacted]');
+      // Hata yolu (`hataDon`): aracın kendi denetimi (`Invalid URL: …`) adresi yankılar.
+      const hata = await baglanti.istemci.callTool({
+        name: 'project_create', arguments: { url: 'http://[kotu/?code=SECRET_MCPI_HATA', loginUser: 'demo', force: true },
+      });
+      expect(hata.isError).toBe(true);
+      expect(JSON.stringify(hata)).toContain('Invalid URL');
+      for (const yanit of [gevsek, hata]) expect(JSON.stringify(yanit)).not.toContain('SECRET_MCPI');
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
+  it('Codex P2-3: gevşek araç uyarısı ve strict araç şema hatası alan adındaki sırrı yanıta taşımaz', async () => {
+    const cwd = await geciciDizinAc('kobay-mcp-');
+    const baglanti = await bagliMcp(cwd);
+    try {
+      expect((await baglanti.istemci.callTool({ name: 'project_create', arguments: { url: 'http://localhost:3000' } })).isError).not.toBe(true);
+      const alan = 'http://u:SECRET_MCPW_PASS@h/?code=SECRET_MCPW_CODE';
+      const gevsek = await baglanti.istemci.callTool({ name: 'project_get', arguments: { [alan]: 1 } });
+      // Sahte test olmasın: uyarı gerçekten üretildi.
+      expect(JSON.stringify(gevsek)).toContain('UNKNOWN_FIELD');
+      expect(JSON.stringify(gevsek)).not.toContain('SECRET_MCPW');
+      const kati = await baglanti.istemci.callTool({ name: 'project_create', arguments: { url: 'http://localhost:3000', [alan]: 1 } })
+        .catch((hata: unknown) => ({ firlatilan: String(hata instanceof Error ? hata.message : hata) }));
+      expect(JSON.stringify(kati)).toMatch(/nrecognized|invalid/i);
+      expect(JSON.stringify(kati)).not.toContain('SECRET_MCPW');
+    } finally {
+      await baglanti.kapat();
+    }
+  });
+
   it('project_create/project_update kullanıcı bilgili adresi reddeder, parola yanıtta yok', async () => {
     const cwd = await geciciDizinAc('kobay-mcp-');
     const baglanti = await bagliMcp(cwd);

@@ -4,6 +4,7 @@ import {
   test as temel, expect, type Browser, type BrowserContext, type BrowserContextOptions, type Page,
 } from '@playwright/test';
 import { yazAtomik } from '../depo/index.js';
+import { degerdekiUrlSorgulariniGizle } from '../ortak/url-sirlari.js';
 import { adimSar } from './fixture-sablonu.js';
 
 type Kayit = Record<string, unknown>;
@@ -230,8 +231,10 @@ export const test = temel.extend<{ page: Page }>({
       try {
         if (dizin !== undefined) {
           await Promise.all([
-            yazAtomik(`${dizin}/console.json`, `${JSON.stringify(konsol, null, 2)}\n`),
-            yazAtomik(`${dizin}/network.json`, `${JSON.stringify(ag, null, 2)}\n`),
+            // Spec 2026-11-13 A: istek adresinin (yönlendirme hedefi dahil) sorgu değerleri ve
+            // fragment'i diske ham yazılmaz; yol kalır, analiz yolu okur.
+            yazAtomik(`${dizin}/console.json`, `${JSON.stringify(degerdekiUrlSorgulariniGizle(konsol), null, 2)}\n`),
+            yazAtomik(`${dizin}/network.json`, `${JSON.stringify(degerdekiUrlSorgulariniGizle(ag), null, 2)}\n`),
           ]);
         }
       } finally {

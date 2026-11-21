@@ -221,3 +221,18 @@ describe('CLI çıktı sınırı', () => {
     }
   });
 });
+
+describe('URL sorgu maskesi (spec 2026-11-13 A): yazıcı son süzgeç', () => {
+  it('doğrudan kurulmuş sonuçta da (basarili() dışı) JSON ve insan çıktısı sorgu değerini taşımaz', () => {
+    const sonuc = { exitCode: 0, json: [{ url: 'http://h/cb?code=SECRET_Y1#t=SECRET_Y2' }], mesaj: 'at http://h/cb?sid=SECRET_Y3' };
+    for (const json of [true, false]) {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const out = metinTopla(stdout);
+      const err = metinTopla(stderr);
+      ciktiYaz(sonuc, json, stdout, stderr);
+      expect(out.oku() + err.oku(), String(json)).not.toContain('SECRET_');
+      expect(out.oku() + err.oku(), String(json)).toContain('code=[redacted]');
+    }
+  });
+});

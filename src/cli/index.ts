@@ -7,6 +7,7 @@ import type { Readable, Writable } from 'node:stream';
 import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
 import { beyinKullanimFarki, beyinKullanimi } from '../beyin/index.js';
 import { metindekiKimligiGizle } from '../depo/adres.js';
+import { urlSorgulariniGizle } from '../ortak/url-sirlari.js';
 import type { BeyinAyari, Kimlik } from '../depo/index.js';
 import { CIKIS } from './cikis.js';
 import { ciktiYaz, type BeyinOzeti } from './cikti.js';
@@ -209,8 +210,8 @@ export function programOlustur(
     .showHelpAfterError()
     .exitOverride()
     .configureOutput({
-      writeOut: (metin) => akislar.stdout.write(metindekiKimligiGizle(metin)),
-      writeErr: (metin) => akislar.stderr.write(metindekiKimligiGizle(metin)),
+      writeOut: (metin) => akislar.stdout.write(urlSorgulariniGizle(metindekiKimligiGizle(metin))),
+      writeErr: (metin) => akislar.stderr.write(urlSorgulariniGizle(metindekiKimligiGizle(metin))),
     });
 
   // Beyin defteri süreç başınadır; komutun kendi kullanımı, program kurulurkenki okumayla farktan bulunur

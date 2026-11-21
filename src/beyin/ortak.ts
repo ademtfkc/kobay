@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { yazAtomik, type BeyinAyari } from '../depo/index.js';
 import { komutCagrisiCoz, sureciSonlandir } from '../ortak/komut-coz.js';
+import { urlSorgulariniGizle } from '../ortak/url-sirlari.js';
 import { BrainRuntimeError, BrainError, type BeyinIstegi } from './index.js';
 
 export const VARSAYILAN_ZAMAN_ASIMI_SN = 180;
@@ -319,7 +320,9 @@ export function istemOlustur(istek: BeyinIstegi, semaHatasi?: string): string {
   const tekrar = semaHatasi === undefined
     ? ''
     : `\n\nThe previous answer did not match the schema: ${semaHatasi}. Fix the answer.`;
-  return `${istek.sistem}\n\n${istek.kullanici}\n\nReturn JSON only, no commentary.${tekrar}`;
+  // Spec 2026-11-13 A: URL sorgu değerleri ve fragment (OAuth `code`, `sid`, imza) beyne hiç gitmez;
+  // maske istem kurulurken, gönderimden ÖNCE uygulanır (günlük de aynı istemi yazar).
+  return urlSorgulariniGizle(`${istek.sistem}\n\n${istek.kullanici}\n\nReturn JSON only, no commentary.${tekrar}`);
 }
 
 /** Metin içindeki ilk dengeli JSON nesnesini veya dizisini bulur. */
@@ -522,11 +525,13 @@ function ortamdakiGizliDegerler(env: NodeJS.ProcessEnv): string[] {
 /**
  * Kalıcı yazım (beyin günlüğü, hata mesajı, hata paketi) öncesi gizli değerleri `[redacted]` yapar:
  * (1) ortamdaki bilinen gizli değişkenlerin TAM değerleri, (2) sağlayıcı token biçimleri,
- * (3) `api_key=...`, JSON alanı, Bearer/Basic ve URL parametresi kalıpları.
+ * (3) `api_key=...`, JSON alanı, Bearer/Basic ve URL parametresi kalıpları; ayrıca her URL'nin
+ * sorgu değerleri ve fragment'i (`urlSorgulariniGizle`).
  * `env` verilmezse `process.env`; beyin adaptörü kendi ortamını geçirir, ikisi birlikte taranır.
  */
 export function gizliDegerleriMaskele(metin: string, env?: NodeJS.ProcessEnv): string {
-  let sonuc = metin;
+  // Önce URL sorguları ve fragment (anahtar adından bağımsız; spec 2026-11-13 A), sonra ad tabanlı desenler.
+  let sonuc = urlSorgulariniGizle(metin);
   const degerler = ortamdakiGizliDegerler(env === undefined || env === process.env ? process.env : { ...process.env, ...env });
   for (const deger of degerler) sonuc = sonuc.split(deger).join('[redacted]');
   for (const desen of SAGLAYICI_TOKEN_DESENLERI) sonuc = sonuc.replace(desen, '[redacted]');

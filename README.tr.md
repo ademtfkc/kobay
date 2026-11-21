@@ -459,14 +459,14 @@ jobs:
       - run: npm ci
       - name: Start the app in the background
         run: npm run dev > app.log 2>&1 &
-      - uses: ademtfkc/kobay@v0.9.1
+      - uses: ademtfkc/kobay@v0.9.2
         with:
           wait-for-url: http://localhost:3000
 ```
 
 | Girdi | Varsayılan | Anlamı |
 | --- | --- | --- |
-| `version` | `0.9.1` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
+| `version` | `0.9.2` | Kurulacak `@ademtfkc/kobay` sürümü: Action'ın birlikte geldiği sürüme sabitlenmiştir; npm'i izlemek için `latest` ver. Yerel bir `.tgz` yolu da olur. |
 | `node-version` | `22` | `actions/setup-node` için Node.js. |
 | `working-directory` | `.` | `.kobay/`'ı taşıyan proje kökü; `--cwd` olarak geçer. |
 | `tests` | boş | Boşlukla ayrılmış test kimlikleri; boşsa `--all` koşar. |
@@ -620,6 +620,12 @@ test `not run` görünür.
 
 ## Durum ve sınırlar
 
+**0.9.2.** Güvenlik yaması. Mutlak URL'nin her sorgu değeri, fragment'i ve `user:password@`
+parçası kobay'ın çıktısında, koşu dosyalarında, raporda ve beyne giden istemde
+`[redacted]` olarak maskelenir (Playwright'ın kendi ham koşu dosyaları hariç).
+kobay'ın doğrulayamadığı bir giriş (ret mesajsız HTTP 403/5xx, yanıtsız ya da
+iptal edilen istek) artık `5` çıkış koduyla durur ve eski oturum dosyasını korur.
+
 **0.9.1.** Yama sürümü. `test run`, beyin yarıda hata verdiğinde artık bir sonuç
 kaydeder; böylece koşu çıktısı, `test result` ve rapor aynı şeyi söyler
 (`test list` taslağı yine `draft` gösterir; o arada başka bir koşunun güncellediği
@@ -690,6 +696,24 @@ Neyin denendiği, neyin denenmediği; kurmadan önce karar verebilesin diye:
   [İçe alınan oturum](#i̇çe-alınan-oturum-captcha-2fa)); uygulamanın kendi sitesindeki alt alanlar kimlik
   bilgisini alabilir. JavaScript ile yapılan bir giriş yalnız ağ koruması
   kapsamındadır, form-origin denetimi kapsamında değil.
+- **Giriş başarısı temkinli değerlendirilir.** Giriş isteği ya da yönlendirmeleri
+  (fetch/XHR dahil) HTTP 4xx/5xx alırsa sayfa sonra ilerlese bile `explore`
+  `Login could not be verified` ile durur (çıkış kodu `5`) ve oturum kaydedilmez.
+  İyi girişe hata durumuyla yanıt veren uygulama için `--session-file` gerekir.
+  Yanıtı beklemeden adres değiştiren uygulamada başarısız olan, iptal edilen ya
+  da yaklaşık 7 sn içinde yanıt almayan giriş isteği de aynı şekilde biter.
+  Adres değişmiyorsa (fetch ile giriş yapan tek sayfalık uygulama) başarısız
+  olan, iptal edilen ya da yaklaşık 12 sn içinde yanıt almayan giriş isteği de
+  `Login could not be verified` ile biter ve eski oturum dosyası kalır; HTTP 401
+  ya da 422 yanıtı alan giriş isteği rettir.
+  Hata durumu olmadan parola formlu bir sayfada biten giriş yine başarı sayılır
+  (zorunlu parola değiştirme sayfası da böyle görünür). Parola düz metin
+  gitmiyorsa (base64, istemcide şifreleme), form iframe ya da açılır pencerede
+  gönderiliyorsa, sayfa parolayı input/change olayında yolluyorsa ya da girişten
+  sonra bir beacon parolayı taşıyorsa kobay giriş isteğini tanımayabilir ya da
+  yanlış eşleyebilir. Uygulama giriş isteğine HTTP 419 ya da 403 alıp kendisi
+  yeniden denerse (CSRF yenileme) kobay ilk reddi esas alır ve `Login could not
+  be verified` der; böyle bir uygulamada `--session-file` kullan.
 - **Planın kimlik süzgeci güvenli yönde hata yapar.** Giriş tanımlıysa, sahte
   değeri ona gerçek görünen yararlı bir yanlış-giriş önerisini düşürebilir:
   `Enter 'wrong_password_qa' in the Password field` gerçek kimlik istiyor diye
@@ -950,6 +974,30 @@ Bir güvenlik açığını bildirmek için bkz. [SECURITY.md](SECURITY.md).
   koşuların trace'lerini kaldırır. `.kobay/failure-out/<id>/` içindeki eski
   kopyaya dokunmaz; o testin bir sonraki `test failure get` çağrısı kopyayı
   trace'siz yeniler.
+- **URL sorgu değerleri çıktıda maskelenir, kendi dosyalarında değil.** Mutlak
+  bir URL'nin her sorgu değeri ve fragment'i (`?code=[redacted]&state=[redacted]`;
+  anahtar adı kalır, anahtar ne olursa olsun) ve `kullanıcı:parola@` kısmı
+  komut çıktısında (metin, JSON, MCP), koşu sonuçlarında, hata paketinde,
+  `network.json` ve `console.json`'da, beyin günlüklerinde, beyne giden
+  istemde ve HTML raporda maskelenir. Senin girdin olduğu ya da koşu için
+  gerektiği için ham kalanlar: `.kobay/config.json`, `.kobay/map.json`,
+  `.kobay/tests/` altındaki test kayıtları ve kodu (bu yüzden `test code get`
+  kodu diskteki haliyle basar; metin çıktısı sona bir satır sonu ekler, JSON
+  ve MCP bayt bayt aynısını verir), beynin test önerileri
+  (`.kobay/plan/proposals.json`; beynin döndürdüğü gibi saklanır, beyin onları
+  maskeli istemden üretti) ve `.kobay/runs/<run-id>/` altındaki yerel koşu
+  kanıtı: adım DOM görüntüleri (`step-N.html`; hata paketindeki kopyaları
+  maskelidir) ve Playwright'ın kendi ham çıktısı (`trace.zip`,
+  `pw-report.json`, `pw/`). Tanınmayanlar: URL yolundaki sır
+  (`/reset/<token>`), göreli adresin çıplak sorgusu ya da fragment'i
+  (`/cb?SECRET`, `/cb#SECRET`; `anahtar=değer` çiftleri maskelenir), çift kodlanmış adres (`%253F`) ve adres içindeki JSON
+  kaçışlı `&` (`\u0026`) ya da `\/`. Maske güvenli yönde hata yapar: yalnız
+  URL'ye benzeyen metin (`Order#id=42`, Playwright'ın `Received: "a?b=c"`
+  satırı) ve satır içi `data:` içeriği de `[redacted]` gösterebilir.
+- **Sorgu değeri isteyen sayfalar.** Beyin sorgu değerlerini hiç görmez, bu
+  yüzden yazamaz; `[redacted]` içeren üretilmiş kod hata ile reddedilir. Bir
+  sayfa yalnız sorguyla çalışıyorsa (`/search?q=…`), testin kodunu
+  `.kobay/tests/<id>.spec.ts` içinde elle düzenle ve gerçek değeri yaz.
 - **HTML rapordaki ekran görüntüleri ve videolar maskelenmez.** `test report`
   yazdığı her metni maskeler ve kaçışlar, ama adım ekran görüntülerini ve düşen
   koşu videolarını olduğu gibi kopyalar.

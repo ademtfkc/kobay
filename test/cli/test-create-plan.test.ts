@@ -31,7 +31,8 @@ describe('test create: elle yazılan plan dosyası', () => {
       const sonuc = await testCreate({ cwd, planPath: 'plan.json' });
       expect(sonuc.exitCode, url).toBe(0);
       const kayit = sonuc.json as TestKaydi;
-      expect(kayit.url, url).toBe(url);
+      // Kayıt planın adresini ham taşır; komut çıktısında sorgu değeri maskeli (spec 2026-11-13 A).
+      expect(kayit.url, url).toBe(url.replace('sayfa=2', 'sayfa=[redacted]'));
       await expect(dizin.testOku(kayit.id)).resolves.toMatchObject({ url });
     }
   });

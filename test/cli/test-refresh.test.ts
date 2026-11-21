@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Harita, Sayfa } from '../../src/depo/index.js';
 
 const sahteler = vi.hoisted(() => ({
-  verdict: 'passed' as 'passed' | 'failed',
+  verdict: 'passed' as 'passed' | 'failed' | 'blocked',
   yeniSayfa: undefined as unknown,
   yenilenenUrl: undefined as string | undefined,
+  /** Düşen koşunun hata metni (varsayılan 'Cariler bulunamadı'). */
+  hata: undefined as string | undefined,
 }));
 
 vi.mock('../../src/kesif/index.js', async (asilModul) => ({
@@ -32,16 +34,16 @@ vi.mock('../../src/kos/index.js', () => ({
       startedAt: '2026-09-18T00:00:00.000Z',
       finishedAt: '2026-09-18T00:00:01.000Z',
       codeVersion: test.codeVersion,
-      ...(sahteler.verdict === 'failed' ? { failedStepIndex: 0, errorMessage: 'Cariler bulunamadı' } : {}),
+      ...(sahteler.verdict === 'failed' ? { failedStepIndex: 0, errorMessage: sahteler.hata ?? 'Cariler bulunamadı' } : {}),
     },
     adimlar: sahteler.verdict === 'failed'
-      ? [{ stepIndex: 0, description: 'Cariler sayfasını aç', status: 'failed', durationMs: 5, errorMessage: 'Cariler bulunamadı' }]
+      ? [{ stepIndex: 0, description: 'Cariler sayfasını aç', status: 'failed', durationMs: 5, errorMessage: sahteler.hata ?? 'Cariler bulunamadı' }]
       : [],
   })),
 }));
 
 import { ciktiYaz } from '../../src/cli/cikti.js';
-import { testRefresh } from '../../src/cli/komutlar/index.js';
+import { testRefresh, testRun } from '../../src/cli/komutlar/index.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { KobayDizini, yazAtomik, type TestKaydi } from '../../src/depo/index.js';
@@ -101,9 +103,9 @@ const YENI_KOD = [
   '',
 ].join('\n');
 
-async function proje(): Promise<{ cwd: string; dizin: KobayDizini }> {
+async function proje(baseUrl = 'http://uygulama.test'): Promise<{ cwd: string; dizin: KobayDizini }> {
   const cwd = await geciciDizinAc('kobay-refresh-');
-  const dizin = await KobayDizini.ac(cwd, { baseUrl: 'http://uygulama.test', beyin: { adaptor: 'sahte' } });
+  const dizin = await KobayDizini.ac(cwd, { baseUrl, beyin: { adaptor: 'sahte' } });
   await dizin.haritaYaz(harita);
   await dizin.testYaz(testKaydi);
   await dizin.kodYaz(TEST_ID, '// eski kod: Cariler');
@@ -126,6 +128,7 @@ async function proje(): Promise<{ cwd: string; dizin: KobayDizini }> {
 afterEach(() => {
   sahteler.verdict = 'passed';
   sahteler.yenilenenUrl = undefined;
+  sahteler.hata = undefined;
   delete process.env.KOBAY_SAHTE_YANIT_DIZINI;
 });
 
@@ -328,5 +331,44 @@ describe('test refresh', () => {
       }
       expect((await readFile(testDosyasi)).equals(once)).toBe(true);
     });
+  });
+});
+
+describe('spec 2026-11-13 A (Codex P3-9): test run / test refresh sonucu sır taşımaz', () => {
+  // Hedef kapalı (blocked) satırı config'teki hedef adresi taşır: `Target app is not reachable: <baseUrl>`.
+  async function sirliProje(): Promise<{ cwd: string }> {
+    const { cwd } = await proje('http://uygulama.test/?code=SECRET_TR_CODE#t=SECRET_TR_FRAG');
+    sahteler.verdict = 'blocked';
+    return { cwd };
+  }
+
+  it('doğrudan çağrı: testRun ve testRefresh gövdesi ve metni maskeli (kaynak maskesi)', async () => {
+    const { cwd } = await sirliProje();
+    const kosu = await testRun({ cwd, ids: [TEST_ID] });
+    const yenile = await testRefresh({ cwd, id: TEST_ID });
+    for (const sonuc of [kosu, yenile]) {
+      const metin = JSON.stringify(sonuc);
+      // Sahte test olmasın: hata metni satıra gerçekten girdi.
+      expect(metin).toContain('code=[redacted]');
+      expect(metin).not.toContain('SECRET_TR');
+    }
+  });
+
+  it('MCP test_run ve test_refresh yanıtı sır taşımaz', async () => {
+    const { cwd } = await sirliProje();
+    const sunucu = mcpSunucusuOlustur({ cwd });
+    const istemci = new Client({ name: 'kobay-test', version: '0.1.0' });
+    const [sunucuTasima, istemciTasima] = InMemoryTransport.createLinkedPair();
+    await Promise.all([sunucu.server.connect(sunucuTasima), istemci.connect(istemciTasima)]);
+    try {
+      for (const [ad, argumanlar] of [['test_run', { ids: [TEST_ID] }], ['test_refresh', { id: TEST_ID }]] as const) {
+        const yanit = JSON.stringify(await istemci.callTool({ name: ad, arguments: argumanlar }));
+        expect(yanit, ad).toContain('code=[redacted]');
+        expect(yanit, ad).not.toContain('SECRET_TR');
+      }
+    } finally {
+      await istemci.close();
+      await sunucu.close();
+    }
   });
 });

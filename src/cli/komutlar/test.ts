@@ -42,6 +42,7 @@ import {
   sayfaKesfiniYenile,
   testOku,
 } from './ortak.js';
+import { degerdekiUrlSorgulariniGizle, urlSorgulariniGizle } from '../../ortak/url-sirlari.js';
 
 /**
  * Elle yazılan plan dosyasındaki sayfa adresi: `/yol` ya da hedefin kendi
@@ -142,7 +143,8 @@ export async function codeGet(a: { cwd: string; id: string }): Promise<KomutSonu
     if (kod === null) {
       throw new UsageError(`Test code has not been generated: ${a.id}; generate it with \`kobay test run ${a.id}\``);
     }
-    return basarili(kod);
+    // Bilinçli dar delik: kod diskteki haliyle döner (round-trip güvenli); bkz. `KomutSonucu.hamCikti`.
+    return { exitCode: CIKIS.GECTI, json: kod, hamCikti: true };
   });
 }
 
@@ -615,11 +617,13 @@ export async function testRun(a: {
     if (tavanHatasi !== undefined) {
       satirMetinleri.push('', ...tavanOzeti(tavanHatasi, kosmayanlar, analizsizler, (await dizin.configOku()).brain.adaptor));
     }
+    // Satırlar hedef adresi ve hata metnini taşır: URL sorguları CLI ile MCP'de aynı maskeyle gider
+    // (spec 2026-11-13 A; `basarili()` dışında kurulan sonuç).
     return {
       exitCode,
-      json: sonuclar,
+      json: degerdekiUrlSorgulariniGizle(sonuclar),
       // İnsan modunda tek satır yetmiyor: sebebi (kod yok, hedef kapalı…) yanına yaz.
-      mesaj: satirMetinleri.join('\n'),
+      mesaj: urlSorgulariniGizle(satirMetinleri.join('\n')),
     };
   });
 }
@@ -815,14 +819,14 @@ export async function testRefresh(a: { cwd: string; id: string; run?: boolean })
     const kosuSonrasi = await dizin.testOku(a.id);
     return {
       exitCode: kosu.exitCode,
-      json: {
+      json: degerdekiUrlSorgulariniGizle({
         ...ozet,
         status: kosuSonrasi.status,
         codeVersion: kosuSonrasi.codeVersion,
         run: satir ?? null,
-      },
+      }),
       // Koşu satırları `test run` ile aynı biçimde; düşen koşuda metin stderr'e gider.
-      metin: `${basMetni}\n${kosu.mesaj ?? ''}`,
+      metin: urlSorgulariniGizle(`${basMetni}\n${kosu.mesaj ?? ''}`),
     };
   });
 }

@@ -61,9 +61,12 @@ function sonucuMaskele(sonuc: KosuSonucu): KosuSonucu {
 }
 
 function adimlariMaskele(adimlar: AdimSonucu[]): AdimSonucu[] {
-  return adimlar.map((adim) => (adim.errorMessage === undefined
-    ? adim
-    : { ...adim, errorMessage: gizliDegerleriMaskele(adim.errorMessage) }));
+  // Adım açıklaması elle yazılmış plandan gelir; sırlı adres taşıyabilir (spec 2026-11-13 A).
+  return adimlar.map((adim) => ({
+    ...adim,
+    description: gizliDegerleriMaskele(adim.description),
+    ...(adim.errorMessage === undefined ? {} : { errorMessage: gizliDegerleriMaskele(adim.errorMessage) }),
+  }));
 }
 
 async function kaydet(

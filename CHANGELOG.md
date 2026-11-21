@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-21
+
+### Security
+
+- URL query values and fragments no longer reach kobay's output raw. Only
+  `token`, `password`, `secret` and `api_key` values were masked before; an
+  OAuth `code` and `state`, a returned `sid` or a signed link's `signature`
+  stayed readable in `result.json`, `steps.json`, the failure bundle,
+  `test result`, the HTML report and the brain log, and `network.json`,
+  `project create`, `project get` and `explore` output masked nothing. Now
+  every query value and the fragment of every absolute URL is `[redacted]`,
+  whatever the key, with key names, empty values and order kept
+  (`?code=[redacted]&state=&sid=[redacted]`); percent-encoded, HTML-escaped
+  and nested redirect URLs are covered. In a relative address only
+  `key=value` pairs are masked (`/cb?code=[redacted]`); a bare query
+  (`/cb?SECRET`) and the fragment (`/cb#SECRET`) of a relative address are
+  kept as written. The mask runs on the prompt before it
+  is sent to the brain, on `network.json` and `console.json`, on every CLI and
+  MCP command result, and in the shared evidence and report mask.
+  `.kobay/config.json` and `.kobay/map.json` keep the address you gave;
+  `project get` shows it masked. A failed pre-run login now names a navigation
+  error with a fixed sentence and at most a `net::ERR_` code, not the URL.
+  Playwright's own raw output in `.kobay/runs/<run-id>/` (`trace.zip`,
+  `pw-report.json`, `pw/`) is not rewritten; see the README security notes.
+  Masking a large page without spaces (minified CSS) takes linear time.
+  - The `user:password@` part of a URL is masked too (also in `network.json`
+    and `console.json`), and so are analysis warnings on stderr and every MCP
+    response, including schema errors the MCP SDK writes itself.
+  - `test code get` (MCP `code_get`) prints the test code as it is on disk:
+    `--output json` and MCP give it byte for byte, so it can be written back
+    unchanged; text output adds one trailing newline.
+  - Step descriptions (a hand-written plan may hold a URL) are masked in
+    `steps.json` and the failure bundle; the step DOM snapshots
+    `runs/<run-id>/step-N.html` stay raw as local run evidence.
+  - Text that only looks like a URL (`Order#id=42`) and inline `data:` content
+    may also show `[redacted]`.
+  - Generated code that contains `[redacted]` in a URL value is refused, also
+    inside a percent-encoded URL (`?next=%2Fcb%3Fcode%3D[redacted]`): the
+    brain cannot know a masked query value. Edit such a test's code by hand.
+  - The brain's analysis text is masked again before it is written to the
+    failure bundle's `failure.json`.
+
+### Fixed
+
+- `explore` and `test refresh` with `--login`: a wrong password answered with
+  HTTP 401 and a page without a login form no longer counts as a successful
+  login. Before, `explore` exited `0`, printed `logged in`, wrote
+  `loggedIn: true` and saved an empty session file. Now, when the address
+  changed after the submit, an HTTP 4xx/5xx on the login request or its
+  redirect chain (fetch/XHR included), no response to it before kobay has to
+  decide (about 7 s), or a failed or cancelled login request ends with
+  `Login could not be verified` (exit code `5`, `PermissionError`): no map and
+  no new session file. When the address stays the same (a form that posts to
+  its own URL), an HTTP 403 or 5xx with no rejection message on the page ends
+  the same way, and so does a login whose request gets no response at all on
+  the same address (a single-page app that logs in with fetch and does not
+  change the address: the request fails, is cancelled, or is still unanswered
+  when kobay has to decide, about 12 s after the submit). The page's text at
+  that moment (for example "Network error") is not read as a rejection. In
+  these cases an older session file stays as it was, because a passing 500,
+  firewall 403 or network failure is not a wrong password. On the same
+  address, a login request that got a response with HTTP 401 or 422, or any
+  status with an error banner, is still a rejection: the old message with the
+  page's text, and the older session file is removed, as before. The re-login
+  before `test run` follows the same rule: the run stops as `env` and keeps
+  the credentials and the session file, unless the login request got an HTTP
+  error and the login ends back on the login form. HTTP 429 keeps its
+  rate-limit message.
+  Asset or analytics errors after a successful login do not affect the
+  decision.
+  Known limit: the same-address rule assumes a single request that carries
+  the password. If the page sends two such requests and one of them gets a
+  response while the other fails, the login is still read as a rejection.
+
 ## [0.9.1] - 2026-11-13
 
 ### Fixed
@@ -1367,7 +1441,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kobay test failure get <id>` hint on a failed test, and the first line of the
   engine error on an inconclusive run. JSON output is unchanged.
 
-[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/ademtfkc/kobay/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/ademtfkc/kobay/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/ademtfkc/kobay/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/ademtfkc/kobay/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/ademtfkc/kobay/compare/v0.8.0...v0.8.1

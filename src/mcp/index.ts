@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { delimiter, isAbsolute, relative, resolve, sep } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
   codeGet,
@@ -33,6 +35,7 @@ import {
 } from '../cli/komutlar/ortak.js';
 import { PermissionError, UsageError, hataBilgisi, type KomutSonucu } from '../cli/komut.js';
 import { CIKIS } from '../cli/cikis.js';
+import { degerdekiUrlSorgulariniGizle, urlSorgulariniGizle } from '../ortak/url-sirlari.js';
 import { bilinmeyenAlanUyarilari, type Uyari } from '../cli/uyari.js';
 import { KobayDizini, adresKimligiGizle, metindekiKimligiGizle } from '../depo/index.js';
 
@@ -76,7 +79,11 @@ function sonucDon(sonuc: KomutSonucu): AracYaniti {
     // Yalnız hata zarfında mesaj metni arındırılır; başarılı sonuç gövdesi (makine sözleşmesi) aynen kalır.
     content: [{
       type: 'text' as const,
-      text: aracHatasi ? metindekiKimligiGizle(JSON.stringify(sonuc.json) ?? 'null') : JSON.stringify(sonuc.json) ?? 'null',
+      // Son sınır (spec 2026-11-13 A): her gövdede adresin sorgu değerleri, fragment'i ve kullanıcı bilgisi maskeli.
+      // `hamCikti` (yalnız `code_get`): kod diskteki haliyle döner (bilinçli dar delik, Codex P2-5).
+      text: (sonuc.hamCikti === true ? (metin: string) => metin : urlSorgulariniGizle)(
+        aracHatasi ? metindekiKimligiGizle(JSON.stringify(sonuc.json) ?? 'null') : JSON.stringify(sonuc.json) ?? 'null',
+      ),
     }],
     ...(aracHatasi ? { isError: true as const } : {}),
   };
@@ -89,7 +96,8 @@ function sonucDon(sonuc: KomutSonucu): AracYaniti {
  */
 function uyariEkle(yanit: AracYaniti, uyarilar: readonly Uyari[]): AracYaniti {
   if (uyarilar.length === 0) return yanit;
-  const hepsi = [...(yanit.warnings ?? []), ...uyarilar];
+  // Uyarı alan adını yankılar; alan adı da adres (ve sırrı) olabilir.
+  const hepsi = degerdekiUrlSorgulariniGizle([...(yanit.warnings ?? []), ...uyarilar]);
   const ilk = yanit.content[0];
   return {
     ...yanit,
@@ -105,7 +113,7 @@ function uyariEkle(yanit: AracYaniti, uyarilar: readonly Uyari[]): AracYaniti {
 function hataDon(hata: unknown): AracYaniti {
   const { code, message } = hataBilgisi(hata);
   return {
-    content: [{ type: 'text', text: JSON.stringify({ error: { code, message: metindekiKimligiGizle(message) } }) }],
+    content: [{ type: 'text', text: JSON.stringify({ error: { code, message: urlSorgulariniGizle(metindekiKimligiGizle(message)) } }) }],
     isError: true,
   };
 }
@@ -523,7 +531,38 @@ export function mcpSunucusuOlustur(s: McpAyarlari): McpServer {
     inputSchema: PROJE_DIZINI_SEMASI,
   }, async ({ projectDir }) => aracCalistir(async () => doctor({ cwd: await projeSec(projectDir) })));
 
+  // Son sınır (spec 2026-11-13 A, Codex P2-3): SDK'nın işleyiciden ÖNCE kurduğu yanıtlar (strict şema
+  // hatası `Unrecognized key: "<alan>"`, bilinmeyen araç) `sonucDon`/`hataDon`dan geçmez. Transport'un
+  // genel `send`'i sarılır: araç yanıtının metin blokları, uyarıları ve JSON-RPC hata mesajı maskelenir.
+  const baglan = sunucu.connect.bind(sunucu);
+  sunucu.connect = async (tasima: Transport): Promise<void> => {
+    const gonder = tasima.send.bind(tasima);
+    tasima.send = (mesaj, secenek) => gonder(yanitMaskele(mesaj), secenek);
+    return baglan(tasima);
+  };
   return sunucu;
+}
+
+/**
+ * Giden JSON-RPC yanıtında yalnız hata yanıtları (JSON-RPC `error` ve `isError: true` araç sonucu)
+ * maskelenir: SDK'nın kendi kurduğu yanıtlar yalnız bunlardır. Başarılı araç gövdesi işleyicide
+ * (`sonucDon`) maskelenmiştir; `code_get`'in bilinçli ham gövdesi burada yeniden maskelenmez.
+ */
+function yanitMaskele(mesaj: JSONRPCMessage): JSONRPCMessage {
+  if ('error' in mesaj && mesaj.error !== undefined) {
+    return { ...mesaj, error: { ...mesaj.error, message: urlSorgulariniGizle(mesaj.error.message) } };
+  }
+  if (!('result' in mesaj) || typeof mesaj.result !== 'object' || mesaj.result === null) return mesaj;
+  const sonuc = mesaj.result as Record<string, unknown>;
+  if (!Array.isArray(sonuc.content) || sonuc.isError !== true) return mesaj;
+  return {
+    ...mesaj,
+    result: {
+      ...sonuc,
+      content: degerdekiUrlSorgulariniGizle(sonuc.content),
+      ...(sonuc.warnings === undefined ? {} : { warnings: degerdekiUrlSorgulariniGizle(sonuc.warnings) }),
+    },
+  };
 }
 
 /** MCP sunucusunu stdio transport ile başlatır. İnsan çıktısı stdout'a yazılmaz. */

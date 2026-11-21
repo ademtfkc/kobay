@@ -36,6 +36,7 @@ import {
   type RaporTesti,
   type RaporVerdict,
 } from './html.js';
+import { urlSorgulariniGizle } from '../ortak/url-sirlari.js';
 import { dikkatGerekenMi, duzeltmeIstemi, hepsiniDuzeltIstemi } from './istem.js';
 import { ozetMarkdown } from './ozet.js';
 
@@ -771,7 +772,8 @@ export { adresKimligiGizle };
 /** Proje adresi `config.json`'dan symlink/sert bağ izlenmeden okunur; okunamazsa `unknown`. */
 async function guvenliBaseUrl(dizin: KobayDizini): Promise<string> {
   const okuma = await kobayJsonOku(dizin, ['config.json'], CONFIG_BICIMI);
-  return okuma.durum === 'tamam' ? adresKimligiGizle(okuma.deger.baseUrl) : 'unknown';
+  // Rapor dışa aktarımdır: config.json'daki ham sorgu (spec 2026-11-13 A istisnası) rapora taşınmaz.
+  return okuma.durum === 'tamam' ? urlSorgulariniGizle(adresKimligiGizle(okuma.deger.baseUrl)) : 'unknown';
 }
 
 /**

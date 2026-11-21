@@ -13,6 +13,7 @@ import {
 } from './giris-korumasi.js';
 import { oturumDegerleri, oturumGirdileri, oturumKokenleriniDenetle } from './oturum-dosyasi.js';
 import {
+  girisDogrulanamadiHatasi,
   girisiGonder,
   izinliOriginler,
   kimlikOriginDogrula,
@@ -161,11 +162,14 @@ export async function kesfetAyrintili(secenekler: KesifSecenekleri): Promise<Kes
     if (oturum === undefined) {
       if (secenekler.kimlik === undefined || girisYapildi) {
         await oturumDurumunuYaz(context, secenekler.storageStateYolu);
-      } else if (giris?.basarili === false && girisHizSiniri === undefined) {
+      } else if (giris?.basarili === false && girisHizSiniri === undefined && giris.dogrulanamadi === undefined) {
+        // Doğrulanamayan giriş (4xx/5xx ya da yanıtsız) kesin ret değildir: eski dosya kalır.
         // Hız sınırıyla (HTTP 429) reddedilen giriş kimlik reddi değildir: dosya kalır (P2-3).
         await oturumDurumunuSil(secenekler.storageStateYolu);
       }
     }
+    // 0.9.2 B: sayfa değişti ama giriş isteği 4xx/5xx aldı: harita yazılmaz, keşif başlamaz.
+    if (giris?.dogrulanamadi !== undefined) throw girisDogrulanamadiHatasi(giris.dogrulanamadi.durum);
 
     const siteHaritasi: SiteHaritasi | null = secenekler.siteHaritasi === false
       ? null
@@ -231,6 +235,7 @@ export {
   kimlikOriginDogrula,
   LoginDidNotReturnError,
   LoginFormOriginError,
+  LoginNotVerifiedError,
   LoginSubmitTimeoutError,
   loginUrlDogrula,
   oturumDurumunuYaz,

@@ -13,6 +13,7 @@ import {
 } from './giris-korumasi.js';
 import { oturumDegerleri, oturumGirdileri } from './oturum-dosyasi.js';
 import {
+  girisDogrulanamadiHatasi,
   girisiGonder,
   girisSayfaMesajiNotu,
   izinliOriginler,
@@ -155,6 +156,9 @@ export async function sayfayiYenile(secenekler: SayfaYenilemeSecenekleri): Promi
         giris = await girisiGonder(sayfa, form, secenekler.kimlik, hedefOrigin, authOrigins);
         // Reddedilen girişin durumu (parolayı depolamaya koymuş olabilir) diske yazılmaz.
         // Reddedildiyse önceki (bayat) oturum dosyası da kaldırılır.
+        // 0.9.2 B: sayfa değişti ama giriş isteği 4xx/5xx aldı ya da yanıtsız kaldı: yenileme girişsiz
+        // sayfayla sürmez; kesin ret değildir, eski oturum dosyası kalır.
+        if (giris.dogrulanamadi !== undefined) throw girisDogrulanamadiHatasi(giris.dogrulanamadi.durum);
         if (giris.basarili) await oturumDurumunuYaz(context, secenekler.storageStateYolu);
         else await oturumDurumunuSil(secenekler.storageStateYolu);
         await hedefeGit();
